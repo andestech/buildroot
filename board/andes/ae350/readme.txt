@@ -35,7 +35,7 @@ Result of the build
 After building, you should obtain the following files:
 
   output/images/
-  +-- ae350.dtb
+  +-- ae350_c4_64_d.dtb
   +-- boot.scr
   +-- boot.vfat
   +-- fw_dynamic.bin
@@ -71,6 +71,7 @@ Run
 Use the SPI_Burn tool [1] to burn the u-boot-spl.bin file onto the flash.  Reference command:
 
   $ ./SPI_Burn --image u-boot-spl.bin --verify --unlock
+  $ ./SPI_Burn --image ae350_c4_64_d.dtb -a 0xf0000 --verify --unlock
 
 Make sure the SD card is inserted and then reset the board, it should boot Linux from mmc.
 
