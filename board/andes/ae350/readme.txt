@@ -55,15 +55,17 @@ Copy the sdcard.img to a SD card with "dd":
 
 As a reference, the SD card partition will be like:
 
-  Disk /dev/mmcblk0: 31457280 sectors, 3072M
-  Logical sector size: 512
-  Disk identifier (GUID): 546663ee-d2f1-427f-93a5-5c7b69dd801c
-  Partition table holds up to 128 entries
-  First usable sector is 34, last usable sector is 385062
+  Disk /dev/sdc: 14.48 GiB, 15552479232 bytes, 30375936 sectors
+  Disk model: Multi-Card
+  Units: sectors of 1 * 512 = 512 bytes
+  Sector size (logical/physical): 512 bytes / 512 bytes
+  I/O size (minimum/optimal): 512 bytes / 512 bytes
+  Disklabel type: dos
+  Disk identifier: 0x00000000
 
-  Number  Start (sector)    End (sector)  Size Name
-       1              34          262177  128M u-boot
-       2          262178          385057 60.0M rootfs
+  Device     Boot Start    End Sectors Size Id Type
+  /dev/sdc1           1   4096    4096   2M  c W95 FAT32 (LBA)
+  /dev/sdc2  *     4097 126976  122880  60M 83 Linux
 
 Run
 ---
