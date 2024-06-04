@@ -1,0 +1,25 @@
+[machine]
+aia = "aplic-imsic"
+
+[global]
+driver = "andes-ax66-riscv-cpu"
+property = "smaia"
+value = "on"
+
+[global]
+driver = "andes-ax66-riscv-cpu"
+property = "ssaia"
+value = "on"
+
+[global]
+driver = "andes-ax66-riscv-cpu"
+property = "smstateen"
+value = "on"
+
+[global]
+driver = "andes-ax66-riscv-cpu"
+property = "sstc"
+value = "on"
+
+[andes-config "cpu"]
+isa-h = "on"
