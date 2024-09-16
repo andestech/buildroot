@@ -1,1 +1,2 @@
 CONFIG_INITRAMFS_SOURCE="${BR_BINARIES_DIR}/rootfs.cpio"
+# CONFIG_DSP is not set
