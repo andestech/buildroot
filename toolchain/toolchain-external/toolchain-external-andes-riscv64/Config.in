@@ -1,0 +1,14 @@
+config BR2_TOOLCHAIN_EXTERNAL_ANDES_RISCV64
+	bool "Andes Technology AndeSight Toolchain v5.3.0"
+	depends on BR2_riscv
+	depends on BR2_ARCH_IS_64
+	select BR2_TOOLCHAIN_EXTERNAL_GLIBC
+	select BR2_TOOLCHAIN_HAS_SSP
+	select BR2_INSTALL_LIBSTDCPP
+	select BR2_TOOLCHAIN_HEADERS_AT_LEAST_6_1
+	select BR2_TOOLCHAIN_GCC_AT_LEAST_12
+	select BR2_TOOLCHAIN_HAS_FORTRAN
+	select BR2_TOOLCHAIN_HAS_OPENMP
+	help
+	  Toolchain for the Andes RISC-V architecture, from
+	  https://github.com/andestech/Andes-Development-Kit/releases

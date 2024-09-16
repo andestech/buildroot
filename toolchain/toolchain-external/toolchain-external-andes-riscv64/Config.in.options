@@ -1,0 +1,9 @@
+if BR2_TOOLCHAIN_EXTERNAL_ANDES_RISCV64
+
+config BR2_TOOLCHAIN_EXTERNAL_PREFIX
+	default "riscv64-linux"
+
+config BR2_PACKAGE_PROVIDES_TOOLCHAIN_EXTERNAL
+	default "toolchain-external-andes-riscv64"
+
+endif
