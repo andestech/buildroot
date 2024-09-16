@@ -1,0 +1,27 @@
+From bba76ecdabeecab856b008e49318add313a67711 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 26 Jan 2024 10:42:58 +0800
+Subject: [PATCH 185/241] target/riscv: Fix for coding style
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/insn_trans/trans_xandesace.c.inc | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/insn_trans/trans_xandesace.c.inc b/target/riscv/insn_trans/trans_xandesace.c.inc
+index 8f7a264ae5..40ec15f74b 100644
+--- a/target/riscv/insn_trans/trans_xandesace.c.inc
++++ b/target/riscv/insn_trans/trans_xandesace.c.inc
+@@ -17,7 +17,8 @@ static bool trans_andes_ace(DisasContext *ctx, arg_andes_ace *a)
+ {
+     if (!ctx->cfg_ptr->ext_XAndesAce) {
+         qemu_printf("XAndesAce not set\n");
+-        riscv_raise_exception(cpu_env(ctx->cs), RISCV_EXCP_ILLEGAL_INST, GETPC());
++        riscv_raise_exception(cpu_env(ctx->cs),
++            RISCV_EXCP_ILLEGAL_INST, GETPC());
+         return false;
+     }
+     REQUIRE_ACE;
+-- 
+2.34.1
+

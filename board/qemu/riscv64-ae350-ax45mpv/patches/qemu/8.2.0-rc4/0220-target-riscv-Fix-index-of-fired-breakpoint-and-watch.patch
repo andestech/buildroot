@@ -1,0 +1,80 @@
+From f64d32e2552a22d02f7d4d1646950ed94ea81e74 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Tue, 2 Apr 2024 09:55:34 +0800
+Subject: [PATCH 220/241] target/riscv: Fix index of fired breakpoint and
+ watchpoint
+
+In current implementation, the index of fired breakpoint and watchpoint
+is hard-code as DBG_ACTION_BP, which is 0. This is a bug because we may
+match/fire breakpoints and watchpoints at other indexes, i.e., index 0~7
+since we have 8 triggers. Fix it by implementing two functions to
+iterate the cpu_breakpoint and the cpu_watchpoint to compare specific
+information. The index of the cpu_breakpoint and the cpu_watchpoint is
+the index we want to execute corresponding trigger action.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 37 +++++++++++++++++++++++++++++++++++--
+ 1 file changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index c5cf65fde7..224136495c 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -1188,6 +1188,39 @@ target_ulong tinfo_csr_read(CPURISCVState *env)
+     return tinfo;
+ }
+ 
++static int get_hit_breakpoint_idx(CPUState *cs, vaddr pc, int mask)
++{
++    RISCVCPU *cpu = RISCV_CPU(cs);
++    CPURISCVState *env = &cpu->env;
++    CPUBreakpoint *bp;
++    int i;
++
++    for (i = 0; i < ARRAY_SIZE(env->cpu_breakpoint); i++) {
++        bp = env->cpu_breakpoint[i];
++        if (bp && bp->pc == pc && (bp->flags & mask)) {
++            return i;
++        }
++    }
++
++    return -1;
++}
++
++static int get_hit_watchpoint_idx(CPUState *cs)
++{
++    RISCVCPU *cpu = RISCV_CPU(cs);
++    CPURISCVState *env = &cpu->env;
++    CPUWatchpoint *wp = cs->watchpoint_hit;
++    int i;
++
++    for (i = 0; i < ARRAY_SIZE(env->cpu_watchpoint); i++) {
++        if (wp == env->cpu_watchpoint[i]) {
++            return i;
++        }
++    }
++
++    return -1;
++}
++
+ void riscv_cpu_debug_excp_handler(CPUState *cs)
+ {
+     RISCVCPU *cpu = RISCV_CPU(cs);
+@@ -1195,11 +1228,11 @@ void riscv_cpu_debug_excp_handler(CPUState *cs)
+ 
+     if (cs->watchpoint_hit) {
+         if (cs->watchpoint_hit->flags & BP_CPU) {
+-            do_trigger_action(env, DBG_ACTION_BP);
++            do_trigger_action(env, get_hit_watchpoint_idx(cs));
+         }
+     } else {
+         if (cpu_breakpoint_test(cs, env->pc, BP_CPU)) {
+-            do_trigger_action(env, DBG_ACTION_BP);
++            do_trigger_action(env, get_hit_breakpoint_idx(cs, env->pc, BP_CPU));
+         }
+     }
+ }
+-- 
+2.34.1
+

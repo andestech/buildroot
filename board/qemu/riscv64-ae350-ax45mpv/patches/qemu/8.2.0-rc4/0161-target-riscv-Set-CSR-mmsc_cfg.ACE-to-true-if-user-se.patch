@@ -1,0 +1,29 @@
+From 262932d9fb27c0f6d353930203a021a9ae3859d2 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Wed, 3 Jan 2024 13:49:08 +0800
+Subject: [PATCH 161/241] target/riscv: Set CSR mmsc_cfg.ACE to true if user
+ set xandesace on
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/csr_andes.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 913189528a..4517e2180e 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -827,6 +827,10 @@ void andes_csr_configs(CPURISCVState *env)
+     andes_csr_from_config(csr_mmsc_cfg_map,
+         sizeof(csr_mmsc_cfg_map) / sizeof(AndesCsrConfigInfo), &mmsc_init_val);
+     env->andes_csr.csrno[CSR_MMSC_CFG] = mmsc_init_val;
++    if (env_archcpu(env)->cfg.ext_XAndesAce) {
++        env->andes_csr.csrno[CSR_MMSC_CFG] = set_field(
++            env->andes_csr.csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_ACE, true);
++    }
+     /* Update mmsc_cfg2 for RV32 */
+     if (riscv_cpu_mxl(env) == MXL_RV32) {
+         target_ulong mmsc2_init_val = env->andes_csr.csrno[CSR_MMSC_CFG2];
+-- 
+2.34.1
+

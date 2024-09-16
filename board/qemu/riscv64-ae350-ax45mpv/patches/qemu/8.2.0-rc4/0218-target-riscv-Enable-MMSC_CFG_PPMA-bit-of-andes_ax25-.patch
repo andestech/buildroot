@@ -1,0 +1,33 @@
+From 569bdde6b9d67d362e5617f0714636a72b330522 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 3 Apr 2024 11:37:19 +0800
+Subject: [PATCH 218/241] target/riscv: Enable MMSC_CFG_PPMA bit of andes_ax25
+ for linux check.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 8202e795e7..d3d5bdf484 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -762,7 +762,13 @@ static void rv64_andes_ax25_cpu_init(Object *obj)
+                                          BIT(V5_MMSC_CFG_EFHW) |
+                                          BIT(V5_MMSC_CFG_VCCTL) |
+                                          BIT(V5_MMSC_CFG_EDSP) |
+-                                         BIT(V5_MMSC_CFG_RVARCH);
++                                         BIT(V5_MMSC_CFG_RVARCH) |
++                                         /*
++                                          * enable this bit for linux PMA check
++                                          * should remove it after the
++                                          * implementation of MSB-bit mechanism
++                                          */
++                                         BIT(V5_MMSC_CFG_PPMA);
+ }
+ 
+ static void rv64_andes_ax27_cpu_init(Object *obj)
+-- 
+2.34.1
+

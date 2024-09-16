@@ -1,0 +1,30 @@
+From 78a7465d86db50b2a211494c8b38159b4ef2bcc7 Mon Sep 17 00:00:00 2001
+From: Dylan Jhong <dylan@andestech.com>
+Date: Wed, 26 Jul 2023 10:49:41 +0800
+Subject: [PATCH 022/241] AE350: Support max CPU to 8 cores on AE350 platform
+ (#40)
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/40
+Co-authored-by: Dylan Jhong <dylan@andestech.com>
+Co-committed-by: Dylan Jhong <dylan@andestech.com>
+---
+ include/hw/riscv/andes_ae350.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/include/hw/riscv/andes_ae350.h b/include/hw/riscv/andes_ae350.h
+index 89f021a386..23aae2f0ab 100644
+--- a/include/hw/riscv/andes_ae350.h
++++ b/include/hw/riscv/andes_ae350.h
+@@ -28,7 +28,7 @@
+ #include "hw/net/atfmac100.h"
+ #include "hw/sd/atfsdc010.h"
+ 
+-#define ANDES_CPUS_MAX 4
++#define ANDES_CPUS_MAX 8
+ 
+ #define TYPE_ANDES_AE350_SOC "riscv.andes.ae350.soc"
+ #define ANDES_AE350_SOC(obj) \
+-- 
+2.34.1
+

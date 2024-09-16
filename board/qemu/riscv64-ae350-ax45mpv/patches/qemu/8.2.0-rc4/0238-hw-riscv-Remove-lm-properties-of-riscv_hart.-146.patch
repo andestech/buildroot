@@ -1,0 +1,199 @@
+From 1788598dd4e1687c1c756b89067c530be3168634 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 22 May 2024 08:59:35 +0800
+Subject: [PATCH 238/241] hw/riscv: Remove lm properties of riscv_hart. (#146)
+
+target/riscv: Directly access lm properties of soc.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/146
+Reviewed-by: Ethan Zhan-Yang Chen <ethan84@andestech.com>
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ hw/riscv/andes_ae350.c        | 14 ------------
+ hw/riscv/riscv_hart.c         | 43 -----------------------------------
+ include/hw/riscv/riscv_hart.h |  7 ------
+ target/riscv/cpu.c            | 25 ++++++++++++++++++++
+ 4 files changed, 25 insertions(+), 64 deletions(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index e73ef23445..87911c236d 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -350,20 +350,6 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+         }
+     }
+ 
+-    /* Set riscv_harts properties for Local Memory */
+-    qdev_prop_set_bit(DEVICE(&s->cpus), "ilm_default_enable",
+-                        s->ilm_default_enable);
+-    qdev_prop_set_bit(DEVICE(&s->cpus), "dlm_default_enable",
+-                        s->dlm_default_enable);
+-    qdev_prop_set_uint64(DEVICE(&s->cpus), "ilm_base",
+-                        s->ilm_base);
+-    qdev_prop_set_uint64(DEVICE(&s->cpus), "dlm_base",
+-                        s->dlm_base);
+-    qdev_prop_set_uint64(DEVICE(&s->cpus), "ilm_size",
+-                        s->ilm_size);
+-    qdev_prop_set_uint64(DEVICE(&s->cpus), "dlm_size",
+-                        s->dlm_size);
+-
+     sysbus_realize(SYS_BUS_DEVICE(&s->cpus), &error_abort);
+ 
+     plicsw_hart_config =
+diff --git a/hw/riscv/riscv_hart.c b/hw/riscv/riscv_hart.c
+index 31a49fbd24..613ea2aaa0 100644
+--- a/hw/riscv/riscv_hart.c
++++ b/hw/riscv/riscv_hart.c
+@@ -26,8 +26,6 @@
+ #include "target/riscv/cpu.h"
+ #include "hw/qdev-properties.h"
+ #include "hw/riscv/riscv_hart.h"
+-#include "exec/address-spaces.h"
+-#include "exec/ramblock.h"
+ 
+ static Property riscv_harts_props[] = {
+     DEFINE_PROP_UINT32("num-harts", RISCVHartArrayState, num_harts, 1),
+@@ -38,43 +36,17 @@ static Property riscv_harts_props[] = {
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+-static Property andes_riscv_harts_props[] = {
+-    DEFINE_PROP_UINT64("ilm_base", RISCVHartArrayState, ilm_base, 0),
+-    DEFINE_PROP_UINT64("dlm_base", RISCVHartArrayState, dlm_base, 0x200000),
+-    DEFINE_PROP_UINT32("ilm_size", RISCVHartArrayState, ilm_size, 0x200000),
+-    DEFINE_PROP_UINT32("dlm_size", RISCVHartArrayState, dlm_size, 0x200000),
+-    DEFINE_PROP_BOOL("ilm_default_enable", RISCVHartArrayState,
+-                     ilm_default_enable, false),
+-    DEFINE_PROP_BOOL("dlm_default_enable", RISCVHartArrayState,
+-                     dlm_default_enable, false),
+-    DEFINE_PROP_END_OF_LIST(),
+-};
+-
+ static void riscv_harts_cpu_reset(void *opaque)
+ {
+     RISCVCPU *cpu = opaque;
+     cpu_reset(CPU(cpu));
+ }
+ 
+-static void andes_hart_prop_set(RISCVHartArrayState *s, int idx)
+-{
+-    s->harts[idx].env.ilm_base = s->ilm_base;
+-    s->harts[idx].env.dlm_base = s->dlm_base;
+-    s->harts[idx].env.ilm_size = s->ilm_size;
+-    s->harts[idx].env.dlm_size = s->dlm_size;
+-    s->harts[idx].env.ilm_default_enable = s->ilm_default_enable;
+-    s->harts[idx].env.dlm_default_enable = s->dlm_default_enable;
+-}
+-
+-
+ static bool riscv_hart_realize(RISCVHartArrayState *s, int idx,
+                                char *cpu_type, Error **errp)
+ {
+     object_initialize_child(OBJECT(s), "harts[*]", &s->harts[idx], cpu_type);
+     qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "resetvec", s->resetvec);
+-    if (strncmp(cpu_type, "andes", 5) == 0) {
+-        andes_hart_prop_set(s, idx);
+-    }
+     s->harts[idx].env.mhartid = s->hartid_base + idx;
+     qemu_register_reset(riscv_harts_cpu_reset, &s->harts[idx]);
+     return qdev_realize(DEVICE(&s->harts[idx]), NULL, errp);
+@@ -102,25 +74,10 @@ static void riscv_harts_class_init(ObjectClass *klass, void *data)
+     dc->realize = riscv_harts_realize;
+ }
+ 
+-static void register_andes_harts_props(DeviceState *dev)
+-{
+-    Property *prop;
+-    for (prop = andes_riscv_harts_props; prop && prop->name; prop++) {
+-        qdev_property_add_static(dev, prop);
+-    }
+-}
+-
+-static void riscv_harts_init(Object *obj)
+-{
+-    DeviceState *dev = DEVICE(obj);
+-    register_andes_harts_props(dev);
+-}
+-
+ static const TypeInfo riscv_harts_info = {
+     .name          = TYPE_RISCV_HART_ARRAY,
+     .parent        = TYPE_SYS_BUS_DEVICE,
+     .instance_size = sizeof(RISCVHartArrayState),
+-    .instance_init = riscv_harts_init,
+     .class_init    = riscv_harts_class_init,
+ };
+ 
+diff --git a/include/hw/riscv/riscv_hart.h b/include/hw/riscv/riscv_hart.h
+index c2c890e10b..912b4a2682 100644
+--- a/include/hw/riscv/riscv_hart.h
++++ b/include/hw/riscv/riscv_hart.h
+@@ -39,13 +39,6 @@ struct RISCVHartArrayState {
+     char *cpu_type;
+     uint64_t resetvec;
+     RISCVCPU *harts;
+-
+-    uint64_t ilm_base;
+-    uint64_t dlm_base;
+-    uint32_t ilm_size;
+-    uint32_t dlm_size;
+-    bool ilm_default_enable;
+-    bool dlm_default_enable;
+ };
+ 
+ #endif
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 09b6ff4aad..f0376ade15 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -29,6 +29,7 @@
+ #include "qapi/error.h"
+ #include "qapi/visitor.h"
+ #include "qapi/qmp/qobject.h"
++#include "qapi/qmp/qbool.h"
+ #include "qapi/qmp/qnum.h"
+ #include "qom/qom-qobject.h"
+ #include "qemu/error-report.h"
+@@ -452,6 +453,18 @@ static QObject *get_prop_qobj_from_soc(const char *name)
+     return prop_qobj;
+ }
+ 
++static bool get_bool_from_soc_prop(const char *name, bool *val)
++{
++    QObject *prop_qobj = get_prop_qobj_from_soc(name);
++    QBool *qbool = qobject_to(QBool, prop_qobj);
++    if (qbool == NULL) {
++        return false;
++    }
++
++    *val = qbool->value;
++    return true;
++}
++
+ static bool get_uint64_from_soc_prop(const char *name, uint64_t *val)
+ {
+     QObject *prop_qobj = get_prop_qobj_from_soc(name);
+@@ -530,6 +543,18 @@ static void andes_cpu_lm_init(Object *obj)
+ {
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+     CPUState *cs = CPU(obj);
++
++    /* get soc lm properties */
++    uint64_t isize, dsize;
++    get_bool_from_soc_prop("ilm_default_enable", &env->ilm_default_enable);
++    get_bool_from_soc_prop("dlm_default_enable", &env->dlm_default_enable);
++    get_uint64_from_soc_prop("ilm_base", &env->ilm_base);
++    get_uint64_from_soc_prop("dlm_base", &env->dlm_base);
++    get_uint64_from_soc_prop("ilm_size", &isize);
++    get_uint64_from_soc_prop("dlm_size", &dsize);
++    env->ilm_size = isize & (uint32_t)-1;
++    env->dlm_size = dsize & (uint32_t)-1;
++
+     env->cpu_as_root = g_new(MemoryRegion, 1);
+     env->cpu_as_mem = g_new(MemoryRegion, 1);
+     /* Outer container... */
+-- 
+2.34.1
+

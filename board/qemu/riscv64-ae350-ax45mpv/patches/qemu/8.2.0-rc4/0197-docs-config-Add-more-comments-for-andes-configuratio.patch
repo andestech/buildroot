@@ -1,0 +1,56 @@
+From 53114b95a47c8151e8fa4dbef9211b4a6c899730 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Mon, 29 Jan 2024 13:44:04 +0800
+Subject: [PATCH 197/241] docs/config: Add more comments for andes
+ configuration
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ docs/config/andes.cfg | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/docs/config/andes.cfg b/docs/config/andes.cfg
+index b8845c8a44..9f7fd39511 100644
+--- a/docs/config/andes.cfg
++++ b/docs/config/andes.cfg
+@@ -3,26 +3,33 @@
+ #
+ #   $ qemu-system-riscv64 \
+ #     -M andes_ae350 -cpu [andes-nx45v|...]
+-#     -readconfig adnes.cfg
++#     -readconfig andes.cfg
+ #
+ # Andes config example
+ #
+-#CPU option setting
++#CPU option setting, should take care CPU name for 'driver' name
+ #The same with '-cpu andes-nx45v,xandesaceextlibpath=lib'
+ #[global]
+ #driver = "andes-nx45v-riscv-cpu"
+ #property = "xandesaceextlibpath"
+ #value = "lib"
+ 
+-#Set ilm size setting
++#Set ilm enable and size setting
++#The same with '-global driver=riscv.andes.ae350.soc,property=ilm_default_enable,value=on'
++#[global]
++#driver = "riscv.andes.ae350.soc"
++#property = "ilm_default_enable"
++#value = "on"
++
+ #The same with '-global driver=riscv.andes.ae350.soc,property=ilm_size,value=0x10000'
+ #[global]
+ #driver = "riscv.andes.ae350.soc"
+ #property = "ilm_size"
+ #value = "0x10000"
+ 
+-#current andes cpus config setting, we use "cpu" as ID now
++#current andes cpus config setting, use "cpu" as ID now
+ [andes-config "cpu"]
++#set riscv timebase freq if user doesn't use the default 1Ghz
+ freq = "60000000"
+ isa-codense = "on"
+ powerbrake = "on"
+-- 
+2.34.1
+

@@ -1,0 +1,198 @@
+From 1836af876ecd9a2d2bb12bd499da89ffe96770fd Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Mon, 29 Jan 2024 11:06:27 +0800
+Subject: [PATCH 196/241] hw/riscv: local memory: Fix local memory size and
+ base (#116)
+
+* Support setting LM size to 0(unconnected LM)
+* Fix the minimum and maximum LM size, use the values from AndeStar_V5_SPA v1.6
+* It will be an error instead of auto rounddown if user set invalid LM size or LM base.
+
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/116
+Reviewed-by: Yuming Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-by: Foxes Cheng-Hung Hung <foxes687@andestech.com>
+Reviewed-by: Alvin Che-Chia Chang <alvinga@andestech.com>
+Co-authored-by: Ethan Chen <ethan84@andestech.com>
+Co-committed-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/andes_ae350.c         | 46 +++++++++++++-------
+ include/hw/riscv/andes_ae350.h |  4 ++
+ target/riscv/cpu.c             | 78 ++++++++++++++++++++--------------
+ 3 files changed, 82 insertions(+), 46 deletions(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index ef257c8bef..37d5c7066b 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -316,24 +316,40 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     char *plic_hart_config, *plicsw_hart_config;
+     NICInfo *nd = &nd_table[0];
+ 
+-    if (s->ilm_size < 0x1000 || s->ilm_size > 0x1000000) {
+-        error_report("Cannot set instruction local memory size beyond the range"
+-                     "of 0x1000 to 0x1000000");
+-        exit(1);
++    if (s->ilm_size) {
++        if (s->ilm_size < ANDES_LM_SIZE_MIN || s->ilm_size > ANDES_LM_SIZE_MAX
++            || s->ilm_size != 1 << (31 - __builtin_clz(s->ilm_size))) {
++            error_report("Cannot set instruction local memory size to 0x%x. "
++                         "Valid value are 0(unconnected ILM) or power "
++                         "of 2 values between 0x%x and 0x%x.",
++                         s->ilm_size, ANDES_LM_SIZE_MIN, ANDES_LM_SIZE_MAX);
++            exit(1);
++        }
++        if (s->ilm_base & (s->ilm_size - 1)) {
++            error_report("Cannot set instruction local memory base to 0x%lx. "
++                         "It must be aligned to instruction local memory size "
++                         "0x%x.",
++                         s->ilm_base, s->ilm_size);
++            exit(1);
++        }
+     }
+-    if (s->dlm_size < 0x1000 || s->dlm_size > 0x1000000) {
+-        error_report("Cannot set data local memory size beyond the range of"
+-                     "0x1000 to 0x1000000");
+-        exit(1);
++    if (s->dlm_size) {
++        if (s->dlm_size < ANDES_LM_SIZE_MIN || s->dlm_size > ANDES_LM_SIZE_MAX
++            || s->dlm_size != 1 << (31 - __builtin_clz(s->dlm_size))) {
++            error_report("Cannot set data local memory size to 0x%x. "
++                         "Valid value are 0(unconnected DLM) or "
++                         "power of 2 values between 0x%x and 0x%x.",
++                         s->dlm_size, ANDES_LM_SIZE_MIN, ANDES_LM_SIZE_MAX);
++            exit(1);
++        }
++        if (s->dlm_base & (s->dlm_size - 1)) {
++            error_report("Cannot set data local memory base to 0x%lx. "
++                         "It must be aligned to data local memory size 0x%x.",
++                          s->dlm_base, s->dlm_size);
++            exit(1);
++        }
+     }
+ 
+-    /* round down local memory size to valid value */
+-    s->ilm_size = 1 << (31 - __builtin_clz(s->ilm_size));
+-    s->dlm_size = 1 << (31 - __builtin_clz(s->dlm_size));
+-    /* align local memory base to local memory size */
+-    s->ilm_base &= ~(s->ilm_size - 1);
+-    s->dlm_base &= ~(s->dlm_size - 1);
+-
+     /* Set riscv_harts properties for Local Memory */
+     qdev_prop_set_bit(DEVICE(&s->cpus), "ilm_default_enable",
+                         s->ilm_default_enable);
+diff --git a/include/hw/riscv/andes_ae350.h b/include/hw/riscv/andes_ae350.h
+index a651852e48..31497e5d3e 100644
+--- a/include/hw/riscv/andes_ae350.h
++++ b/include/hw/riscv/andes_ae350.h
+@@ -124,6 +124,10 @@ enum {
+ /* Hart 4~7 do not have slaveports */
+ #define ANDES_LM_SLAVEPORTS_MAX 4
+ 
++/* LM size range in AndeStar_V5_SPA v1.6. Size 0 for unconnected LM */
++#define ANDES_LM_SIZE_MIN 0x400
++#define ANDES_LM_SIZE_MAX 0x20000000
++
+ #if defined(TARGET_RISCV32)
+ #define VIRT_CPU TYPE_RISCV_CPU_BASE32
+ #elif defined(TARGET_RISCV64)
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 32a49c9f0b..129d0fac8d 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -525,28 +525,34 @@ static void andes_cpu_lm_realize(DeviceState *dev)
+ {
+     CPURISCVState *env = &RISCV_CPU(dev)->env;
+     int lm_num = env->mhartid;
+-    g_autofree char *ilm_name =
+-        g_strdup_printf("%s%d", "riscv.andes.ae350.ilm", lm_num);
+-    g_autofree char *dlm_name =
+-        g_strdup_printf("%s%d", "riscv.andes.ae350.dlm", lm_num);
+-
+-    memory_region_init_ram(env->mask_ilm, OBJECT(dev), ilm_name,
+-                            env->ilm_size, &error_fatal);
+-    memory_region_init_ram(env->mask_dlm, OBJECT(dev), dlm_name,
+-                            env->dlm_size, &error_fatal);
+-    /* local memory operation */
+-    env->mask_ilm->ops = &local_mem_ops;
+-    env->mask_ilm->opaque = env->mask_ilm;
+-    env->mask_dlm->ops = &local_mem_ops;
+-    env->mask_dlm->opaque = env->mask_dlm;
+ 
+-    if (env->ilm_default_enable) {
+-        memory_region_add_subregion_overlap(env->cpu_as_root, env->ilm_base,
+-                                    env->mask_ilm, 1);
++    if (env->ilm_size) {
++        g_autofree char *ilm_name =
++            g_strdup_printf("%s%d", "riscv.andes.ae350.ilm", lm_num);
++        memory_region_init_ram(env->mask_ilm, OBJECT(dev), ilm_name,
++                               env->ilm_size, &error_fatal);
++        /* local memory operation */
++        env->mask_ilm->ops = &local_mem_ops;
++        env->mask_ilm->opaque = env->mask_ilm;
++
++        if (env->ilm_default_enable) {
++            memory_region_add_subregion_overlap(env->cpu_as_root, env->ilm_base,
++                                        env->mask_ilm, 1);
++        }
+     }
+-    if (env->dlm_default_enable) {
+-        memory_region_add_subregion_overlap(env->cpu_as_root, env->dlm_base,
+-                                    env->mask_dlm, 1);
++    if (env->dlm_size) {
++        g_autofree char *dlm_name =
++            g_strdup_printf("%s%d", "riscv.andes.ae350.dlm", lm_num);
++        memory_region_init_ram(env->mask_dlm, OBJECT(dev), dlm_name,
++                               env->dlm_size, &error_fatal);
++        /* local memory operation */
++        env->mask_dlm->ops = &local_mem_ops;
++        env->mask_dlm->opaque = env->mask_dlm;
++
++        if (env->dlm_default_enable) {
++            memory_region_add_subregion_overlap(env->cpu_as_root, env->dlm_base,
++                                        env->mask_dlm, 1);
++        }
+     }
+ }
+ #endif
+@@ -1380,17 +1386,27 @@ static void andes_csr_reset_common(CPURISCVState *env)
+     env->andes_csr.csrno[CSR_MDCM_CFG] = (3 << V5_MDCM_CFG_DSZ);
+ 
+ #ifndef CONFIG_USER_ONLY
+-    /* initial local memory csr */
+-    int ilmsz = 31 - __builtin_clz(env->ilm_size) - 9;
+-    int dlmsz = 31 - __builtin_clz(env->dlm_size) - 9;
+-
+-    env->andes_csr.csrno[CSR_MICM_CFG] |= (1UL << V5_MICM_CFG_ILMB) |
+-                                          (ilmsz << V5_MICM_CFG_ILMSZ);
+-    env->andes_csr.csrno[CSR_MDCM_CFG] |= (1UL << V5_MDCM_CFG_DLMB) |
+-                                          (dlmsz << V5_MDCM_CFG_DLMSZ);
+-
+-    env->andes_csr.csrno[CSR_MILMB] = env->ilm_base | env->ilm_default_enable;
+-    env->andes_csr.csrno[CSR_MDLMB] = env->dlm_base | env->dlm_default_enable;
++    int ilmsz = 0, dlmsz = 0;
++    /*
++     * Initialize local memory csr for LM size > 0. LMB csr is not exist if
++     * LM size is equal to 0.
++     */
++    if (env->ilm_size) {
++        /* Compute field MICM_CFG.ILMSZ */
++        ilmsz = 31 - __builtin_clz(env->ilm_size) - 9;
++        env->andes_csr.csrno[CSR_MICM_CFG] |= (1UL << V5_MICM_CFG_ILMB) |
++                                              (ilmsz << V5_MICM_CFG_ILMSZ);
++        env->andes_csr.csrno[CSR_MILMB] = env->ilm_base |
++                                          env->ilm_default_enable;
++    }
++    if (env->dlm_size) {
++        /* Compute field MDCM_CFG.DLMSZ */
++        dlmsz = 31 - __builtin_clz(env->dlm_size) - 9;
++        env->andes_csr.csrno[CSR_MDCM_CFG] |= (1UL << V5_MDCM_CFG_DLMB) |
++                                              (dlmsz << V5_MDCM_CFG_DLMSZ);
++        env->andes_csr.csrno[CSR_MDLMB] = env->dlm_base |
++                                          env->dlm_default_enable;
++    }
+ #endif
+ 
+     /* all-one reset value */
+-- 
+2.34.1
+

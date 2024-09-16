@@ -1,0 +1,80 @@
+From 02545b822a98767cbd547a6c78e23a6e19abb99e Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Mon, 21 Aug 2023 15:51:41 +0800
+Subject: [PATCH 045/241] monitor: Support "monitor reset [halt|run]"
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hmp-commands.hx            | 13 +++++++++++++
+ hw/core/machine-hmp-cmds.c | 11 +++++++++++
+ include/monitor/hmp.h      |  1 +
+ 3 files changed, 25 insertions(+)
+
+diff --git a/hmp-commands.hx b/hmp-commands.hx
+index bdc05017b8..6336addda2 100644
+--- a/hmp-commands.hx
++++ b/hmp-commands.hx
+@@ -665,6 +665,19 @@ SRST
+   Reset the system.
+ ERST
+ 
++    {
++        .name       = "reset",
++        .args_type  = "op:s?",
++        .params     = "[halt|run]",
++        .help       = "reset with halt or run option.",
++        .cmd        = hmp_reset,
++    },
++
++SRST
++``reset [halt|run]``
++  Reset the system with halt or run option.
++ERST
++
+     {
+         .name       = "system_powerdown",
+         .args_type  = "",
+diff --git a/hw/core/machine-hmp-cmds.c b/hw/core/machine-hmp-cmds.c
+index a6ff6a4875..488aba762a 100644
+--- a/hw/core/machine-hmp-cmds.c
++++ b/hw/core/machine-hmp-cmds.c
+@@ -19,6 +19,7 @@
+ #include "qapi/error.h"
+ #include "qapi/qapi-builtin-visit.h"
+ #include "qapi/qapi-commands-machine.h"
++#include "qapi/qapi-commands-misc.h"
+ #include "qapi/qmp/qdict.h"
+ #include "qapi/string-output-visitor.h"
+ #include "qemu/error-report.h"
+@@ -185,6 +186,16 @@ void hmp_system_reset(Monitor *mon, const QDict *qdict)
+     qmp_system_reset(NULL);
+ }
+ 
++void hmp_reset(Monitor *mon, const QDict *qdict)
++{
++    const char *op = qdict_get_try_str(qdict, "op");
++    qmp_stop(NULL);
++    qmp_system_reset(NULL);
++    if (!strcmp(op, "run")) {
++        qmp_cont(NULL);
++    }
++}
++
+ void hmp_system_powerdown(Monitor *mon, const QDict *qdict)
+ {
+     qmp_system_powerdown(NULL);
+diff --git a/include/monitor/hmp.h b/include/monitor/hmp.h
+index 18592be400..b7cbfa2f9f 100644
+--- a/include/monitor/hmp.h
++++ b/include/monitor/hmp.h
+@@ -45,6 +45,7 @@ void hmp_quit(Monitor *mon, const QDict *qdict);
+ void hmp_stop(Monitor *mon, const QDict *qdict);
+ void hmp_sync_profile(Monitor *mon, const QDict *qdict);
+ void hmp_system_reset(Monitor *mon, const QDict *qdict);
++void hmp_reset(Monitor *mon, const QDict *qdict);
+ void hmp_system_powerdown(Monitor *mon, const QDict *qdict);
+ void hmp_exit_preconfig(Monitor *mon, const QDict *qdict);
+ void hmp_announce_self(Monitor *mon, const QDict *qdict);
+-- 
+2.34.1
+

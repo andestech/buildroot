@@ -1,0 +1,64 @@
+From 9a27fb08a336647a86cad2a8c2a3a6fb86dec3e1 Mon Sep 17 00:00:00 2001
+From: Leo Yu-Chi Liang <ycliang@andestech.com>
+Date: Tue, 5 Mar 2024 14:19:45 +0800
+Subject: [PATCH 211/241] hw/intc: Support "Number of Interrupt and Target
+ Configuration Register" for PLIC[SW]
+
+Add Number of Interrupt and Target Configuration Register emulation.
+This can be useful for user to get hart count information.
+
+Signed-off-by: Leo Yu-Chi Liang <ycliang@andestech.com>
+---
+ hw/intc/andes_plic.c         | 9 +++++++++
+ include/hw/intc/andes_plic.h | 1 +
+ 2 files changed, 10 insertions(+)
+
+diff --git a/hw/intc/andes_plic.c b/hw/intc/andes_plic.c
+index e753052ef9..46f6296fd3 100644
+--- a/hw/intc/andes_plic.c
++++ b/hw/intc/andes_plic.c
+@@ -250,6 +250,8 @@ andes_plic_read(void *opaque, hwaddr addr, unsigned size)
+     if (addr == REG_FEATURE_ENABLE) {
+         value = andes_plic->feature_enable;
+         return value;
++    } else if (addr == REG_NUM_IRQ_TARGET) {
++        return andes_plic->num_irq_target;
+     } else if (addr_between(addr, REG_TRIGGER_TYPE_BASE,
+                 riscv_plic->num_sources >> 3)) { /* 1 bit per source */
+         return andes_plic_read_trigger_type(andes_plic, addr, size);
+@@ -278,6 +280,11 @@ andes_plic_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+     if (addr == REG_FEATURE_ENABLE) {
+         andes_plic->feature_enable = value & (FER_PREEMPT | FER_VECTORED);
+         return;
++    } else if (addr == REG_NUM_IRQ_TARGET) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: Invalid register write at 0x%" HWADDR_PRIx "\n",
++                      __func__, addr);
++        return;
+     } else if (addr_between(addr, REG_TRIGGER_TYPE_BASE,
+                 riscv_plic->num_sources >> 3)) { /* 1 bit per source */
+         andes_plic_write_trigger_type(andes_plic, addr, value, size);
+@@ -467,6 +474,8 @@ DeviceState *andes_plic_create(hwaddr plic_base,
+     AndesPLICState *andes_plic = ANDES_PLIC(dev);
+     RISCVPLICState *riscv_plic = RISCV_PLIC(andes_plic);
+ 
++    andes_plic->num_irq_target = (riscv_plic->num_addrs << 16) | num_sources;
++
+     for (int i = 0; i < riscv_plic->num_addrs; i++) {
+         int cpu_num = riscv_plic->addr_config[i].hartid;
+         CPUState *cpu = qemu_get_cpu(cpu_num);
+diff --git a/include/hw/intc/andes_plic.h b/include/hw/intc/andes_plic.h
+index b6c5e2b141..3ce62b3f98 100644
+--- a/include/hw/intc/andes_plic.h
++++ b/include/hw/intc/andes_plic.h
+@@ -111,6 +111,7 @@ typedef struct AndesPLICState {
+     /* registers */
+     uint32_t feature_enable;
+     uint32_t *trigger_type;
++    uint32_t num_irq_target;
+ 
+     /* interface */
+     void (*andes_plic_update)(void *plic);
+-- 
+2.34.1
+

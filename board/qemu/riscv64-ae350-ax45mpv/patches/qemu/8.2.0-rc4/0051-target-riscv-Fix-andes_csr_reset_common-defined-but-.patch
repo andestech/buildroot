@@ -1,0 +1,38 @@
+From 31dc1d3428b7b267f039dc33a28a4d13af3afd0c Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Fri, 1 Sep 2023 16:13:19 +0800
+Subject: [PATCH 051/241] =?UTF-8?q?target/riscv:=20Fix=20:=20=E2=80=98ande?=
+ =?UTF-8?q?s=5Fcsr=5Freset=5Fcommon=E2=80=99=20defined=20but=20not=20used?=
+ =?UTF-8?q?=20when=20CONFIG=5FUSER=5FONLY?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ target/riscv/cpu.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 27045b9716..986530bd9f 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1148,6 +1148,7 @@ static bool riscv_cpu_has_work(CPUState *cs)
+ #endif
+ }
+ 
++#ifndef CONFIG_USER_ONLY
+ static void andes_csr_reset_common(CPURISCVState *env)
+ {
+     env->andes_csr.csrno[CSR_MXSTATUS] = 0;
+@@ -1174,6 +1175,7 @@ static void andes_csr_reset_common(CPURISCVState *env)
+     env->andes_csr.csrno[CSR_MSP_BOUND] = ~((target_ulong)0);
+     env->andes_csr.csrno[CSR_MSP_BASE] = ~((target_ulong)0);
+ }
++#endif
+ 
+ static void riscv_cpu_reset_hold(Object *obj)
+ {
+-- 
+2.34.1
+

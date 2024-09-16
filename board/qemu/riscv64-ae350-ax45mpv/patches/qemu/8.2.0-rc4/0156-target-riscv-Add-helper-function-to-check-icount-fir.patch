@@ -1,0 +1,88 @@
+From b5188198d9a12be009983a7a9657fff573f9a537 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Wed, 20 Dec 2023 17:45:51 +0800
+Subject: [PATCH 156/241] target/riscv: Add helper function to check icount
+ fire
+
+Add helper_itrigger_fire() to check if the icount trigger is pending and
+it matches, we can fire it before before any further instructions are
+executed.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c     | 29 +++++++++++++++++++++++++++++
+ target/riscv/helper.h    |  1 +
+ target/riscv/translate.c |  5 +++++
+ 3 files changed, 35 insertions(+)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index 9ac2e68b9d..e6736228c6 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -821,6 +821,35 @@ static inline void itrigger_set_pending(CPURISCVState *env, int index,
+                                    ITRIGGER_PENDING, pending);
+ }
+ 
++static inline bool itrigger_get_pending(CPURISCVState *env, int index)
++{
++    return get_field(env->tdata1[index], ITRIGGER_PENDING);
++}
++
++static inline void itrigger_set_hit(CPURISCVState *env, int index, bool hit)
++{
++    env->tdata1[index] = set_field(env->tdata1[index],
++                                   ITRIGGER_HIT, hit);
++}
++
++void helper_itrigger_fire(CPURISCVState *env)
++{
++    for (int i = 0; i < RV_MAX_TRIGGERS; i++) {
++        if (get_trigger_type(env, i) != TRIGGER_TYPE_INST_CNT) {
++            continue;
++        }
++        if (!trigger_common_match(env, TRIGGER_TYPE_INST_CNT, i)) {
++            continue;
++        }
++        if (itrigger_get_pending(env, i)) {
++            /* This icount trigger can fire */
++            itrigger_set_pending(env, i, false);    /* clear icount.PENDING */
++            itrigger_set_hit(env, i, true);         /* set icount.HIT       */
++            do_trigger_action(env, i);
++        }
++    }
++}
++
+ bool riscv_itrigger_enabled(CPURISCVState *env)
+ {
+     int count;
+diff --git a/target/riscv/helper.h b/target/riscv/helper.h
+index fad570c25a..bac5459084 100644
+--- a/target/riscv/helper.h
++++ b/target/riscv/helper.h
+@@ -136,6 +136,7 @@ DEF_HELPER_1(tlb_flush, void, env)
+ DEF_HELPER_1(tlb_flush_all, void, env)
+ /* Native Debug */
+ DEF_HELPER_1(itrigger_match, void, env)
++DEF_HELPER_1(itrigger_fire, void, env)
+ #endif
+ 
+ /* Hypervisor functions */
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index a1865bf4e3..0d2d0f8c4b 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -1264,6 +1264,11 @@ static void riscv_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
+     CPURISCVState *env = cpu_env(cpu);
+     uint16_t opcode16 = translator_lduw(env, &ctx->base, ctx->base.pc_next);
+ 
++#ifndef CONFIG_USER_ONLY
++    /* Check if icount triggers can fire before any further instructions */
++    gen_helper_itrigger_fire(tcg_env);
++#endif
++
+     ctx->ol = ctx->xl;
+     decode_opc(env, ctx, opcode16);
+     ctx->base.pc_next += ctx->cur_insn_len;
+-- 
+2.34.1
+

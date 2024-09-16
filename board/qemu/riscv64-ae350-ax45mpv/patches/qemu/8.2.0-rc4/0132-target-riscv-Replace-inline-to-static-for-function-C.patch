@@ -1,0 +1,28 @@
+From f075c49e9fdf21a84cfc3ba31695f59e9ebd4e8f Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Tue, 5 Dec 2023 16:53:15 +0800
+Subject: [PATCH 132/241] target/riscv: Replace 'inline' to 'static' for
+ function CTZLL to avoid compiler option -O0 issue (configure with
+ --enable-debug)
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/andes_ace_helper.c.inc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/target/riscv/andes_ace_helper.c.inc b/target/riscv/andes_ace_helper.c.inc
+index 1e2aeb053f..8cf68c4228 100644
+--- a/target/riscv/andes_ace_helper.c.inc
++++ b/target/riscv/andes_ace_helper.c.inc
+@@ -237,7 +237,7 @@ void qemu_set_MEM(CPURISCVState *env, uint64_t vaddr,
+     }
+ }
+ 
+-inline int CTZLL(unsigned long long x)
++static int CTZLL(unsigned long long x)
+ {
+     if (0 == x) {
+         return 0;
+-- 
+2.34.1
+

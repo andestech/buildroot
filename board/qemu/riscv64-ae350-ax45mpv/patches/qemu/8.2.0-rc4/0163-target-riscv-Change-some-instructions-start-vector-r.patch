@@ -1,0 +1,75 @@
+From 3fb6a3c81dfc4fe851ad428d152d668d0c2c0754 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Wed, 3 Jan 2024 16:33:18 +0800
+Subject: [PATCH 163/241] target/riscv: Change some instructions start vector
+ register from 0 to vstart
+
+1. AndeStar V5 1.5.2 change VLN8.V/VLNU8.V/VLE4.V start vector register
+from 0 to vstart, so we modify codes for these change
+2. Reset vstart to 0 after process vle4.v instruction
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/vector_helper.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/vector_helper.c b/target/riscv/vector_helper.c
+index 6675a32702..fa7bfe9f4c 100644
+--- a/target/riscv/vector_helper.c
++++ b/target/riscv/vector_helper.c
+@@ -5488,7 +5488,7 @@ vext_ldst_int4_stride(void *vd, void *v0, target_ulong base,
+ 
+     /*
+      *  Element_size = 8;
+-     *  i = 0..(VL-1)
++     *  i = VSTART..(VL-1)
+      *  addr = rs1 + floor(i/2);
+      *  part = i%2;
+      *  nibble[3:0] = MEM(addr)[4*part+3:4*part+0];
+@@ -5496,7 +5496,7 @@ vext_ldst_int4_stride(void *vd, void *v0, target_ulong base,
+      *      vd.E[i] = [Sign|Zero]-Extend(nibble[3:0]);
+      *  }
+      */
+-    for (i = 0; i < env->vl; i++) {
++    for (i = env->vstart; i < env->vl; i++) {
+         k = 0;
+         while (k < nf) {
+             if (!vm && !vext_elem_mask(v0, i)) {
+@@ -5584,12 +5584,14 @@ void HELPER(vle4_v)(void *vd, target_ulong base,
+ {
+     target_ulong i;
+     target_ulong vl;
++    target_ulong vstart;
+     uint8_t vl_is_odd = env->vl % 2;
+     uint8_t tmp;
+     void *ptr = &tmp;
+     /*
+      * Element_size = 4;
+-     * i = 0..(VL-1)
++     * VSTART = VSTART - (VSTART % 2);
++     * i = VSTART..(VL-1)
+      * addr = rs1 + floor(i/2);
+      * part = i%2;
+      * nibble[3:0] = MEM(addr)[4*part+3:4*part+0];
+@@ -5599,8 +5601,9 @@ void HELPER(vle4_v)(void *vd, target_ulong base,
+      * Since int4 uses the same address for a pair data,
+      * loads memory data by byte, once for 2 elements
+      */
++    vstart = env->vstart - (env->vstart % 2);
+     vl = env->vl / 2;
+-    for (i = 0; i < vl; i++) {
++    for (i = vstart; i < vl; i++) {
+         target_ulong addr = base + i;
+         lde_b(env, adjust_addr(env, addr), i, vd, GETPC());
+     }
+@@ -5614,6 +5617,7 @@ void HELPER(vle4_v)(void *vd, target_ulong base,
+         tmp &= 0xf0; /* keep bit[4:7] */
+         *cur = (tmp | val);
+     }
++    env->vstart = 0;
+ }
+ 
+ /* From softfloat.c */
+-- 
+2.34.1
+

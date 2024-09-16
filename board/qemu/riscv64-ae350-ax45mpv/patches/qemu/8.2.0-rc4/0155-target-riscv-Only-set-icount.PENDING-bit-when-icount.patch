@@ -1,0 +1,58 @@
+From 54b95aa37c7c57043636c43ba8e47aea88798644 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Wed, 20 Dec 2023 17:40:49 +0800
+Subject: [PATCH 155/241] target/riscv: Only set icount.PENDING bit when icount
+ trigger matches
+
+Refer to RISC-V debug specification:
+- When count is 1 and the trigger matches, then pending becomes set.
+- When pending is set, the trigger fires just before any further
+  instructions are executed in a mode where the trigger is enabled.
+
+This commit adds helper function to set the pending bit of icount
+trigger and calls the function when the icount trigger count is 1 and it
+matches. Also we remove icount trigger fire in helper_itrigger_match(),
+since this function is called when any instruction retires. This is not
+correct timing to fire the pending icount trigger.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index d0055990d5..9ac2e68b9d 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -814,6 +814,13 @@ itrigger_set_count(CPURISCVState *env, int index, int value)
+                                    ITRIGGER_COUNT, value);
+ }
+ 
++static inline void itrigger_set_pending(CPURISCVState *env, int index,
++                                        bool pending)
++{
++    env->tdata1[index] = set_field(env->tdata1[index],
++                                   ITRIGGER_PENDING, pending);
++}
++
+ bool riscv_itrigger_enabled(CPURISCVState *env)
+ {
+     int count;
+@@ -852,10 +859,13 @@ void helper_itrigger_match(CPURISCVState *env)
+         if (!count) {
+             continue;
+         }
++        if (count == 1) {
++            /* When count is 1 and the trigger matches, set pending. */
++            itrigger_set_pending(env, i, true);
++        }
+         itrigger_set_count(env, i, --count);
+         if (!count) {
+             env->itrigger_enabled = riscv_itrigger_enabled(env);
+-            do_trigger_action(env, i);
+         }
+     }
+ }
+-- 
+2.34.1
+

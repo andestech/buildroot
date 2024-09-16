@@ -1,0 +1,6355 @@
+From 4827ddb357b3cbd4b278a923801c2f6209b66e3f Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 6 May 2024 08:53:38 +0800
+Subject: [PATCH 233/241] target/riscv: Add Andes DSP extension(p extension
+ 0.5.2) support. (#141)
+
+ext_psfoperand is whether to support Zpsfoperand sub-extension.
+pext_ver is the packed specification version, default value is v0.5.2.
+
+This series of commits is picked from
+https://patchew.org/QEMU/20210624105521.3964-1-zhiwei_liu@c-sky.com/
+
+Signed-off-by: LIU Zhiwei <zhiwei_liu@c-sky.com>
+Reviewed-by: Alistair Francis <alistair.francis@wdc.com>
+Co-authored-by: patrick <patrick@andestech.com>
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/141
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/XAndesCodenseOps.decode          |    2 +-
+ target/riscv/cpu.c                            |    7 +
+ target/riscv/cpu.h                            |    3 +
+ target/riscv/cpu_cfg.h                        |    8 +
+ target/riscv/helper.h                         |  333 ++
+ target/riscv/insn32_rvp.decode                |  393 ++
+ target/riscv/insn_trans/trans_rvp.c.inc       | 1046 +++++
+ .../riscv/insn_trans/trans_xandesv5ops.c.inc  |   13 +-
+ target/riscv/internals.h                      |   50 +
+ target/riscv/machine.c                        |    1 +
+ target/riscv/meson.build                      |    2 +
+ target/riscv/packed_helper.c                  | 3902 +++++++++++++++++
+ target/riscv/tcg/tcg-cpu.c                    |   38 +
+ target/riscv/translate.c                      |    3 +
+ target/riscv/vector_helper.c                  |   70 +-
+ target/riscv/vector_internals.h               |   20 -
+ 16 files changed, 5816 insertions(+), 75 deletions(-)
+ create mode 100644 target/riscv/insn32_rvp.decode
+ create mode 100644 target/riscv/insn_trans/trans_rvp.c.inc
+ create mode 100644 target/riscv/packed_helper.c
+
+diff --git a/target/riscv/XAndesCodenseOps.decode b/target/riscv/XAndesCodenseOps.decode
+index 19e393a19b..e3ae528362 100644
+--- a/target/riscv/XAndesCodenseOps.decode
++++ b/target/riscv/XAndesCodenseOps.decode
+@@ -6,7 +6,7 @@
+ #
+ 
+ 
+-%imm_ex10 8:1 12:1 3:1 9:1 5:2 2:1 10:2 4:1
++%imm_ex10 8:s1 12:1 3:1 9:1 5:2 2:1 10:2 4:1
+ &codense imm_codense
+ @ex10     ... .... . . ..... .. &codense imm_codense=%imm_ex10
+ 
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 5e4ccd5151..514a295760 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -732,6 +732,7 @@ static void rv64_andes_common_cpu_init(Object *obj,
+     cfg->ext_zbb = true;
+     cfg->ext_zbc = true;
+     cfg->ext_zbs = true;
++    cfg->ext_psfoperand = true;
+ 
+     /* Enable Andes Custom extension */
+     cfg->ext_XAndesV5Ops = true;
+@@ -746,6 +747,8 @@ static void rv64_andes_ax25_cpu_init(Object *obj)
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
++    riscv_cpu_set_misa(env, MXL_RV64,
++             RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU | RVP | RVX);
+     rv64_andes_common_cpu_init(obj, VM_1_10_SV48, NULL);
+ 
+     /* Set CPU ID */
+@@ -1126,6 +1129,7 @@ static void rv32_andes_common_cpu_init(Object *obj,
+     cfg->ext_zbb = true;
+     cfg->ext_zbc = true;
+     cfg->ext_zbs = true;
++    cfg->ext_psfoperand = true;
+ 
+     /* Enable Andes Custom extension */
+     cfg->ext_XAndesV5Ops = true;
+@@ -1140,6 +1144,8 @@ static void rv32_andes_a25_cpu_init(Object *obj)
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
++    riscv_cpu_set_misa(env, MXL_RV32,
++             RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU | RVP | RVX);
+     rv32_andes_common_cpu_init(obj, VM_1_10_SV32, NULL);
+ 
+     /* Set CPU ID */
+@@ -2203,6 +2209,7 @@ const RISCVCPUMultiExtConfig riscv_cpu_extensions[] = {
+     MULTI_EXT_CFG_BOOL("zve32f", ext_zve32f, false),
+     MULTI_EXT_CFG_BOOL("zve64f", ext_zve64f, false),
+     MULTI_EXT_CFG_BOOL("zve64d", ext_zve64d, false),
++    MULTI_EXT_CFG_BOOL("psfoperand", ext_psfoperand, true),
+     MULTI_EXT_CFG_BOOL("sstc", ext_sstc, true),
+ 
+     MULTI_EXT_CFG_BOOL("smepmp", ext_smepmp, false),
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index 012629d944..ae00c07d59 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -69,6 +69,7 @@ typedef struct CPUArchState CPURISCVState;
+ #define RVF RV('F')
+ #define RVD RV('D')
+ #define RVV RV('V')
++#define RVP RV('P')
+ #define RVC RV('C')
+ #define RVS RV('S')
+ #define RVU RV('U')
+@@ -94,6 +95,7 @@ enum {
+ };
+ 
+ #define VEXT_VERSION_1_00_0 0x00010000
++#define PEXT_VERSION_0_05_2 0x00000502
+ 
+ enum {
+     TRANSLATE_SUCCESS,
+@@ -174,6 +176,7 @@ struct CPUArchState {
+     target_ulong priv_ver;
+     target_ulong bext_ver;
+     target_ulong vext_ver;
++    target_ulong pext_ver;
+ 
+     /* RISCVMXL, but uint32_t for vmstate migration */
+     uint32_t misa_mxl;      /* current mxl */
+diff --git a/target/riscv/cpu_cfg.h b/target/riscv/cpu_cfg.h
+index 0d58235284..81cc3dd88d 100644
+--- a/target/riscv/cpu_cfg.h
++++ b/target/riscv/cpu_cfg.h
+@@ -115,6 +115,7 @@ struct RISCVCPUConfig {
+     bool ext_smepmp;
+     bool rvv_ta_all_1s;
+     bool rvv_ma_all_1s;
++    bool ext_psfoperand;
+ 
+     uint32_t mvendorid;
+     uint64_t marchid;
+@@ -143,6 +144,7 @@ struct RISCVCPUConfig {
+     char *user_spec;
+     char *bext_spec;
+     char *vext_spec;
++    char *pext_spec;
+     char *XAndesAceLib;
+     char *XAndesAceExtLibPath;
+     char *XAndesAceLibDbg;
+@@ -176,6 +178,11 @@ static inline bool always_true_p(const RISCVCPUConfig *cfg __attribute__((__unus
+     return true;
+ }
+ 
++static inline bool has_no_zvknh_p(const RISCVCPUConfig *cfg)
++{
++    return !(cfg->ext_zvknha || cfg->ext_zvknhb);
++}
++
+ static inline bool has_xthead_p(const RISCVCPUConfig *cfg)
+ {
+     return cfg->ext_xtheadba || cfg->ext_xtheadbb ||
+@@ -207,5 +214,6 @@ MATERIALISE_EXT_PREDICATE(XVentanaCondOps)
+ MATERIALISE_EXT_PREDICATE(XAndesV5Ops);
+ MATERIALISE_EXT_PREDICATE(XAndesAce);
+ MATERIALISE_EXT_PREDICATE(XAndesCodenseOps);
++MATERIALISE_EXT_PREDICATE(psfoperand);
+ 
+ #endif
+diff --git a/target/riscv/helper.h b/target/riscv/helper.h
+index bac5459084..2754180d38 100644
+--- a/target/riscv/helper.h
++++ b/target/riscv/helper.h
+@@ -1281,4 +1281,337 @@ DEF_HELPER_4(vgmul_vv, void, ptr, ptr, env, i32)
+ DEF_HELPER_5(vsm4k_vi, void, ptr, ptr, i32, env, i32)
+ DEF_HELPER_4(vsm4r_vv, void, ptr, ptr, env, i32)
+ DEF_HELPER_4(vsm4r_vs, void, ptr, ptr, env, i32)
++
+ #include "andes_helper.h"
++
++/* P extension function */
++DEF_HELPER_3(radd16, tl, env, tl, tl)
++DEF_HELPER_3(uradd16, tl, env, tl, tl)
++DEF_HELPER_3(kadd16, tl, env, tl, tl)
++DEF_HELPER_3(ukadd16, tl, env, tl, tl)
++DEF_HELPER_3(rsub16, tl, env, tl, tl)
++DEF_HELPER_3(ursub16, tl, env, tl, tl)
++DEF_HELPER_3(ksub16, tl, env, tl, tl)
++DEF_HELPER_3(uksub16, tl, env, tl, tl)
++DEF_HELPER_3(cras16, tl, env, tl, tl)
++DEF_HELPER_3(rcras16, tl, env, tl, tl)
++DEF_HELPER_3(urcras16, tl, env, tl, tl)
++DEF_HELPER_3(kcras16, tl, env, tl, tl)
++DEF_HELPER_3(ukcras16, tl, env, tl, tl)
++DEF_HELPER_3(crsa16, tl, env, tl, tl)
++DEF_HELPER_3(rcrsa16, tl, env, tl, tl)
++DEF_HELPER_3(urcrsa16, tl, env, tl, tl)
++DEF_HELPER_3(kcrsa16, tl, env, tl, tl)
++DEF_HELPER_3(ukcrsa16, tl, env, tl, tl)
++DEF_HELPER_3(stas16, tl, env, tl, tl)
++DEF_HELPER_3(rstas16, tl, env, tl, tl)
++DEF_HELPER_3(urstas16, tl, env, tl, tl)
++DEF_HELPER_3(kstas16, tl, env, tl, tl)
++DEF_HELPER_3(ukstas16, tl, env, tl, tl)
++DEF_HELPER_3(stsa16, tl, env, tl, tl)
++DEF_HELPER_3(rstsa16, tl, env, tl, tl)
++DEF_HELPER_3(urstsa16, tl, env, tl, tl)
++DEF_HELPER_3(kstsa16, tl, env, tl, tl)
++DEF_HELPER_3(ukstsa16, tl, env, tl, tl)
++
++DEF_HELPER_3(radd8, tl, env, tl, tl)
++DEF_HELPER_3(uradd8, tl, env, tl, tl)
++DEF_HELPER_3(kadd8, tl, env, tl, tl)
++DEF_HELPER_3(ukadd8, tl, env, tl, tl)
++DEF_HELPER_3(rsub8, tl, env, tl, tl)
++DEF_HELPER_3(ursub8, tl, env, tl, tl)
++DEF_HELPER_3(ksub8, tl, env, tl, tl)
++DEF_HELPER_3(uksub8, tl, env, tl, tl)
++
++DEF_HELPER_3(sra16, tl, env, tl, tl)
++DEF_HELPER_3(sra16_u, tl, env, tl, tl)
++DEF_HELPER_3(srl16, tl, env, tl, tl)
++DEF_HELPER_3(srl16_u, tl, env, tl, tl)
++DEF_HELPER_3(sll16, tl, env, tl, tl)
++DEF_HELPER_3(ksll16, tl, env, tl, tl)
++DEF_HELPER_3(kslra16, tl, env, tl, tl)
++DEF_HELPER_3(kslra16_u, tl, env, tl, tl)
++
++DEF_HELPER_3(sra8, tl, env, tl, tl)
++DEF_HELPER_3(sra8_u, tl, env, tl, tl)
++DEF_HELPER_3(srl8, tl, env, tl, tl)
++DEF_HELPER_3(srl8_u, tl, env, tl, tl)
++DEF_HELPER_3(sll8, tl, env, tl, tl)
++DEF_HELPER_3(ksll8, tl, env, tl, tl)
++DEF_HELPER_3(kslra8, tl, env, tl, tl)
++DEF_HELPER_3(kslra8_u, tl, env, tl, tl)
++
++DEF_HELPER_3(cmpeq16, tl, env, tl, tl)
++DEF_HELPER_3(scmplt16, tl, env, tl, tl)
++DEF_HELPER_3(scmple16, tl, env, tl, tl)
++DEF_HELPER_3(ucmplt16, tl, env, tl, tl)
++DEF_HELPER_3(ucmple16, tl, env, tl, tl)
++
++DEF_HELPER_3(cmpeq8, tl, env, tl, tl)
++DEF_HELPER_3(scmplt8, tl, env, tl, tl)
++DEF_HELPER_3(scmple8, tl, env, tl, tl)
++DEF_HELPER_3(ucmplt8, tl, env, tl, tl)
++DEF_HELPER_3(ucmple8, tl, env, tl, tl)
++
++DEF_HELPER_3(smul16, i64, env, tl, tl)
++DEF_HELPER_3(smulx16, i64, env, tl, tl)
++DEF_HELPER_3(umul16, i64, env, tl, tl)
++DEF_HELPER_3(umulx16, i64, env, tl, tl)
++DEF_HELPER_3(khm16, tl, env, tl, tl)
++DEF_HELPER_3(khmx16, tl, env, tl, tl)
++
++DEF_HELPER_3(smul8, i64, env, tl, tl)
++DEF_HELPER_3(smulx8, i64, env, tl, tl)
++DEF_HELPER_3(umul8, i64, env, tl, tl)
++DEF_HELPER_3(umulx8, i64, env, tl, tl)
++DEF_HELPER_3(khm8, tl, env, tl, tl)
++DEF_HELPER_3(khmx8, tl, env, tl, tl)
++
++DEF_HELPER_3(smin16, tl, env, tl, tl)
++DEF_HELPER_3(umin16, tl, env, tl, tl)
++DEF_HELPER_3(smax16, tl, env, tl, tl)
++DEF_HELPER_3(umax16, tl, env, tl, tl)
++DEF_HELPER_3(sclip16, tl, env, tl, tl)
++DEF_HELPER_3(uclip16, tl, env, tl, tl)
++DEF_HELPER_2(kabs16, tl, env, tl)
++DEF_HELPER_2(clrs16, tl, env, tl)
++DEF_HELPER_2(clz16, tl, env, tl)
++DEF_HELPER_2(clo16, tl, env, tl)
++DEF_HELPER_2(swap16, tl, env, tl)
++
++DEF_HELPER_3(smin8, tl, env, tl, tl)
++DEF_HELPER_3(umin8, tl, env, tl, tl)
++DEF_HELPER_3(smax8, tl, env, tl, tl)
++DEF_HELPER_3(umax8, tl, env, tl, tl)
++DEF_HELPER_3(sclip8, tl, env, tl, tl)
++DEF_HELPER_3(uclip8, tl, env, tl, tl)
++DEF_HELPER_2(kabs8, tl, env, tl)
++DEF_HELPER_2(clrs8, tl, env, tl)
++DEF_HELPER_2(clz8, tl, env, tl)
++DEF_HELPER_2(clo8, tl, env, tl)
++DEF_HELPER_2(swap8, tl, env, tl)
++
++DEF_HELPER_2(sunpkd810, tl, env, tl)
++DEF_HELPER_2(sunpkd820, tl, env, tl)
++DEF_HELPER_2(sunpkd830, tl, env, tl)
++DEF_HELPER_2(sunpkd831, tl, env, tl)
++DEF_HELPER_2(sunpkd832, tl, env, tl)
++DEF_HELPER_2(zunpkd810, tl, env, tl)
++DEF_HELPER_2(zunpkd820, tl, env, tl)
++DEF_HELPER_2(zunpkd830, tl, env, tl)
++DEF_HELPER_2(zunpkd831, tl, env, tl)
++DEF_HELPER_2(zunpkd832, tl, env, tl)
++
++DEF_HELPER_3(pkbb16, tl, env, tl, tl)
++DEF_HELPER_3(pkbt16, tl, env, tl, tl)
++DEF_HELPER_3(pktt16, tl, env, tl, tl)
++DEF_HELPER_3(pktb16, tl, env, tl, tl)
++
++DEF_HELPER_3(smmul, tl, env, tl, tl)
++DEF_HELPER_3(smmul_u, tl, env, tl, tl)
++DEF_HELPER_4(kmmac, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmmac_u, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmmsb, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmmsb_u, tl, env, tl, tl, tl)
++DEF_HELPER_3(kwmmul, tl, env, tl, tl)
++DEF_HELPER_3(kwmmul_u, tl, env, tl, tl)
++
++DEF_HELPER_3(smmwb, tl, env, tl, tl)
++DEF_HELPER_3(smmwb_u, tl, env, tl, tl)
++DEF_HELPER_3(smmwt, tl, env, tl, tl)
++DEF_HELPER_3(smmwt_u, tl, env, tl, tl)
++DEF_HELPER_4(kmmawb, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmmawb_u, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmmawt, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmmawt_u, tl, env, tl, tl, tl)
++DEF_HELPER_3(kmmwb2, tl, env, tl, tl)
++DEF_HELPER_3(kmmwb2_u, tl, env, tl, tl)
++DEF_HELPER_3(kmmwt2, tl, env, tl, tl)
++DEF_HELPER_3(kmmwt2_u, tl, env, tl, tl)
++DEF_HELPER_4(kmmawb2, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmmawb2_u, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmmawt2, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmmawt2_u, tl, env, tl, tl, tl)
++
++DEF_HELPER_3(smbb16, tl, env, tl, tl)
++DEF_HELPER_3(smbt16, tl, env, tl, tl)
++DEF_HELPER_3(smtt16, tl, env, tl, tl)
++DEF_HELPER_3(kmda, tl, env, tl, tl)
++DEF_HELPER_3(kmxda, tl, env, tl, tl)
++DEF_HELPER_3(smds, tl, env, tl, tl)
++DEF_HELPER_3(smdrs, tl, env, tl, tl)
++DEF_HELPER_3(smxds, tl, env, tl, tl)
++DEF_HELPER_4(kmabb, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmabt, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmatt, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmada, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmaxda, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmads, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmadrs, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmaxds, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmsda, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmsxda, tl, env, tl, tl, tl)
++
++DEF_HELPER_3(smal, i64, env, i64, tl)
++
++DEF_HELPER_3(sclip32, tl, env, tl, tl)
++DEF_HELPER_3(uclip32, tl, env, tl, tl)
++DEF_HELPER_2(clrs32, tl, env, tl)
++DEF_HELPER_2(clz32, tl, env, tl)
++DEF_HELPER_2(clo32, tl, env, tl)
++DEF_HELPER_3(pbsad, tl, env, tl, tl)
++DEF_HELPER_4(pbsada, tl, env, tl, tl, tl)
++
++DEF_HELPER_4(smaqa, tl, env, tl, tl, tl)
++DEF_HELPER_4(umaqa, tl, env, tl, tl, tl)
++DEF_HELPER_4(smaqa_su, tl, env, tl, tl, tl)
++
++DEF_HELPER_3(add64, i64, env, i64, i64)
++DEF_HELPER_3(radd64, i64, env, i64, i64)
++DEF_HELPER_3(uradd64, i64, env, i64, i64)
++DEF_HELPER_3(kadd64, i64, env, i64, i64)
++DEF_HELPER_3(ukadd64, i64, env, i64, i64)
++DEF_HELPER_3(sub64, i64, env, i64, i64)
++DEF_HELPER_3(rsub64, i64, env, i64, i64)
++DEF_HELPER_3(ursub64, i64, env, i64, i64)
++DEF_HELPER_3(ksub64, i64, env, i64, i64)
++DEF_HELPER_3(uksub64, i64, env, i64, i64)
++
++DEF_HELPER_4(smar64, i64, env, tl, tl, i64)
++DEF_HELPER_4(smsr64, i64, env, tl, tl, i64)
++DEF_HELPER_4(umar64, i64, env, tl, tl, i64)
++DEF_HELPER_4(umsr64, i64, env, tl, tl, i64)
++DEF_HELPER_4(kmar64, i64, env, tl, tl, i64)
++DEF_HELPER_4(kmsr64, i64, env, tl, tl, i64)
++DEF_HELPER_4(ukmar64, i64, env, tl, tl, i64)
++DEF_HELPER_4(ukmsr64, i64, env, tl, tl, i64)
++
++DEF_HELPER_4(smalbb, i64, env, tl, tl, i64)
++DEF_HELPER_4(smalbt, i64, env, tl, tl, i64)
++DEF_HELPER_4(smaltt, i64, env, tl, tl, i64)
++DEF_HELPER_4(smalda, i64, env, tl, tl, i64)
++DEF_HELPER_4(smalxda, i64, env, tl, tl, i64)
++DEF_HELPER_4(smalds, i64, env, tl, tl, i64)
++DEF_HELPER_4(smalxds, i64, env, tl, tl, i64)
++DEF_HELPER_4(smaldrs, i64, env, tl, tl, i64)
++DEF_HELPER_4(smslda, i64, env, tl, tl, i64)
++DEF_HELPER_4(smslxda, i64, env, tl, tl, i64)
++
++DEF_HELPER_3(kaddh, tl, env, tl, tl)
++DEF_HELPER_3(ksubh, tl, env, tl, tl)
++DEF_HELPER_3(khmbb, tl, env, tl, tl)
++DEF_HELPER_3(khmbt, tl, env, tl, tl)
++DEF_HELPER_3(khmtt, tl, env, tl, tl)
++DEF_HELPER_3(ukaddh, tl, env, tl, tl)
++DEF_HELPER_3(uksubh, tl, env, tl, tl)
++
++DEF_HELPER_3(kaddw, tl, env, tl, tl)
++DEF_HELPER_3(ukaddw, tl, env, tl, tl)
++DEF_HELPER_3(ksubw, tl, env, tl, tl)
++DEF_HELPER_3(uksubw, tl, env, tl, tl)
++DEF_HELPER_3(kdmbb, tl, env, tl, tl)
++DEF_HELPER_3(kdmbt, tl, env, tl, tl)
++DEF_HELPER_3(kdmtt, tl, env, tl, tl)
++DEF_HELPER_3(kslraw, tl, env, tl, tl)
++DEF_HELPER_3(kslraw_u, tl, env, tl, tl)
++DEF_HELPER_3(ksllw, tl, env, tl, tl)
++DEF_HELPER_4(kdmabb, tl, env, tl, tl, tl)
++DEF_HELPER_4(kdmabt, tl, env, tl, tl, tl)
++DEF_HELPER_4(kdmatt, tl, env, tl, tl, tl)
++DEF_HELPER_2(kabsw, tl, env, tl)
++
++DEF_HELPER_3(raddw, tl, env, tl, tl)
++DEF_HELPER_3(uraddw, tl, env, tl, tl)
++DEF_HELPER_3(rsubw, tl, env, tl, tl)
++DEF_HELPER_3(ursubw, tl, env, tl, tl)
++DEF_HELPER_3(maxw, tl, env, tl, tl)
++DEF_HELPER_3(minw, tl, env, tl, tl)
++DEF_HELPER_3(mulr64, i64, env, tl, tl)
++DEF_HELPER_3(mulsr64, i64, env, tl, tl)
++
++DEF_HELPER_3(ave, tl, env, tl, tl)
++DEF_HELPER_3(sra_u, tl, env, tl, tl)
++DEF_HELPER_3(bitrev, tl, env, tl, tl)
++DEF_HELPER_3(wext, tl, env, i64, tl)
++DEF_HELPER_4(bpick, tl, env, tl, tl, tl)
++	
++DEF_HELPER_3(radd32, i64, env, i64, i64)
++DEF_HELPER_3(uradd32, i64, env, i64, i64)
++DEF_HELPER_3(kadd32, i64, env, i64, i64)
++DEF_HELPER_3(ukadd32, i64, env, i64, i64)
++DEF_HELPER_3(rsub32, i64, env, i64, i64)
++DEF_HELPER_3(ursub32, i64, env, i64, i64)
++DEF_HELPER_3(ksub32, i64, env, i64, i64)
++DEF_HELPER_3(uksub32, i64, env, i64, i64)
++DEF_HELPER_3(cras32, i64, env, i64, i64)
++DEF_HELPER_3(rcras32, i64, env, i64, i64)
++DEF_HELPER_3(urcras32, i64, env, i64, i64)
++DEF_HELPER_3(kcras32, i64, env, i64, i64)
++DEF_HELPER_3(ukcras32, i64, env, i64, i64)
++DEF_HELPER_3(crsa32, i64, env, i64, i64)
++DEF_HELPER_3(rcrsa32, i64, env, i64, i64)
++DEF_HELPER_3(urcrsa32, i64, env, i64, i64)
++DEF_HELPER_3(kcrsa32, i64, env, i64, i64)
++DEF_HELPER_3(ukcrsa32, i64, env, i64, i64)
++DEF_HELPER_3(stas32, i64, env, i64, i64)
++DEF_HELPER_3(rstas32, i64, env, i64, i64)
++DEF_HELPER_3(urstas32, i64, env, i64, i64)
++DEF_HELPER_3(kstas32, i64, env, i64, i64)
++DEF_HELPER_3(ukstas32, i64, env, i64, i64)
++DEF_HELPER_3(stsa32, i64, env, i64, i64)
++DEF_HELPER_3(rstsa32, i64, env, i64, i64)
++DEF_HELPER_3(urstsa32, i64, env, i64, i64)
++DEF_HELPER_3(kstsa32, i64, env, i64, i64)
++DEF_HELPER_3(ukstsa32, i64, env, i64, i64)
++
++DEF_HELPER_3(sra32, i64, env, i64, i64)
++DEF_HELPER_3(sra32_u, i64, env, i64, i64)
++DEF_HELPER_3(srl32, i64, env, i64, i64)
++DEF_HELPER_3(srl32_u, i64, env, i64, i64)
++DEF_HELPER_3(sll32, i64, env, i64, i64)
++DEF_HELPER_3(ksll32, i64, env, i64, i64)
++DEF_HELPER_3(kslra32, i64, env, i64, i64)
++DEF_HELPER_3(kslra32_u, i64, env, i64, i64)
++
++DEF_HELPER_3(smin32, i64, env, i64, i64)
++DEF_HELPER_3(umin32, i64, env, i64, i64)
++DEF_HELPER_3(smax32, i64, env, i64, i64)
++DEF_HELPER_3(umax32, i64, env, i64, i64)
++DEF_HELPER_2(kabs32, tl, env, tl)
++
++DEF_HELPER_3(khmbb16, i64, env, i64, i64)
++DEF_HELPER_3(khmbt16, i64, env, i64, i64)
++DEF_HELPER_3(khmtt16, i64, env, i64, i64)
++DEF_HELPER_3(kdmbb16, i64, env, i64, i64)
++DEF_HELPER_3(kdmbt16, i64, env, i64, i64)
++DEF_HELPER_3(kdmtt16, i64, env, i64, i64)
++DEF_HELPER_4(kdmabb16, tl, env, tl, tl, tl)
++DEF_HELPER_4(kdmabt16, tl, env, tl, tl, tl)
++DEF_HELPER_4(kdmatt16, tl, env, tl, tl, tl)
++
++DEF_HELPER_3(smbb32, i64, env, i64, i64)
++DEF_HELPER_3(smbt32, i64, env, i64, i64)
++DEF_HELPER_3(smtt32, i64, env, i64, i64)
++
++DEF_HELPER_4(kmabb32, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmabt32, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmatt32, tl, env, tl, tl, tl)
++
++DEF_HELPER_3(kmda32, i64, env, i64, i64)
++DEF_HELPER_3(kmxda32, i64, env, i64, i64)
++DEF_HELPER_4(kmaxda32, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmads32, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmadrs32, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmaxds32, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmsda32, tl, env, tl, tl, tl)
++DEF_HELPER_4(kmsxda32, tl, env, tl, tl, tl)
++DEF_HELPER_3(smds32, i64, env, i64, i64)
++DEF_HELPER_3(smdrs32, i64, env, i64, i64)
++DEF_HELPER_3(smxds32, i64, env, i64, i64)
++
++DEF_HELPER_3(sraiw_u, i64, env, i64, i64)
++
++DEF_HELPER_3(pkbb32, i64, env, i64, i64)
++DEF_HELPER_3(pkbt32, i64, env, i64, i64)
++DEF_HELPER_3(pktt32, i64, env, i64, i64)
++DEF_HELPER_3(pktb32, i64, env, i64, i64)
+diff --git a/target/riscv/insn32_rvp.decode b/target/riscv/insn32_rvp.decode
+new file mode 100644
+index 0000000000..fae681344b
+--- /dev/null
++++ b/target/riscv/insn32_rvp.decode
+@@ -0,0 +1,393 @@
++# Fields:
++%rs3       27:5
++%rs2       20:5
++%rs1       15:5
++%rd        7:5
++%rc        25:5
++
++%sh5       20:5
++%sh6       20:6
++%sh4       20:4
++%sh3       20:3
++
++# Argument sets:
++&empty                           !extern
++&r         rd rs1 rs2            !extern
++&r2        rd rs1                !extern
++&r4        rd rs1 rs2 rc
++&shift     shamt rs1 rd          !extern
++
++# Formats 32:
++@r       .......   ..... ..... ... ..... ....... &r      %rs2 %rs1 %rd
++@r2      .......   ..... ..... ... ..... ....... &r2     %rs1 %rd
++@r4      ..... ..  ..... ..... ... ..... ....... %rc %rs2 %rs1 %rd
++@sh4     ......  ...... .....  ... ..... ....... &shift  shamt=%sh4 %rs1 %rd
++@sh3     ......  ...... .....  ... ..... ....... &shift  shamt=%sh3 %rs1 %rd
++@sh6     ......  ...... .....  ... ..... ....... &shift  shamt=%sh6 %rs1 %rd
++
++# Formats 64:
++@sh5     .......  ..... .....  ... ..... ....... &shift  shamt=%sh5 %rs1 %rd
++
++# *** RV32P Extension ***
++add16      0100000  ..... ..... 000 ..... 1111111 @r
++radd16     0000000  ..... ..... 000 ..... 1111111 @r
++uradd16    0010000  ..... ..... 000 ..... 1111111 @r
++kadd16     0001000  ..... ..... 000 ..... 1111111 @r
++ukadd16    0011000  ..... ..... 000 ..... 1111111 @r
++sub16      0100001  ..... ..... 000 ..... 1111111 @r
++rsub16     0000001  ..... ..... 000 ..... 1111111 @r
++ursub16    0010001  ..... ..... 000 ..... 1111111 @r
++ksub16     0001001  ..... ..... 000 ..... 1111111 @r
++uksub16    0011001  ..... ..... 000 ..... 1111111 @r
++cras16     0100010  ..... ..... 000 ..... 1111111 @r
++rcras16    0000010  ..... ..... 000 ..... 1111111 @r
++urcras16   0010010  ..... ..... 000 ..... 1111111 @r
++kcras16    0001010  ..... ..... 000 ..... 1111111 @r
++ukcras16   0011010  ..... ..... 000 ..... 1111111 @r
++crsa16     0100011  ..... ..... 000 ..... 1111111 @r
++rcrsa16    0000011  ..... ..... 000 ..... 1111111 @r
++urcrsa16   0010011  ..... ..... 000 ..... 1111111 @r
++kcrsa16    0001011  ..... ..... 000 ..... 1111111 @r
++ukcrsa16   0011011  ..... ..... 000 ..... 1111111 @r
++stas16     0100010  ..... ..... 011 ..... 1111111 @r
++rstas16    0000010  ..... ..... 011 ..... 1111111 @r
++urstas16   0010010  ..... ..... 011 ..... 1111111 @r
++kstas16    0001010  ..... ..... 011 ..... 1111111 @r
++ukstas16   0011010  ..... ..... 011 ..... 1111111 @r
++stsa16     0100011  ..... ..... 011 ..... 1111111 @r
++rstsa16    0000011  ..... ..... 011 ..... 1111111 @r
++urstsa16   0010011  ..... ..... 011 ..... 1111111 @r
++kstsa16    0001011  ..... ..... 011 ..... 1111111 @r
++ukstsa16   0011011  ..... ..... 011 ..... 1111111 @r
++
++add8       0100100  ..... ..... 000 ..... 1111111 @r
++radd8      0000100  ..... ..... 000 ..... 1111111 @r
++uradd8     0010100  ..... ..... 000 ..... 1111111 @r
++kadd8      0001100  ..... ..... 000 ..... 1111111 @r
++ukadd8     0011100  ..... ..... 000 ..... 1111111 @r
++sub8       0100101  ..... ..... 000 ..... 1111111 @r
++rsub8      0000101  ..... ..... 000 ..... 1111111 @r
++ursub8     0010101  ..... ..... 000 ..... 1111111 @r
++ksub8      0001101  ..... ..... 000 ..... 1111111 @r
++uksub8     0011101  ..... ..... 000 ..... 1111111 @r
++
++sra16      0101000  ..... ..... 000 ..... 1111111 @r
++sra16_u    0110000  ..... ..... 000 ..... 1111111 @r
++srai16     0111000  0.... ..... 000 ..... 1111111 @sh4
++srai16_u   0111000  1.... ..... 000 ..... 1111111 @sh4
++srl16      0101001  ..... ..... 000 ..... 1111111 @r
++srl16_u    0110001  ..... ..... 000 ..... 1111111 @r
++srli16     0111001  0.... ..... 000 ..... 1111111 @sh4
++srli16_u   0111001  1.... ..... 000 ..... 1111111 @sh4
++sll16      0101010  ..... ..... 000 ..... 1111111 @r
++slli16     0111010  0.... ..... 000 ..... 1111111 @sh4
++ksll16     0110010  ..... ..... 000 ..... 1111111 @r
++kslli16    0111010  1.... ..... 000 ..... 1111111 @sh4
++kslra16    0101011  ..... ..... 000 ..... 1111111 @r
++kslra16_u  0110011  ..... ..... 000 ..... 1111111 @r
++
++sra8       0101100  ..... ..... 000 ..... 1111111 @r
++sra8_u     0110100  ..... ..... 000 ..... 1111111 @r
++srai8      0111100  00... ..... 000 ..... 1111111 @sh3
++srai8_u    0111100  01... ..... 000 ..... 1111111 @sh3
++srl8       0101101  ..... ..... 000 ..... 1111111 @r
++srl8_u     0110101  ..... ..... 000 ..... 1111111 @r
++srli8      0111101  00... ..... 000 ..... 1111111 @sh3
++srli8_u    0111101  01... ..... 000 ..... 1111111 @sh3
++sll8       0101110  ..... ..... 000 ..... 1111111 @r
++slli8      0111110  00... ..... 000 ..... 1111111 @sh3
++ksll8      0110110  ..... ..... 000 ..... 1111111 @r
++kslli8     0111110  01... ..... 000 ..... 1111111 @sh3
++kslra8     0101111  ..... ..... 000 ..... 1111111 @r
++kslra8_u   0110111  ..... ..... 000 ..... 1111111 @r
++
++cmpeq16    0100110  ..... ..... 000 ..... 1111111 @r
++scmplt16   0000110  ..... ..... 000 ..... 1111111 @r
++scmple16   0001110  ..... ..... 000 ..... 1111111 @r
++ucmplt16   0010110  ..... ..... 000 ..... 1111111 @r
++ucmple16   0011110  ..... ..... 000 ..... 1111111 @r
++
++cmpeq8     0100111  ..... ..... 000 ..... 1111111 @r
++scmplt8    0000111  ..... ..... 000 ..... 1111111 @r
++scmple8    0001111  ..... ..... 000 ..... 1111111 @r
++ucmplt8    0010111  ..... ..... 000 ..... 1111111 @r
++ucmple8    0011111  ..... ..... 000 ..... 1111111 @r
++
++smul16     1010000  ..... ..... 000 ..... 1111111 @r
++smulx16    1010001  ..... ..... 000 ..... 1111111 @r
++umul16     1011000  ..... ..... 000 ..... 1111111 @r
++umulx16    1011001  ..... ..... 000 ..... 1111111 @r
++khm16      1000011  ..... ..... 000 ..... 1111111 @r
++khmx16     1001011  ..... ..... 000 ..... 1111111 @r
++
++smul8      1010100  ..... ..... 000 ..... 1111111 @r
++smulx8     1010101  ..... ..... 000 ..... 1111111 @r
++umul8      1011100  ..... ..... 000 ..... 1111111 @r
++umulx8     1011101  ..... ..... 000 ..... 1111111 @r
++khm8       1000111  ..... ..... 000 ..... 1111111 @r
++khmx8      1001111  ..... ..... 000 ..... 1111111 @r
++
++smin16     1000000  ..... ..... 000 ..... 1111111 @r
++umin16     1001000  ..... ..... 000 ..... 1111111 @r
++smax16     1000001  ..... ..... 000 ..... 1111111 @r
++umax16     1001001  ..... ..... 000 ..... 1111111 @r
++sclip16    1000010  0.... ..... 000 ..... 1111111 @sh4
++uclip16    1000010  1.... ..... 000 ..... 1111111 @sh4
++kabs16     1010110  10001 ..... 000 ..... 1111111 @r2
++clrs16     1010111  01000 ..... 000 ..... 1111111 @r2
++clz16      1010111  01001 ..... 000 ..... 1111111 @r2
++clo16      1010111  01011 ..... 000 ..... 1111111 @r2
++swap16     1010110  11001 ..... 000 ..... 1111111 @r2
++
++smin8      1000100  ..... ..... 000 ..... 1111111 @r
++umin8      1001100  ..... ..... 000 ..... 1111111 @r
++smax8      1000101  ..... ..... 000 ..... 1111111 @r
++umax8      1001101  ..... ..... 000 ..... 1111111 @r
++sclip8     1000110  00... ..... 000 ..... 1111111 @sh3
++uclip8     1000110  10... ..... 000 ..... 1111111 @sh3
++kabs8      1010110  10000 ..... 000 ..... 1111111 @r2
++clrs8      1010111  00000 ..... 000 ..... 1111111 @r2
++clz8       1010111  00001 ..... 000 ..... 1111111 @r2
++clo8       1010111  00011 ..... 000 ..... 1111111 @r2
++swap8      1010110  11000 ..... 000 ..... 1111111 @r2
++
++sunpkd810  1010110  01000 ..... 000 ..... 1111111 @r2
++sunpkd820  1010110  01001 ..... 000 ..... 1111111 @r2
++sunpkd830  1010110  01010 ..... 000 ..... 1111111 @r2
++sunpkd831  1010110  01011 ..... 000 ..... 1111111 @r2
++sunpkd832  1010110  10011 ..... 000 ..... 1111111 @r2
++zunpkd810  1010110  01100 ..... 000 ..... 1111111 @r2
++zunpkd820  1010110  01101 ..... 000 ..... 1111111 @r2
++zunpkd830  1010110  01110 ..... 000 ..... 1111111 @r2
++zunpkd831  1010110  01111 ..... 000 ..... 1111111 @r2
++zunpkd832  1010110  10111 ..... 000 ..... 1111111 @r2
++
++pkbb16     0000111  ..... ..... 001 ..... 1111111 @r
++pkbt16     0001111  ..... ..... 001 ..... 1111111 @r
++pktt16     0010111  ..... ..... 001 ..... 1111111 @r
++pktb16     0011111  ..... ..... 001 ..... 1111111 @r
++
++smmul      0100000  ..... ..... 001 ..... 1111111 @r
++smmul_u    0101000  ..... ..... 001 ..... 1111111 @r
++kmmac      0110000  ..... ..... 001 ..... 1111111 @r
++kmmac_u    0111000  ..... ..... 001 ..... 1111111 @r
++kmmsb      0100001  ..... ..... 001 ..... 1111111 @r
++kmmsb_u    0101001  ..... ..... 001 ..... 1111111 @r
++kwmmul     0110001  ..... ..... 001 ..... 1111111 @r
++kwmmul_u   0111001  ..... ..... 001 ..... 1111111 @r
++
++smmwb      0100010  ..... ..... 001 ..... 1111111 @r
++smmwb_u    0101010  ..... ..... 001 ..... 1111111 @r
++smmwt      0110010  ..... ..... 001 ..... 1111111 @r
++smmwt_u    0111010  ..... ..... 001 ..... 1111111 @r
++kmmawb     0100011  ..... ..... 001 ..... 1111111 @r
++kmmawb_u   0101011  ..... ..... 001 ..... 1111111 @r
++kmmawt     0110011  ..... ..... 001 ..... 1111111 @r
++kmmawt_u   0111011  ..... ..... 001 ..... 1111111 @r
++kmmwb2     1000111  ..... ..... 001 ..... 1111111 @r
++kmmwb2_u   1001111  ..... ..... 001 ..... 1111111 @r
++kmmwt2     1010111  ..... ..... 001 ..... 1111111 @r
++kmmwt2_u   1011111  ..... ..... 001 ..... 1111111 @r
++kmmawb2    1100111  ..... ..... 001 ..... 1111111 @r
++kmmawb2_u  1101111  ..... ..... 001 ..... 1111111 @r
++kmmawt2    1110111  ..... ..... 001 ..... 1111111 @r
++kmmawt2_u  1111111  ..... ..... 001 ..... 1111111 @r
++
++smbb16     0000100  ..... ..... 001 ..... 1111111 @r
++smbt16     0001100  ..... ..... 001 ..... 1111111 @r
++smtt16     0010100  ..... ..... 001 ..... 1111111 @r
++kmda       0011100  ..... ..... 001 ..... 1111111 @r
++kmxda      0011101  ..... ..... 001 ..... 1111111 @r
++smds       0101100  ..... ..... 001 ..... 1111111 @r
++smdrs      0110100  ..... ..... 001 ..... 1111111 @r
++smxds      0111100  ..... ..... 001 ..... 1111111 @r
++kmabb      0101101  ..... ..... 001 ..... 1111111 @r
++kmabt      0110101  ..... ..... 001 ..... 1111111 @r
++kmatt      0111101  ..... ..... 001 ..... 1111111 @r
++kmada      0100100  ..... ..... 001 ..... 1111111 @r
++kmaxda     0100101  ..... ..... 001 ..... 1111111 @r
++kmads      0101110  ..... ..... 001 ..... 1111111 @r
++kmadrs     0110110  ..... ..... 001 ..... 1111111 @r
++kmaxds     0111110  ..... ..... 001 ..... 1111111 @r
++kmsda      0100110  ..... ..... 001 ..... 1111111 @r
++kmsxda     0100111  ..... ..... 001 ..... 1111111 @r
++
++smal       0101111  ..... ..... 001 ..... 1111111 @r
++
++sclip32    1110010  ..... ..... 000 ..... 1111111 @sh5
++uclip32    1111010  ..... ..... 000 ..... 1111111 @sh5
++clrs32     1010111  11000 ..... 000 ..... 1111111 @r2
++clz32      1010111  11001 ..... 000 ..... 1111111 @r2
++clo32      1010111  11011 ..... 000 ..... 1111111 @r2
++pbsad      1111110  ..... ..... 000 ..... 1111111 @r
++pbsada     1111111  ..... ..... 000 ..... 1111111 @r
++
++smaqa      1100100  ..... ..... 000 ..... 1111111 @r
++umaqa      1100110  ..... ..... 000 ..... 1111111 @r
++smaqa_su   1100101  ..... ..... 000 ..... 1111111 @r
++
++add64      1100000  ..... ..... 001 ..... 1111111 @r
++radd64     1000000  ..... ..... 001 ..... 1111111 @r
++uradd64    1010000  ..... ..... 001 ..... 1111111 @r
++kadd64     1001000  ..... ..... 001 ..... 1111111 @r
++ukadd64    1011000  ..... ..... 001 ..... 1111111 @r
++sub64      1100001  ..... ..... 001 ..... 1111111 @r
++rsub64     1000001  ..... ..... 001 ..... 1111111 @r
++ursub64    1010001  ..... ..... 001 ..... 1111111 @r
++ksub64     1001001  ..... ..... 001 ..... 1111111 @r
++uksub64    1011001  ..... ..... 001 ..... 1111111 @r
++
++smar64     1000010  ..... ..... 001 ..... 1111111 @r
++smsr64     1000011  ..... ..... 001 ..... 1111111 @r
++umar64     1010010  ..... ..... 001 ..... 1111111 @r
++umsr64     1010011  ..... ..... 001 ..... 1111111 @r
++kmar64     1001010  ..... ..... 001 ..... 1111111 @r
++kmsr64     1001011  ..... ..... 001 ..... 1111111 @r
++ukmar64    1011010  ..... ..... 001 ..... 1111111 @r
++ukmsr64    1011011  ..... ..... 001 ..... 1111111 @r
++
++smalbb     1000100  ..... ..... 001 ..... 1111111 @r
++smalbt     1001100  ..... ..... 001 ..... 1111111 @r
++smaltt     1010100  ..... ..... 001 ..... 1111111 @r
++smalda     1000110  ..... ..... 001 ..... 1111111 @r
++smalxda    1001110  ..... ..... 001 ..... 1111111 @r
++smalds     1000101  ..... ..... 001 ..... 1111111 @r
++smaldrs    1001101  ..... ..... 001 ..... 1111111 @r
++smalxds    1010101  ..... ..... 001 ..... 1111111 @r
++smslda     1010110  ..... ..... 001 ..... 1111111 @r
++smslxda    1011110  ..... ..... 001 ..... 1111111 @r
++
++kaddh      0000010  ..... ..... 001 ..... 1111111 @r
++ksubh      0000011  ..... ..... 001 ..... 1111111 @r
++khmbb      0000110  ..... ..... 001 ..... 1111111 @r
++khmbt      0001110  ..... ..... 001 ..... 1111111 @r
++khmtt      0010110  ..... ..... 001 ..... 1111111 @r
++ukaddh     0001010  ..... ..... 001 ..... 1111111 @r
++uksubh     0001011  ..... ..... 001 ..... 1111111 @r
++
++kaddw      0000000  ..... ..... 001 ..... 1111111 @r
++ukaddw     0001000  ..... ..... 001 ..... 1111111 @r
++ksubw      0000001  ..... ..... 001 ..... 1111111 @r
++uksubw     0001001  ..... ..... 001 ..... 1111111 @r
++kdmbb      0000101  ..... ..... 001 ..... 1111111 @r
++kdmbt      0001101  ..... ..... 001 ..... 1111111 @r
++kdmtt      0010101  ..... ..... 001 ..... 1111111 @r
++kslraw     0110111  ..... ..... 001 ..... 1111111 @r
++kslraw_u   0111111  ..... ..... 001 ..... 1111111 @r
++ksllw      0010011  ..... ..... 001 ..... 1111111 @r
++kslliw     0011011  ..... ..... 001 ..... 1111111 @sh5
++kdmabb     1101001  ..... ..... 001 ..... 1111111 @r
++kdmabt     1110001  ..... ..... 001 ..... 1111111 @r
++kdmatt     1111001  ..... ..... 001 ..... 1111111 @r
++kabsw      1010110  10100 ..... 000 ..... 1111111 @r2
++
++raddw      0010000  ..... ..... 001 ..... 1111111 @r
++uraddw     0011000  ..... ..... 001 ..... 1111111 @r
++rsubw      0010001  ..... ..... 001 ..... 1111111 @r
++ursubw     0011001  ..... ..... 001 ..... 1111111 @r
++maxw       1111001  ..... ..... 000 ..... 1111111 @r
++minw       1111000  ..... ..... 000 ..... 1111111 @r
++mulr64     1111000  ..... ..... 001 ..... 1111111 @r
++mulsr64    1110000  ..... ..... 001 ..... 1111111 @r
++
++ave        1110000  ..... ..... 000 ..... 1111111 @r
++sra_u      0010010  ..... ..... 001 ..... 1111111 @r
++srai_u     110101  ...... ..... 001 ..... 1111111 @sh6
++bitrev     1110011  ..... ..... 000 ..... 1111111 @r
++bitrevi    111010  ...... ..... 000 ..... 1111111 @sh6
++wext       1100111  ..... ..... 000 ..... 1111111 @r
++wexti      1101111  ..... ..... 000 ..... 1111111 @sh5
++bpick      11.....  ..... ..... 010 ..... 1111111 @r4
++insb       1010110  00... ..... 000 ..... 1111111 @sh3
++maddr32    1100010  ..... ..... 001 ..... 1111111 @r
++msubr32    1100011  ..... ..... 001 ..... 1111111 @r
++	
++# *** RV64P Standard Extension (in addition to RV32P) ***
++add32      0100000  ..... ..... 010 ..... 1111111 @r
++radd32     0000000  ..... ..... 010 ..... 1111111 @r
++uradd32    0010000  ..... ..... 010 ..... 1111111 @r
++kadd32     0001000  ..... ..... 010 ..... 1111111 @r
++ukadd32    0011000  ..... ..... 010 ..... 1111111 @r
++sub32      0100001  ..... ..... 010 ..... 1111111 @r
++rsub32     0000001  ..... ..... 010 ..... 1111111 @r
++ursub32    0010001  ..... ..... 010 ..... 1111111 @r
++ksub32     0001001  ..... ..... 010 ..... 1111111 @r
++uksub32    0011001  ..... ..... 010 ..... 1111111 @r
++cras32     0100010  ..... ..... 010 ..... 1111111 @r
++rcras32    0000010  ..... ..... 010 ..... 1111111 @r
++urcras32   0010010  ..... ..... 010 ..... 1111111 @r
++kcras32    0001010  ..... ..... 010 ..... 1111111 @r
++ukcras32   0011010  ..... ..... 010 ..... 1111111 @r
++crsa32     0100011  ..... ..... 010 ..... 1111111 @r
++rcrsa32    0000011  ..... ..... 010 ..... 1111111 @r
++urcrsa32   0010011  ..... ..... 010 ..... 1111111 @r
++kcrsa32    0001011  ..... ..... 010 ..... 1111111 @r
++ukcrsa32   0011011  ..... ..... 010 ..... 1111111 @r
++stas32     0100000  ..... ..... 011 ..... 1111111 @r
++rstas32    0000000  ..... ..... 011 ..... 1111111 @r
++urstas32   0010000  ..... ..... 011 ..... 1111111 @r
++kstas32    0001000  ..... ..... 011 ..... 1111111 @r
++ukstas32   0011000  ..... ..... 011 ..... 1111111 @r
++stsa32     0100001  ..... ..... 011 ..... 1111111 @r
++rstsa32    0000001  ..... ..... 011 ..... 1111111 @r
++urstsa32   0010001  ..... ..... 011 ..... 1111111 @r
++kstsa32    0001001  ..... ..... 011 ..... 1111111 @r
++ukstsa32   0011001  ..... ..... 011 ..... 1111111 @r
++
++sra32      0101000  ..... ..... 010 ..... 1111111 @r
++sra32_u    0110000  ..... ..... 010 ..... 1111111 @r
++srai32     0111000  ..... ..... 010 ..... 1111111 @sh5
++srai32_u   1000000  ..... ..... 010 ..... 1111111 @sh5
++srl32      0101001  ..... ..... 010 ..... 1111111 @r
++srl32_u    0110001  ..... ..... 010 ..... 1111111 @r
++srli32     0111001  ..... ..... 010 ..... 1111111 @sh5
++srli32_u   1000001  ..... ..... 010 ..... 1111111 @sh5
++sll32      0101010  ..... ..... 010 ..... 1111111 @r
++slli32     0111010  ..... ..... 010 ..... 1111111 @sh5
++ksll32     0110010  ..... ..... 010 ..... 1111111 @r
++kslli32    1000010  ..... ..... 010 ..... 1111111 @sh5
++kslra32    0101011  ..... ..... 010 ..... 1111111 @r
++kslra32_u  0110011  ..... ..... 010 ..... 1111111 @r
++
++smin32     1001000  ..... ..... 010 ..... 1111111 @r
++umin32     1010000  ..... ..... 010 ..... 1111111 @r
++smax32     1001001  ..... ..... 010 ..... 1111111 @r
++umax32     1010001  ..... ..... 010 ..... 1111111 @r
++kabs32     1010110  10010 ..... 000 ..... 1111111 @r2
++
++khmbb16    1101110  ..... ..... 001 ..... 1111111 @r
++khmbt16    1110110  ..... ..... 001 ..... 1111111 @r
++khmtt16    1111110  ..... ..... 001 ..... 1111111 @r
++kdmbb16    1101101  ..... ..... 001 ..... 1111111 @r
++kdmbt16    1110101  ..... ..... 001 ..... 1111111 @r
++kdmtt16    1111101  ..... ..... 001 ..... 1111111 @r
++kdmabb16   1101100  ..... ..... 001 ..... 1111111 @r
++kdmabt16   1110100  ..... ..... 001 ..... 1111111 @r
++kdmatt16   1111100  ..... ..... 001 ..... 1111111 @r
++
++smbb32     0000100  ..... ..... 010 ..... 1111111 @r
++smbt32     0001100  ..... ..... 010 ..... 1111111 @r
++smtt32     0010100  ..... ..... 010 ..... 1111111 @r
++
++kmabb32    0101101  ..... ..... 010 ..... 1111111 @r
++kmabt32    0110101  ..... ..... 010 ..... 1111111 @r
++kmatt32    0111101  ..... ..... 010 ..... 1111111 @r
++
++kmda32     0011100  ..... ..... 010 ..... 1111111 @r
++kmxda32    0011101  ..... ..... 010 ..... 1111111 @r
++kmaxda32   0100101  ..... ..... 010 ..... 1111111 @r
++kmads32    0101110  ..... ..... 010 ..... 1111111 @r
++kmadrs32   0110110  ..... ..... 010 ..... 1111111 @r
++kmaxds32   0111110  ..... ..... 010 ..... 1111111 @r
++kmsda32    0100110  ..... ..... 010 ..... 1111111 @r
++kmsxda32   0100111  ..... ..... 010 ..... 1111111 @r
++smds32     0101100  ..... ..... 010 ..... 1111111 @r
++smdrs32    0110100  ..... ..... 010 ..... 1111111 @r
++smxds32    0111100  ..... ..... 010 ..... 1111111 @r
++
++sraiw_u    0011010  ..... ..... 001 ..... 1111111 @sh5
++
++pkbb32     0000111  ..... ..... 010 ..... 1111111 @r
++pkbt32     0001111  ..... ..... 010 ..... 1111111 @r
++pktt32     0010111  ..... ..... 010 ..... 1111111 @r
++pktb32     0011111  ..... ..... 010 ..... 1111111 @r
+diff --git a/target/riscv/insn_trans/trans_rvp.c.inc b/target/riscv/insn_trans/trans_rvp.c.inc
+new file mode 100644
+index 0000000000..1bb40e5bb0
+--- /dev/null
++++ b/target/riscv/insn_trans/trans_rvp.c.inc
+@@ -0,0 +1,1046 @@
++/*
++ * RISC-V translation routines for the RVP Standard Extension.
++ *
++ * Copyright (c) 2021 T-Head Semiconductor Co., Ltd. All rights reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms and conditions of the GNU General Public License,
++ * version 2 or later, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along with
++ * this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "tcg/tcg-op-gvec.h"
++#include "tcg/tcg-gvec-desc.h"
++#include "tcg/tcg.h"
++
++enum OP_TYPE {
++  OP_ADD,
++  OP_SUB,
++};
++
++static inline bool has_edsp(DisasContext *ctx) {
++    return cpu_env(ctx->cs)->andes_csr.csrno[CSR_MMSC_CFG] & MASK_MMSC_CFG_EDSP;
++}
++
++/*
++ *** SIMD Data Processing Instructions
++ */
++
++/* 16-bit Addition & Subtraction Instructions */
++
++/*
++ * For some instructions, such as add16, an oberservation can be utilized:
++ * 1) If any reg is zero, it can be reduced to an inline op on the whole reg.
++ * 2) Otherwise, it can be acclebrated by an vec op.
++ */
++static inline bool
++r_inline(DisasContext *ctx, arg_r *a,
++         void (* vecop)(TCGv, TCGv, TCGv),
++         void (* op)(TCGv, TCGv, TCGv),
++         enum OP_TYPE op_type)
++{
++    if (!has_edsp(ctx)) {
++        return false;
++    }
++    if (a->rd == 0 || a->rs2 == 0) {
++        gen_arith(ctx, a, EXT_NONE, op, NULL);
++    } else if (a->rs1 == 0) {
++        if (op_type == OP_ADD) {
++            gen_arith(ctx, a, EXT_NONE, op, NULL);
++        } else {
++            vecop(cpu_gpr[a->rd], ctx->zero, cpu_gpr[a->rs2]);
++        }
++    } else {
++        vecop(cpu_gpr[a->rd], cpu_gpr[a->rs1], cpu_gpr[a->rs2]);
++    }
++    return true;
++}
++
++/* Complete inline implementation */
++#define GEN_RVP_R_INLINE(NAME, VECOP, OP, OP_TYPE)       \
++static bool trans_##NAME(DisasContext *s, arg_r *a)      \
++{                                                        \
++    return r_inline(s, a, VECOP, OP, OP_TYPE);           \
++}
++
++GEN_RVP_R_INLINE(add16, tcg_gen_vec_add16_tl, tcg_gen_add_tl, OP_ADD);
++GEN_RVP_R_INLINE(sub16, tcg_gen_vec_sub16_tl, tcg_gen_sub_tl, OP_SUB);
++
++/* Out of line helpers for R format packed instructions */
++static inline bool
++r_ool(DisasContext *ctx, arg_r *a, void (* fn)(TCGv, TCGv_ptr, TCGv, TCGv))
++{
++    TCGv src1, src2, dst;
++    if (!has_edsp(ctx)) {
++        return false;
++    }
++
++    src1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    src2 = get_gpr(ctx, a->rs2, EXT_NONE);
++    dst = dest_gpr(ctx, a->rd);
++    fn(dst, tcg_env, src1, src2);
++    gen_set_gpr(ctx, a->rd, dst);
++
++    return true;
++}
++
++#define GEN_RVP_R_OOL(NAME)                            \
++static bool trans_##NAME(DisasContext *s, arg_r *a)    \
++{                                                      \
++    return r_ool(s, a, gen_helper_##NAME);             \
++}
++
++GEN_RVP_R_OOL(radd16);
++GEN_RVP_R_OOL(uradd16);
++GEN_RVP_R_OOL(kadd16);
++GEN_RVP_R_OOL(ukadd16);
++GEN_RVP_R_OOL(rsub16);
++GEN_RVP_R_OOL(ursub16);
++GEN_RVP_R_OOL(ksub16);
++GEN_RVP_R_OOL(uksub16);
++GEN_RVP_R_OOL(cras16);
++GEN_RVP_R_OOL(rcras16);
++GEN_RVP_R_OOL(urcras16);
++GEN_RVP_R_OOL(kcras16);
++GEN_RVP_R_OOL(ukcras16);
++GEN_RVP_R_OOL(crsa16);
++GEN_RVP_R_OOL(rcrsa16);
++GEN_RVP_R_OOL(urcrsa16);
++GEN_RVP_R_OOL(kcrsa16);
++GEN_RVP_R_OOL(ukcrsa16);
++GEN_RVP_R_OOL(stas16);
++GEN_RVP_R_OOL(rstas16);
++GEN_RVP_R_OOL(urstas16);
++GEN_RVP_R_OOL(kstas16);
++GEN_RVP_R_OOL(ukstas16);
++GEN_RVP_R_OOL(stsa16);
++GEN_RVP_R_OOL(rstsa16);
++GEN_RVP_R_OOL(urstsa16);
++GEN_RVP_R_OOL(kstsa16);
++GEN_RVP_R_OOL(ukstsa16);
++
++/* 8-bit Addition & Subtraction Instructions */
++GEN_RVP_R_INLINE(add8, tcg_gen_vec_add8_tl, tcg_gen_add_tl, OP_ADD);
++GEN_RVP_R_INLINE(sub8, tcg_gen_vec_sub8_tl, tcg_gen_sub_tl, OP_SUB);
++
++GEN_RVP_R_OOL(radd8);
++GEN_RVP_R_OOL(uradd8);
++GEN_RVP_R_OOL(kadd8);
++GEN_RVP_R_OOL(ukadd8);
++GEN_RVP_R_OOL(rsub8);
++GEN_RVP_R_OOL(ursub8);
++GEN_RVP_R_OOL(ksub8);
++GEN_RVP_R_OOL(uksub8);
++
++/* 16-bit Shift Instructions */
++GEN_RVP_R_OOL(sra16);
++GEN_RVP_R_OOL(srl16);
++GEN_RVP_R_OOL(sll16);
++GEN_RVP_R_OOL(sra16_u);
++GEN_RVP_R_OOL(srl16_u);
++GEN_RVP_R_OOL(ksll16);
++GEN_RVP_R_OOL(kslra16);
++GEN_RVP_R_OOL(kslra16_u);
++
++static bool
++rvp_shifti_ool(DisasContext *ctx, arg_shift *a,
++               void (* fn)(TCGv, TCGv_ptr, TCGv, TCGv))
++{
++    TCGv src1, dst, shift;
++
++    src1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    dst = dest_gpr(ctx, a->rd);
++    shift = tcg_constant_tl(a->shamt);
++    fn(dst, tcg_env, src1, shift);
++    gen_set_gpr(ctx, a->rd, dst);
++
++    return true;
++}
++
++static inline bool
++rvp_shifti(DisasContext *ctx, arg_shift *a,
++           void (* vecop)(TCGv, TCGv, target_long),
++           void (* op)(TCGv, TCGv_ptr, TCGv, TCGv))
++{
++    if (!has_edsp(ctx)) {
++        return false;
++    }
++
++    if (a->rd && a->rs1 && vecop) {
++        vecop(cpu_gpr[a->rd], cpu_gpr[a->rs1], a->shamt);
++        return true;
++    }
++    return rvp_shifti_ool(ctx, a, op);
++}
++
++#define GEN_RVP_SHIFTI(NAME, VECOP, OP)                  \
++static bool trans_##NAME(DisasContext *s, arg_shift *a)  \
++{                                                        \
++    return rvp_shifti(s, a, VECOP, OP);                  \
++}
++
++GEN_RVP_SHIFTI(srai16, tcg_gen_vec_sar16i_tl, gen_helper_sra16);
++GEN_RVP_SHIFTI(srli16, tcg_gen_vec_shr16i_tl, gen_helper_srl16);
++GEN_RVP_SHIFTI(slli16, tcg_gen_vec_shl16i_tl, gen_helper_sll16);
++GEN_RVP_SHIFTI(srai16_u, NULL, gen_helper_sra16_u);
++GEN_RVP_SHIFTI(srli16_u, NULL, gen_helper_srl16_u);
++GEN_RVP_SHIFTI(kslli16, NULL, gen_helper_ksll16);
++
++/* SIMD 8-bit Shift Instructions */
++GEN_RVP_R_OOL(sra8);
++GEN_RVP_R_OOL(srl8);
++GEN_RVP_R_OOL(sll8);
++GEN_RVP_R_OOL(sra8_u);
++GEN_RVP_R_OOL(srl8_u);
++GEN_RVP_R_OOL(ksll8);
++GEN_RVP_R_OOL(kslra8);
++GEN_RVP_R_OOL(kslra8_u);
++GEN_RVP_SHIFTI(srai8, tcg_gen_vec_sar8i_tl, gen_helper_sra8);
++GEN_RVP_SHIFTI(srli8, tcg_gen_vec_shr8i_tl, gen_helper_srl8);
++GEN_RVP_SHIFTI(slli8, tcg_gen_vec_shl8i_tl, gen_helper_sll8);
++GEN_RVP_SHIFTI(srai8_u, NULL, gen_helper_sra8_u);
++GEN_RVP_SHIFTI(srli8_u, NULL, gen_helper_srl8_u);
++GEN_RVP_SHIFTI(kslli8, NULL, gen_helper_ksll8);
++
++/* SIMD 16-bit Compare Instructions */
++GEN_RVP_R_OOL(cmpeq16);
++GEN_RVP_R_OOL(scmplt16);
++GEN_RVP_R_OOL(scmple16);
++GEN_RVP_R_OOL(ucmplt16);
++GEN_RVP_R_OOL(ucmple16);
++
++/* SIMD 8-bit Compare Instructions */
++GEN_RVP_R_OOL(cmpeq8);
++GEN_RVP_R_OOL(scmplt8);
++GEN_RVP_R_OOL(scmple8);
++GEN_RVP_R_OOL(ucmplt8);
++GEN_RVP_R_OOL(ucmple8);
++
++/* SIMD 16-bit Multiply Instructions */
++static void set_pair_regs(DisasContext *ctx, TCGv_i64 dst, int rd)
++{
++    TCGv t1, t2;
++
++    t1 = tcg_temp_new();
++    t2 = tcg_temp_new();
++
++    if (get_xl(ctx) == MXL_RV32) {
++        TCGv_i32 lo, hi;
++
++        lo = tcg_temp_new_i32();
++        hi = tcg_temp_new_i32();
++        tcg_gen_extr_i64_i32(lo, hi, dst);
++
++        tcg_gen_ext_i32_tl(t1, lo);
++        tcg_gen_ext_i32_tl(t2, hi);
++
++        gen_set_gpr(ctx, rd, t1);
++        gen_set_gpr(ctx, rd + 1, t2);
++    } else {
++        tcg_gen_trunc_i64_tl(t1, dst);
++        gen_set_gpr(ctx, rd, t1);
++    }
++}
++
++static inline bool
++r_d64_ool(DisasContext *ctx, arg_r *a,
++          void (* fn)(TCGv_i64, TCGv_ptr, TCGv, TCGv))
++{
++    TCGv t1, t2;
++    TCGv_i64 t3;
++
++    if (!has_edsp(ctx) || !has_psfoperand_p(ctx->cfg_ptr)) {
++        return false;
++    }
++
++    t3 = tcg_temp_new_i64();
++
++    t1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    t2 = get_gpr(ctx, a->rs2, EXT_NONE);
++    fn(t3, tcg_env, t1, t2);
++    set_pair_regs(ctx, t3, a->rd);
++
++    return true;
++}
++
++#define GEN_RVP_R_D64_OOL(NAME)                        \
++static bool trans_##NAME(DisasContext *s, arg_r *a)    \
++{                                                      \
++    return r_d64_ool(s, a, gen_helper_##NAME);         \
++}
++
++GEN_RVP_R_D64_OOL(smul16);
++GEN_RVP_R_D64_OOL(smulx16);
++GEN_RVP_R_D64_OOL(umul16);
++GEN_RVP_R_D64_OOL(umulx16);
++GEN_RVP_R_OOL(khm16);
++GEN_RVP_R_OOL(khmx16);
++
++/* SIMD 8-bit Multiply Instructions */
++GEN_RVP_R_D64_OOL(smul8);
++GEN_RVP_R_D64_OOL(smulx8);
++GEN_RVP_R_D64_OOL(umul8);
++GEN_RVP_R_D64_OOL(umulx8);
++GEN_RVP_R_OOL(khm8);
++GEN_RVP_R_OOL(khmx8);
++
++/* SIMD 16-bit Miscellaneous Instructions */
++GEN_RVP_R_OOL(smin16);
++GEN_RVP_R_OOL(umin16);
++GEN_RVP_R_OOL(smax16);
++GEN_RVP_R_OOL(umax16);
++GEN_RVP_SHIFTI(sclip16, NULL, gen_helper_sclip16);
++GEN_RVP_SHIFTI(uclip16, NULL, gen_helper_uclip16);
++
++/* Out of line helpers for R2 format */
++static bool
++r2_ool(DisasContext *ctx, arg_r2 *a,
++       void (* fn)(TCGv, TCGv_ptr, TCGv))
++{
++    TCGv src1, dst;
++    if (!has_edsp(ctx)) {
++        return false;
++    }
++
++    src1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    dst = dest_gpr(ctx, a->rd);
++    fn(dst, tcg_env, src1);
++    gen_set_gpr(ctx, a->rd, dst);
++
++    return true;
++}
++
++#define GEN_RVP_R2_OOL(NAME)                           \
++static bool trans_##NAME(DisasContext *s, arg_r2 *a)   \
++{                                                      \
++    return r2_ool(s, a, gen_helper_##NAME);            \
++}
++
++GEN_RVP_R2_OOL(kabs16);
++GEN_RVP_R2_OOL(clrs16);
++GEN_RVP_R2_OOL(clz16);
++GEN_RVP_R2_OOL(clo16);
++GEN_RVP_R2_OOL(swap16);
++
++/* SIMD 8-bit Miscellaneous Instructions */
++GEN_RVP_R_OOL(smin8);
++GEN_RVP_R_OOL(umin8);
++GEN_RVP_R_OOL(smax8);
++GEN_RVP_R_OOL(umax8);
++GEN_RVP_SHIFTI(sclip8, NULL, gen_helper_sclip8);
++GEN_RVP_SHIFTI(uclip8, NULL, gen_helper_uclip8);
++GEN_RVP_R2_OOL(kabs8);
++GEN_RVP_R2_OOL(clrs8);
++GEN_RVP_R2_OOL(clz8);
++GEN_RVP_R2_OOL(clo8);
++GEN_RVP_R2_OOL(swap8);
++
++/* 8-bit Unpacking Instructions */
++GEN_RVP_R2_OOL(sunpkd810);
++GEN_RVP_R2_OOL(sunpkd820);
++GEN_RVP_R2_OOL(sunpkd830);
++GEN_RVP_R2_OOL(sunpkd831);
++GEN_RVP_R2_OOL(sunpkd832);
++GEN_RVP_R2_OOL(zunpkd810);
++GEN_RVP_R2_OOL(zunpkd820);
++GEN_RVP_R2_OOL(zunpkd830);
++GEN_RVP_R2_OOL(zunpkd831);
++GEN_RVP_R2_OOL(zunpkd832);
++
++/*
++ *** Partial-SIMD Data Processing Instruction
++ */
++/* 16-bit Packing Instructions */
++GEN_RVP_R_OOL(pkbb16);
++GEN_RVP_R_OOL(pkbt16);
++GEN_RVP_R_OOL(pktt16);
++GEN_RVP_R_OOL(pktb16);
++
++/* Most Significant Word “32x32” Multiply & Add Instructions */
++GEN_RVP_R_OOL(smmul);
++GEN_RVP_R_OOL(smmul_u);
++
++/* Function to accumulate destination register */
++static inline bool r_acc_ool(DisasContext *ctx, arg_r *a,
++                             void (* fn)(TCGv, TCGv_ptr, TCGv, TCGv, TCGv))
++{
++    TCGv src1, src2, src3, dst;
++    if (!has_edsp(ctx)) {
++        return false;
++    }
++
++    src1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    src2 = get_gpr(ctx, a->rs2, EXT_NONE);
++    src3 = get_gpr(ctx, a->rd, EXT_NONE);
++    dst = dest_gpr(ctx, a->rd);
++    fn(dst, tcg_env, src1, src2, src3);
++    gen_set_gpr(ctx, a->rd, dst);
++
++    return true;
++}
++
++#define GEN_RVP_R_ACC_OOL(NAME)                        \
++static bool trans_##NAME(DisasContext *s, arg_r *a)    \
++{                                                      \
++    return r_acc_ool(s, a, gen_helper_##NAME);         \
++}
++
++GEN_RVP_R_ACC_OOL(kmmac);
++GEN_RVP_R_ACC_OOL(kmmac_u);
++GEN_RVP_R_ACC_OOL(kmmsb);
++GEN_RVP_R_ACC_OOL(kmmsb_u);
++GEN_RVP_R_OOL(kwmmul);
++GEN_RVP_R_OOL(kwmmul_u);
++
++/* Most Significant Word “32x16” Multiply & Add Instructions */
++GEN_RVP_R_OOL(smmwb);
++GEN_RVP_R_OOL(smmwb_u);
++GEN_RVP_R_OOL(smmwt);
++GEN_RVP_R_OOL(smmwt_u);
++GEN_RVP_R_ACC_OOL(kmmawb);
++GEN_RVP_R_ACC_OOL(kmmawb_u);
++GEN_RVP_R_ACC_OOL(kmmawt);
++GEN_RVP_R_ACC_OOL(kmmawt_u);
++GEN_RVP_R_OOL(kmmwb2);
++GEN_RVP_R_OOL(kmmwb2_u);
++GEN_RVP_R_OOL(kmmwt2);
++GEN_RVP_R_OOL(kmmwt2_u);
++GEN_RVP_R_ACC_OOL(kmmawb2);
++GEN_RVP_R_ACC_OOL(kmmawb2_u);
++GEN_RVP_R_ACC_OOL(kmmawt2);
++GEN_RVP_R_ACC_OOL(kmmawt2_u);
++
++/* Signed 16-bit Multiply with 32-bit Add/Subtract Instructions */
++GEN_RVP_R_OOL(smbb16);
++GEN_RVP_R_OOL(smbt16);
++GEN_RVP_R_OOL(smtt16);
++GEN_RVP_R_OOL(kmda);
++GEN_RVP_R_OOL(kmxda);
++GEN_RVP_R_OOL(smds);
++GEN_RVP_R_OOL(smdrs);
++GEN_RVP_R_OOL(smxds);
++GEN_RVP_R_ACC_OOL(kmabb);
++GEN_RVP_R_ACC_OOL(kmabt);
++GEN_RVP_R_ACC_OOL(kmatt);
++GEN_RVP_R_ACC_OOL(kmada);
++GEN_RVP_R_ACC_OOL(kmaxda);
++GEN_RVP_R_ACC_OOL(kmads);
++GEN_RVP_R_ACC_OOL(kmadrs);
++GEN_RVP_R_ACC_OOL(kmaxds);
++GEN_RVP_R_ACC_OOL(kmsda);
++GEN_RVP_R_ACC_OOL(kmsxda);
++
++/* Signed 16-bit Multiply with 64-bit Add/Subtract Instructions */
++static bool
++r_d64_s64_ool(DisasContext *ctx, arg_r *a,
++              void (* fn)(TCGv_i64, TCGv_ptr, TCGv_i64, TCGv))
++{
++    TCGv src2;
++    TCGv_i64 src1, dst;
++
++    if (!has_edsp(ctx) || !has_psfoperand_p(ctx->cfg_ptr)) {
++        return false;
++    }
++
++    src1 = tcg_temp_new_i64();
++    dst = tcg_temp_new_i64();
++
++    if (get_xl(ctx) == MXL_RV32) {
++        TCGv t0, t1;
++        t0 = get_gpr(ctx, a->rs1, EXT_NONE);
++        t1 = get_gpr(ctx, a->rs1 + 1, EXT_NONE);
++        tcg_gen_concat_tl_i64(src1, t0, t1);
++    } else {
++        TCGv t0;
++        t0 = get_gpr(ctx, a->rs1, EXT_NONE);
++        tcg_gen_ext_tl_i64(src1, t0);
++    }
++
++    src2 = get_gpr(ctx, a->rs2, EXT_NONE);
++    fn(dst, tcg_env, src1, src2);
++    set_pair_regs(ctx, dst, a->rd);
++
++    return true;
++}
++
++#define GEN_RVP_R_D64_S64_OOL(NAME)                    \
++static bool trans_##NAME(DisasContext *s, arg_r *a)    \
++{                                                      \
++    return r_d64_s64_ool(s, a, gen_helper_##NAME);     \
++}
++
++GEN_RVP_R_D64_S64_OOL(smal);
++
++/* Partial-SIMD Miscellaneous Instructions */
++GEN_RVP_SHIFTI(sclip32, NULL, gen_helper_sclip32);
++GEN_RVP_SHIFTI(uclip32, NULL, gen_helper_uclip32);
++GEN_RVP_R2_OOL(clrs32);
++GEN_RVP_R2_OOL(clz32);
++GEN_RVP_R2_OOL(clo32);
++GEN_RVP_R_OOL(pbsad);
++GEN_RVP_R_ACC_OOL(pbsada);
++
++/* 8-bit Multiply with 32-bit Add Instructions */
++GEN_RVP_R_ACC_OOL(smaqa);
++GEN_RVP_R_ACC_OOL(umaqa);
++GEN_RVP_R_ACC_OOL(smaqa_su);
++
++/*
++ *** 64-bit Profile Instructions
++ */
++/* 64-bit Addition & Subtraction Instructions */
++static bool
++r_d64_s64_s64_ool(DisasContext *ctx, arg_r *a,
++                  void (* fn)(TCGv_i64, TCGv_ptr, TCGv_i64, TCGv_i64))
++{
++    TCGv t1, t2;
++    TCGv_i64 src1, src2, dst;
++
++    if (!has_edsp(ctx) || !has_psfoperand_p(ctx->cfg_ptr)) {
++        return false;
++    }
++
++    src1 = tcg_temp_new_i64();
++    src2 = tcg_temp_new_i64();
++    dst = tcg_temp_new_i64();
++
++    if (get_xl(ctx) == MXL_RV32) {
++        TCGv a0, a1, b0, b1;
++
++        a0 = get_gpr(ctx, a->rs1, EXT_NONE);
++        a1 = get_gpr(ctx, a->rs1 + 1, EXT_NONE);
++        tcg_gen_concat_tl_i64(src1, a0, a1);
++        b0 = get_gpr(ctx, a->rs2, EXT_NONE);
++        b1 = get_gpr(ctx, a->rs2 + 1, EXT_NONE);
++        tcg_gen_concat_tl_i64(src2, b0, b1);
++    } else {
++        t1 = get_gpr(ctx, a->rs1, EXT_NONE);
++        tcg_gen_ext_tl_i64(src1, t1);
++        t2 = get_gpr(ctx, a->rs2, EXT_NONE);
++        tcg_gen_ext_tl_i64(src2, t2);
++    }
++
++    fn(dst, tcg_env, src1, src2);
++    set_pair_regs(ctx, dst, a->rd);
++
++    return true;
++}
++
++#define GEN_RVP_R_D64_S64_S64_OOL(NAME)                   \
++static bool trans_##NAME(DisasContext *s, arg_r *a)       \
++{                                                         \
++    return r_d64_s64_s64_ool(s, a, gen_helper_##NAME);    \
++}
++
++GEN_RVP_R_D64_S64_S64_OOL(add64);
++GEN_RVP_R_D64_S64_S64_OOL(radd64);
++GEN_RVP_R_D64_S64_S64_OOL(uradd64);
++GEN_RVP_R_D64_S64_S64_OOL(kadd64);
++GEN_RVP_R_D64_S64_S64_OOL(ukadd64);
++GEN_RVP_R_D64_S64_S64_OOL(sub64);
++GEN_RVP_R_D64_S64_S64_OOL(rsub64);
++GEN_RVP_R_D64_S64_S64_OOL(ursub64);
++GEN_RVP_R_D64_S64_S64_OOL(ksub64);
++GEN_RVP_R_D64_S64_S64_OOL(uksub64);
++
++/* 32-bit Multiply with 64-bit Add/Subtract Instructions */
++
++/* Function to accumulate 64bit destination register */
++static bool
++r_d64_acc_ool(DisasContext *ctx, arg_r *a,
++              void (* fn)(TCGv_i64, TCGv_ptr, TCGv, TCGv, TCGv_i64))
++{
++    TCGv src1, src2;
++    TCGv_i64 dst, src3;
++
++    if (!has_edsp(ctx) || !has_psfoperand_p(ctx->cfg_ptr)) {
++        return false;
++    }
++
++    src3 = tcg_temp_new_i64();
++    dst = tcg_temp_new_i64();
++
++    src1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    src2 = get_gpr(ctx, a->rs2, EXT_NONE);
++
++    if (get_xl(ctx) == MXL_RV32) {
++        TCGv t0, t1;
++
++        t0 = get_gpr(ctx, a->rd, EXT_NONE);
++        t1 = get_gpr(ctx, a->rd + 1, EXT_NONE);
++        tcg_gen_concat_tl_i64(src3, t0, t1);
++    } else {
++        TCGv t0;
++
++        t0 = get_gpr(ctx, a->rd, EXT_NONE);
++        tcg_gen_ext_tl_i64(src3, t0);
++    }
++
++    fn(dst, tcg_env, src1, src2, src3);
++
++    set_pair_regs(ctx, dst, a->rd);
++
++    return true;
++}
++
++#define GEN_RVP_R_D64_ACC_OOL(NAME)                    \
++static bool trans_##NAME(DisasContext *s, arg_r *a)    \
++{                                                      \
++    return r_d64_acc_ool(s, a, gen_helper_##NAME);     \
++}
++
++GEN_RVP_R_D64_ACC_OOL(smar64);
++GEN_RVP_R_D64_ACC_OOL(smsr64);
++GEN_RVP_R_D64_ACC_OOL(umar64);
++GEN_RVP_R_D64_ACC_OOL(umsr64);
++GEN_RVP_R_D64_ACC_OOL(kmar64);
++GEN_RVP_R_D64_ACC_OOL(kmsr64);
++GEN_RVP_R_D64_ACC_OOL(ukmar64);
++GEN_RVP_R_D64_ACC_OOL(ukmsr64);
++
++/* Signed 16-bit Multiply with 64-bit Add/Subtract Instructions */
++GEN_RVP_R_D64_ACC_OOL(smalbb);
++GEN_RVP_R_D64_ACC_OOL(smalbt);
++GEN_RVP_R_D64_ACC_OOL(smaltt);
++GEN_RVP_R_D64_ACC_OOL(smalda);
++GEN_RVP_R_D64_ACC_OOL(smalxda);
++GEN_RVP_R_D64_ACC_OOL(smalds);
++GEN_RVP_R_D64_ACC_OOL(smaldrs);
++GEN_RVP_R_D64_ACC_OOL(smalxds);
++GEN_RVP_R_D64_ACC_OOL(smslda);
++GEN_RVP_R_D64_ACC_OOL(smslxda);
++
++/*
++ *** Non-SIMD Instructions
++ */
++/* Non-SIMD Q15 saturation ALU Instructions */
++GEN_RVP_R_OOL(kaddh);
++GEN_RVP_R_OOL(ksubh);
++GEN_RVP_R_OOL(khmbb);
++GEN_RVP_R_OOL(khmbt);
++GEN_RVP_R_OOL(khmtt);
++GEN_RVP_R_OOL(ukaddh);
++GEN_RVP_R_OOL(uksubh);
++
++/* Non-SIMD Q31 saturation ALU Instructions */
++GEN_RVP_R_OOL(kaddw);
++GEN_RVP_R_OOL(ukaddw);
++GEN_RVP_R_OOL(ksubw);
++GEN_RVP_R_OOL(uksubw);
++GEN_RVP_R_OOL(kdmbb);
++GEN_RVP_R_OOL(kdmbt);
++GEN_RVP_R_OOL(kdmtt);
++GEN_RVP_R_OOL(kslraw);
++GEN_RVP_R_OOL(kslraw_u);
++GEN_RVP_R_OOL(ksllw);
++GEN_RVP_SHIFTI(kslliw, NULL, gen_helper_ksllw);
++GEN_RVP_R_ACC_OOL(kdmabb);
++GEN_RVP_R_ACC_OOL(kdmabt);
++GEN_RVP_R_ACC_OOL(kdmatt);
++GEN_RVP_R2_OOL(kabsw);
++
++/* 32-bit Computation Instructions */
++GEN_RVP_R_OOL(raddw);
++GEN_RVP_R_OOL(uraddw);
++GEN_RVP_R_OOL(rsubw);
++GEN_RVP_R_OOL(ursubw);
++GEN_RVP_R_OOL(minw);
++GEN_RVP_R_OOL(maxw);
++GEN_RVP_R_D64_OOL(mulr64);
++GEN_RVP_R_D64_OOL(mulsr64);
++
++/* Non-SIMD Miscellaneous Instructions */
++GEN_RVP_R_OOL(ave);
++GEN_RVP_R_OOL(sra_u);
++GEN_RVP_SHIFTI(srai_u, NULL, gen_helper_sra_u);
++GEN_RVP_R_OOL(bitrev);
++GEN_RVP_SHIFTI(bitrevi, NULL, gen_helper_bitrev);
++
++static bool
++r_s64_ool(DisasContext *ctx, arg_r *a,
++          void (* fn)(TCGv, TCGv_ptr, TCGv_i64, TCGv))
++{
++    TCGv_i64 src1;
++    TCGv src2, dst;
++
++    if (!has_edsp(ctx) || !has_psfoperand_p(ctx->cfg_ptr)) {
++        return false;
++    }
++
++    src1 = tcg_temp_new_i64();
++    src2 = tcg_temp_new();
++    dst = tcg_temp_new();
++
++    if (get_xl(ctx) == MXL_RV32) {
++        TCGv t0, t1;
++        t0 = get_gpr(ctx, a->rs1, EXT_NONE);
++        t1 = get_gpr(ctx, a->rs1 + 1, EXT_NONE);
++        tcg_gen_concat_tl_i64(src1, t0, t1);
++    } else {
++        TCGv t0;
++        t0 = get_gpr(ctx, a->rs1, EXT_NONE);
++        tcg_gen_ext_tl_i64(src1, t0);
++    }
++    src2 = get_gpr(ctx, a->rs2, EXT_NONE);
++    dst = dest_gpr(ctx, a->rd);
++    fn(dst, tcg_env, src1, src2);
++    gen_set_gpr(ctx, a->rd, dst);
++
++    return true;
++}
++
++#define GEN_RVP_R_S64_OOL(NAME)                        \
++static bool trans_##NAME(DisasContext *s, arg_r *a)    \
++{                                                      \
++    return r_s64_ool(s, a, gen_helper_##NAME);         \
++}
++
++GEN_RVP_R_S64_OOL(wext);
++
++static bool rvp_shifti_s64_ool(DisasContext *ctx, arg_shift *a,
++                               void (* fn)(TCGv, TCGv_ptr, TCGv_i64, TCGv))
++{
++    TCGv_i64 src1;
++    TCGv shift, dst;
++
++    if (!has_edsp(ctx) || !has_psfoperand_p(ctx->cfg_ptr)) {
++        return false;
++    }
++
++    src1 = tcg_temp_new_i64();
++    dst = tcg_temp_new();
++
++    if (get_xl(ctx) == MXL_RV32) {
++        TCGv t0, t1;
++        t0 = get_gpr(ctx, a->rs1, EXT_NONE);
++        t1 = get_gpr(ctx, a->rs1 + 1, EXT_NONE);
++        tcg_gen_concat_tl_i64(src1, t0, t1);
++    } else {
++        TCGv t0;
++        t0 = get_gpr(ctx, a->rs1, EXT_NONE);
++        tcg_gen_ext_tl_i64(src1, t0);
++    }
++    shift = tcg_constant_tl(a->shamt);
++    dst = dest_gpr(ctx, a->rd);
++    fn(dst, tcg_env, src1, shift);
++    gen_set_gpr(ctx, a->rd, dst);
++
++    return true;
++}
++
++#define GEN_RVP_SHIFTI_S64_OOL(NAME, OP)                    \
++static bool trans_##NAME(DisasContext *s, arg_shift *a)     \
++{                                                           \
++    return rvp_shifti_s64_ool(s, a, gen_helper_##OP);       \
++}
++
++GEN_RVP_SHIFTI_S64_OOL(wexti, wext);
++
++typedef void gen_helper_rvp_r4(TCGv, TCGv_ptr, TCGv, TCGv, TCGv);
++
++static bool r4_ool(DisasContext *ctx, arg_r4 *a, gen_helper_rvp_r4 *fn)
++{
++    TCGv src1, src2, rc, dst;
++    if (!has_edsp(ctx)) {
++        return false;
++    }
++
++    src1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    src2 = get_gpr(ctx, a->rs2, EXT_NONE);
++    rc = get_gpr(ctx, a->rc, EXT_NONE);
++    dst = dest_gpr(ctx, a->rd);
++    fn(dst, tcg_env, src1, src2, rc);
++    gen_set_gpr(ctx, a->rd, dst);
++
++    return true;
++}
++
++#define GEN_RVP_R4_OOL(NAME)                           \
++static bool trans_##NAME(DisasContext *s, arg_r4 *a)   \
++{                                                      \
++    return r4_ool(s, a, gen_helper_##NAME);            \
++}
++
++GEN_RVP_R4_OOL(bpick);
++
++static bool trans_insb(DisasContext *ctx, arg_shift *a)
++{
++    TCGv src1, dst, b0;
++    uint8_t shift;
++    if (!has_edsp(ctx)) {
++        return false;
++    }
++    if (get_xl(ctx) == MXL_RV32) {
++        shift = a->shamt & 0x3;
++    } else {
++        shift = a->shamt;
++    }
++
++    b0 = tcg_temp_new();
++    src1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    dst = dest_gpr(ctx, a->rd);
++
++    tcg_gen_andi_tl(b0, src1, 0xff);
++    tcg_gen_deposit_tl(dst, dst, b0, shift * 8, 8);
++    gen_set_gpr(ctx, a->rd, dst);
++
++    return true;
++}
++
++static bool trans_maddr32(DisasContext *ctx, arg_r *a)
++{
++    TCGv src1, src2, dst;
++    TCGv_i32 w1, w2, w3;
++    if (!has_edsp(ctx)) {
++        return false;
++    }
++
++    w1 = tcg_temp_new_i32();
++    w2 = tcg_temp_new_i32();
++    w3 = tcg_temp_new_i32();
++
++    src1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    src2 = get_gpr(ctx, a->rs2, EXT_NONE);
++    dst = get_gpr(ctx, a->rd, EXT_NONE);
++
++    tcg_gen_trunc_tl_i32(w1, src1);
++    tcg_gen_trunc_tl_i32(w2, src2);
++    tcg_gen_trunc_tl_i32(w3, dst);
++
++    tcg_gen_mul_i32(w1, w1, w2);
++    tcg_gen_add_i32(w3, w3, w1);
++    tcg_gen_ext_i32_tl(dst, w3);
++    gen_set_gpr(ctx, a->rd, dst);
++
++    return true;
++}
++
++static bool trans_msubr32(DisasContext *ctx, arg_r *a)
++{
++    TCGv src1, src2, dst;
++    TCGv_i32 w1, w2, w3;
++    if (!has_edsp(ctx)) {
++        return false;
++    }
++
++    w1 = tcg_temp_new_i32();
++    w2 = tcg_temp_new_i32();
++    w3 = tcg_temp_new_i32();
++
++    src1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    src2 = get_gpr(ctx, a->rs2, EXT_NONE);
++    dst = get_gpr(ctx, a->rd, EXT_NONE);
++
++    tcg_gen_trunc_tl_i32(w1, src1);
++    tcg_gen_trunc_tl_i32(w2, src2);
++    tcg_gen_trunc_tl_i32(w3, dst);
++
++    tcg_gen_mul_i32(w1, w1, w2);
++    tcg_gen_sub_i32(w3, w3, w1);
++    tcg_gen_ext_i32_tl(dst, w3);
++    gen_set_gpr(ctx, a->rd, dst);
++
++    return true;
++}
++
++/*
++ *** RV64 Only Instructions
++ */
++/* (RV64 Only) SIMD 32-bit Add/Subtract Instructions */
++#define GEN_RVP64_R_INLINE(NAME, VECOP, OP, OP_TYPE)     \
++static bool trans_##NAME(DisasContext *s, arg_r *a)      \
++{                                                        \
++    REQUIRE_64BIT(s);                                    \
++    return r_inline(s, a, VECOP, OP, OP_TYPE);           \
++}
++
++GEN_RVP64_R_INLINE(add32, tcg_gen_vec_add32_tl, tcg_gen_add_tl, OP_ADD);
++GEN_RVP64_R_INLINE(sub32, tcg_gen_vec_sub32_tl, tcg_gen_sub_tl, OP_SUB);
++
++static bool
++r_64_ool(DisasContext *ctx, arg_r *a,
++         void (* fn)(TCGv_i64, TCGv_ptr, TCGv_i64, TCGv_i64))
++{
++    TCGv t1, t2, td;
++    TCGv_i64 src1, src2, dst;
++
++    if (!has_edsp(ctx)) {
++        return false;
++    }
++
++    src1 = tcg_temp_new_i64();
++    src2 = tcg_temp_new_i64();
++    dst = tcg_temp_new_i64();
++
++    t1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    tcg_gen_ext_tl_i64(src1, t1);
++    t2 = get_gpr(ctx, a->rs2, EXT_NONE);
++    tcg_gen_ext_tl_i64(src2, t2);
++
++    fn(dst, tcg_env, src1, src2);
++    td = dest_gpr(ctx, a->rd);
++    tcg_gen_trunc_i64_tl(td, dst);
++    gen_set_gpr(ctx, a->rd, td);
++
++    return true;
++}
++
++#define GEN_RVP64_R_OOL(NAME)                          \
++static bool trans_##NAME(DisasContext *s, arg_r *a)    \
++{                                                      \
++    REQUIRE_64BIT(s);                                  \
++    return r_64_ool(s, a, gen_helper_##NAME);          \
++}
++
++GEN_RVP64_R_OOL(radd32);
++GEN_RVP64_R_OOL(uradd32);
++GEN_RVP64_R_OOL(kadd32);
++GEN_RVP64_R_OOL(ukadd32);
++GEN_RVP64_R_OOL(rsub32);
++GEN_RVP64_R_OOL(ursub32);
++GEN_RVP64_R_OOL(ksub32);
++GEN_RVP64_R_OOL(uksub32);
++GEN_RVP64_R_OOL(cras32);
++GEN_RVP64_R_OOL(rcras32);
++GEN_RVP64_R_OOL(urcras32);
++GEN_RVP64_R_OOL(kcras32);
++GEN_RVP64_R_OOL(ukcras32);
++GEN_RVP64_R_OOL(crsa32);
++GEN_RVP64_R_OOL(rcrsa32);
++GEN_RVP64_R_OOL(urcrsa32);
++GEN_RVP64_R_OOL(kcrsa32);
++GEN_RVP64_R_OOL(ukcrsa32);
++GEN_RVP64_R_OOL(stas32);
++GEN_RVP64_R_OOL(rstas32);
++GEN_RVP64_R_OOL(urstas32);
++GEN_RVP64_R_OOL(kstas32);
++GEN_RVP64_R_OOL(ukstas32);
++GEN_RVP64_R_OOL(stsa32);
++GEN_RVP64_R_OOL(rstsa32);
++GEN_RVP64_R_OOL(urstsa32);
++GEN_RVP64_R_OOL(kstsa32);
++GEN_RVP64_R_OOL(ukstsa32);
++
++/* (RV64 Only) SIMD 32-bit Shift Instructions */
++static inline bool
++rvp64_shifti(DisasContext *ctx, arg_shift *a,
++             void (* fn)(TCGv_i64, TCGv_ptr, TCGv_i64, TCGv_i64))
++{
++    TCGv t1, td;
++    TCGv_i64 src1, dst, shift;
++    if (!has_edsp(ctx)) {
++        return false;
++    }
++
++    src1 = tcg_temp_new_i64();
++    dst = tcg_temp_new_i64();
++
++    t1 = get_gpr(ctx, a->rs1, EXT_NONE);
++    tcg_gen_ext_tl_i64(src1, t1);
++    shift = tcg_constant_i64(a->shamt);
++
++    fn(dst, tcg_env, src1, shift);
++    td = dest_gpr(ctx, a->rd);
++    tcg_gen_trunc_i64_tl(td, dst);
++    gen_set_gpr(ctx, a->rd, td);
++
++    return true;
++}
++
++#define GEN_RVP64_SHIFTI(NAME, OP)                       \
++static bool trans_##NAME(DisasContext *s, arg_shift *a)  \
++{                                                        \
++    REQUIRE_64BIT(s);                                    \
++    return rvp64_shifti(s, a, OP);                       \
++}
++
++GEN_RVP64_SHIFTI(srai32, gen_helper_sra32);
++GEN_RVP64_SHIFTI(srli32, gen_helper_srl32);
++GEN_RVP64_SHIFTI(slli32, gen_helper_sll32);
++
++GEN_RVP64_SHIFTI(srai32_u, gen_helper_sra32_u);
++GEN_RVP64_SHIFTI(srli32_u, gen_helper_srl32_u);
++GEN_RVP64_SHIFTI(kslli32, gen_helper_ksll32);
++
++GEN_RVP64_R_OOL(sra32);
++GEN_RVP64_R_OOL(srl32);
++GEN_RVP64_R_OOL(sll32);
++GEN_RVP64_R_OOL(ksll32);
++GEN_RVP64_R_OOL(kslra32);
++
++GEN_RVP64_R_OOL(sra32_u);
++GEN_RVP64_R_OOL(srl32_u);
++GEN_RVP64_R_OOL(kslra32_u);
++
++/* (RV64 Only) SIMD 32-bit Miscellaneous Instructions */
++GEN_RVP64_R_OOL(smin32);
++GEN_RVP64_R_OOL(umin32);
++GEN_RVP64_R_OOL(smax32);
++GEN_RVP64_R_OOL(umax32);
++
++#define GEN_RVP64_R2_OOL(NAME)                         \
++static bool trans_##NAME(DisasContext *s, arg_r2 *a)   \
++{                                                      \
++    REQUIRE_64BIT(s);                                  \
++    return r2_ool(s, a, gen_helper_##NAME);            \
++}
++
++GEN_RVP64_R2_OOL(kabs32);
++
++/* (RV64 Only) SIMD Q15 saturating Multiply Instructions */
++GEN_RVP64_R_OOL(khmbb16);
++GEN_RVP64_R_OOL(khmbt16);
++GEN_RVP64_R_OOL(khmtt16);
++GEN_RVP64_R_OOL(kdmbb16);
++GEN_RVP64_R_OOL(kdmbt16);
++GEN_RVP64_R_OOL(kdmtt16);
++
++#define GEN_RVP64_R_ACC_OOL(NAME)                      \
++static bool trans_##NAME(DisasContext *s, arg_r *a)    \
++{                                                      \
++    REQUIRE_64BIT(s);                                  \
++    return r_acc_ool(s, a, gen_helper_##NAME);         \
++}
++
++GEN_RVP64_R_ACC_OOL(kdmabb16);
++GEN_RVP64_R_ACC_OOL(kdmabt16);
++GEN_RVP64_R_ACC_OOL(kdmatt16);
++
++/* (RV64 Only) 32-bit Multiply Instructions */
++GEN_RVP64_R_OOL(smbb32);
++GEN_RVP64_R_OOL(smbt32);
++GEN_RVP64_R_OOL(smtt32);
++
++/* (RV64 Only) 32-bit Multiply & Add Instructions */
++GEN_RVP64_R_ACC_OOL(kmabb32);
++GEN_RVP64_R_ACC_OOL(kmabt32);
++GEN_RVP64_R_ACC_OOL(kmatt32);
++
++/* (RV64 Only) 32-bit Parallel Multiply & Add Instructions */
++GEN_RVP64_R_OOL(kmda32);
++GEN_RVP64_R_OOL(kmxda32);
++GEN_RVP64_R_ACC_OOL(kmaxda32);
++GEN_RVP64_R_ACC_OOL(kmads32);
++GEN_RVP64_R_ACC_OOL(kmadrs32);
++GEN_RVP64_R_ACC_OOL(kmaxds32);
++GEN_RVP64_R_ACC_OOL(kmsda32);
++GEN_RVP64_R_ACC_OOL(kmsxda32);
++GEN_RVP64_R_OOL(smds32);
++GEN_RVP64_R_OOL(smdrs32);
++GEN_RVP64_R_OOL(smxds32);
++
++/* (RV64 Only) Non-SIMD 32-bit Shift Instructions */
++GEN_RVP64_SHIFTI(sraiw_u, gen_helper_sraiw_u);
++
++/* (RV64 Only) 32-bit Packing Instructions */
++GEN_RVP64_R_OOL(pkbb32);
++GEN_RVP64_R_OOL(pkbt32);
++GEN_RVP64_R_OOL(pktt32);
++GEN_RVP64_R_OOL(pktb32);
+diff --git a/target/riscv/insn_trans/trans_xandesv5ops.c.inc b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+index 6224449914..7a9693fe79 100644
+--- a/target/riscv/insn_trans/trans_xandesv5ops.c.inc
++++ b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+@@ -293,7 +293,7 @@ static bool trans_find_first_x(DisasContext *ctx, int rd,
+     TCGv src1, src2, dest, tmp;
+     src1 = get_gpr(ctx, rs1, EXT_NONE);
+     src2 = get_gpr(ctx, rs2, EXT_NONE);
+-    dest = get_gpr(ctx, rd,  EXT_NONE);
++    dest = dest_gpr(ctx, rd);
+     tmp = tcg_constant_tl(func);
+     gen_helper_andes_v5_fb_x(dest, src1, src2, tmp);
+     return true;
+@@ -326,11 +326,8 @@ static void gen_store_legacy(DisasContext *ctx, uint32_t opc, int rs1,
+         [0] = MO_SB,
+         [1] = MO_TESW,
+         [2] = MO_TESL,
+-        [4] = MO_UB,
+-        [5] = MO_TEUW,
+     #ifdef TARGET_RISCV64
+         [3] = MO_TESQ,
+-        [6] = MO_TEUL,
+     #endif
+     };
+ 
+@@ -382,11 +379,11 @@ static void gen_load_legacy(DisasContext *ctx, uint32_t opc, int rd,
+ 
+ static bool trans_addigp(DisasContext *ctx, arg_addigp *a)
+ {
+-    TCGv gp, v0;
++    TCGv gp, dst;
+     gp = get_gpr(ctx, GP, EXT_NONE);
+-    v0 = tcg_temp_new();
+-    tcg_gen_addi_tl(v0, gp, a->imm);
+-    gen_set_gpr(ctx, a->rd, v0);
++    dst = dest_gpr(ctx, a->rd);
++    tcg_gen_addi_tl(dst, gp, a->imm);
++    gen_set_gpr(ctx, a->rd, dst);
+     return true;
+ }
+ 
+diff --git a/target/riscv/internals.h b/target/riscv/internals.h
+index 1d14abaa41..0f9a5e89b6 100644
+--- a/target/riscv/internals.h
++++ b/target/riscv/internals.h
+@@ -152,4 +152,54 @@ static inline float16 check_nanbox_h_bf16(CPURISCVState *env, uint64_t f)
+     }
+ }
+ 
++/*
++ * Note that vector data is stored in host-endian 64-bit chunks,
++ * so addressing units smaller than that needs a host-endian fixup.
++ */
++#if HOST_BIG_ENDIAN
++#define H1(x)   ((x) ^ 7)
++#define H1_2(x) ((x) ^ 6)
++#define H1_4(x) ((x) ^ 4)
++#define H2(x)   ((x) ^ 3)
++#define H4(x)   ((x) ^ 1)
++#define H8(x)   ((x))
++#else
++#define H1(x)   (x)
++#define H1_2(x) (x)
++#define H1_4(x) (x)
++#define H2(x)   (x)
++#define H4(x)   (x)
++#define H8(x)   (x)
++#endif
++
++/* share functions about saturation */
++int8_t sadd8(CPURISCVState *, int vxrm, int8_t, int8_t);
++int16_t sadd16(CPURISCVState *, int vxrm, int16_t, int16_t);
++int32_t sadd32(CPURISCVState *, int vxrm, int32_t, int32_t);
++int64_t sadd64(CPURISCVState *, int vxrm, int64_t, int64_t);
++
++uint8_t saddu8(CPURISCVState *, int vxrm, uint8_t, uint8_t);
++uint16_t saddu16(CPURISCVState *, int vxrm, uint16_t, uint16_t);
++uint32_t saddu32(CPURISCVState *, int vxrm, uint32_t, uint32_t);
++uint64_t saddu64(CPURISCVState *, int vxrm, uint64_t, uint64_t);
++
++int8_t ssub8(CPURISCVState *, int vxrm, int8_t, int8_t);
++int16_t ssub16(CPURISCVState *, int vxrm, int16_t, int16_t);
++int32_t ssub32(CPURISCVState *, int vxrm, int32_t, int32_t);
++int64_t ssub64(CPURISCVState *, int vxrm, int64_t, int64_t);
++
++uint8_t ssubu8(CPURISCVState *, int vxrm, uint8_t, uint8_t);
++uint16_t ssubu16(CPURISCVState *, int vxrm, uint16_t, uint16_t);
++uint32_t ssubu32(CPURISCVState *, int vxrm, uint32_t, uint32_t);
++uint64_t ssubu64(CPURISCVState *, int vxrm, uint64_t, uint64_t);
++
++/* share shift functions */
++int8_t vssra8(CPURISCVState *env, int vxrm, int8_t a, int8_t b);
++int16_t vssra16(CPURISCVState *env, int vxrm, int16_t a, int16_t b);
++int32_t vssra32(CPURISCVState *env, int vxrm, int32_t a, int32_t b);
++int64_t vssra64(CPURISCVState *env, int vxrm, int64_t a, int64_t b);
++uint8_t vssrl8(CPURISCVState *env, int vxrm, uint8_t a, uint8_t b);
++uint16_t vssrl16(CPURISCVState *env, int vxrm, uint16_t a, uint16_t b);
++uint32_t vssrl32(CPURISCVState *env, int vxrm, uint32_t a, uint32_t b);
++uint64_t vssrl64(CPURISCVState *env, int vxrm, uint64_t a, uint64_t b);
+ #endif
+diff --git a/target/riscv/machine.c b/target/riscv/machine.c
+index fdde243e04..7e5b4b9a2e 100644
+--- a/target/riscv/machine.c
++++ b/target/riscv/machine.c
+@@ -370,6 +370,7 @@ const VMStateDescription vmstate_riscv_cpu = {
+         VMSTATE_UINTTL(env.guest_phys_fault_addr, RISCVCPU),
+         VMSTATE_UINTTL(env.priv_ver, RISCVCPU),
+         VMSTATE_UINTTL(env.vext_ver, RISCVCPU),
++        VMSTATE_UINTTL(env.pext_ver, RISCVCPU),
+         VMSTATE_UINT32(env.misa_mxl, RISCVCPU),
+         VMSTATE_UINT32(env.misa_ext, RISCVCPU),
+         VMSTATE_UINT32(env.misa_mxl_max, RISCVCPU),
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index a2a2eba4a0..9f01c9d029 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -2,6 +2,7 @@
+ gen = [
+   decodetree.process('insn16.decode', extra_args: ['--static-decode=decode_insn16', '--insnwidth=16']),
+   decodetree.process('insn32.decode', extra_args: '--static-decode=decode_insn32'),
++  decodetree.process('insn32_rvp.decode', extra_args: '--static-decode=decode_insn32_rvp'),
+   decodetree.process('xthead.decode', extra_args: '--static-decode=decode_xthead'),
+   decodetree.process('XVentanaCondOps.decode', extra_args: '--static-decode=decode_XVentanaCodeOps'),
+   decodetree.process('XAndesV5Ops.decode', extra_args: ['--static-decode=decode_XAndesV5Ops']),
+@@ -22,6 +23,7 @@ riscv_ss.add(files(
+   'vector_helper.c',
+   'vector_internals.c',
+   'bitmanip_helper.c',
++  'packed_helper.c',
+   'translate.c',
+   'm128_helper.c',
+   'crypto_helper.c',
+diff --git a/target/riscv/packed_helper.c b/target/riscv/packed_helper.c
+new file mode 100644
+index 0000000000..edb1ae4d19
+--- /dev/null
++++ b/target/riscv/packed_helper.c
+@@ -0,0 +1,3902 @@
++/*
++ * RISC-V P Extension Helpers for QEMU.
++ *
++ * Copyright (c) 2021 T-Head Semiconductor Co., Ltd. All rights reserved.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms and conditions of the GNU General Public License,
++ * version 2 or later, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along with
++ * this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++#include "qemu/osdep.h"
++#include "cpu.h"
++#include "exec/exec-all.h"
++#include "exec/helper-proto.h"
++#include "exec/cpu_ldst.h"
++#include "fpu/softfloat.h"
++#include <math.h>
++#include "internals.h"
++
++static inline
++void pre_fn(CPURISCVState *env, target_ulong *backup)
++{
++  *backup = env->vxsat;
++  env->vxsat = env->andes_csr.csrno[CSR_UCODE];
++}
++
++static inline
++void post_fn(CPURISCVState *env, target_ulong backup)
++{
++  env->andes_csr.csrno[CSR_UCODE] = env->vxsat;
++  env->vxsat = backup;
++}
++
++/*
++ *** SIMD Data Processing Instructions
++ */
++
++/* 16-bit Addition & Subtraction Instructions */
++typedef void PackedFn3i(CPURISCVState *, void *, void *, void *, uint8_t);
++
++/* Define a common function to loop elements in packed register */
++static inline target_ulong
++rvpr(CPURISCVState *env, target_ulong a, target_ulong b,
++     uint8_t step, uint8_t size, PackedFn3i *fn)
++{
++    int i, passes = sizeof(target_ulong) / size;
++    target_ulong result = 0;
++    target_ulong vxsat_bak = 0;
++
++    pre_fn(env, &vxsat_bak);
++    for (i = 0; i < passes; i += step) {
++        fn(env, &result, &a, &b, i);
++    }
++    post_fn(env, vxsat_bak);
++    return result;
++}
++
++#define RVPR(NAME, STEP, SIZE)                                  \
++target_ulong HELPER(NAME)(CPURISCVState *env, target_ulong a,   \
++                          target_ulong b)                       \
++{                                                               \
++    return rvpr(env, a, b, STEP, SIZE, (PackedFn3i *)do_##NAME);\
++}
++
++static inline int32_t hadd32(int32_t a, int32_t b)
++{
++    return ((int64_t)a + b) >> 1;
++}
++
++static inline void do_radd16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[i] = hadd32(a[i], b[i]);
++}
++
++RVPR(radd16, 1, 2);
++
++static inline uint32_t haddu32(uint32_t a, uint32_t b)
++{
++    return ((uint64_t)a + b) >> 1;
++}
++
++static inline void do_uradd16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[i] = haddu32(a[i], b[i]);
++}
++
++RVPR(uradd16, 1, 2);
++
++static inline void do_kadd16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[i] = sadd16(env, 0, a[i], b[i]);
++}
++
++RVPR(kadd16, 1, 2);
++
++static inline void do_ukadd16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[i] = saddu16(env, 0, a[i], b[i]);
++}
++
++RVPR(ukadd16, 1, 2);
++
++static inline int32_t hsub32(int32_t a, int32_t b)
++{
++    return ((int64_t)a - b) >> 1;
++}
++
++static inline int64_t hsub64(int64_t a, int64_t b)
++{
++    int64_t res = a - b;
++    int64_t over = (res ^ a) & (a ^ b) & INT64_MIN;
++
++    /* With signed overflow, bit 64 is inverse of bit 63. */
++    return (res >> 1) ^ over;
++}
++
++static inline void do_rsub16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[i] = hsub32(a[i], b[i]);
++}
++
++RVPR(rsub16, 1, 2);
++
++static inline uint64_t hsubu64(uint64_t a, uint64_t b)
++{
++    uint64_t res = a - b;
++    uint64_t over = (a < b) ? INT64_MIN : 0;
++
++    return (res >> 1) | over;
++}
++
++static inline void do_ursub16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[i] = hsubu64(a[i], b[i]);
++}
++
++RVPR(ursub16, 1, 2);
++
++static inline void do_ksub16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[i] = ssub16(env, 0, a[i], b[i]);
++}
++
++RVPR(ksub16, 1, 2);
++
++static inline void do_uksub16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[i] = ssubu16(env, 0, a[i], b[i]);
++}
++
++RVPR(uksub16, 1, 2);
++
++static inline void do_cras16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = a[H2(i)] - b[H2(i + 1)];
++    d[H2(i + 1)] = a[H2(i + 1)] + b[H2(i)];
++}
++
++RVPR(cras16, 2, 2);
++
++static inline void do_rcras16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = hsub32(a[H2(i)], b[H2(i + 1)]);
++    d[H2(i + 1)] = hadd32(a[H2(i + 1)], b[H2(i)]);
++}
++
++RVPR(rcras16, 2, 2);
++
++static inline void do_urcras16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = hsubu64(a[H2(i)], b[H2(i + 1)]);
++    d[H2(i + 1)] = haddu32(a[H2(i + 1)], b[H2(i)]);
++}
++
++RVPR(urcras16, 2, 2);
++
++static inline void do_kcras16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = ssub16(env, 0, a[H2(i)], b[H2(i + 1)]);
++    d[H2(i + 1)] = sadd16(env, 0, a[H2(i + 1)], b[H2(i)]);
++}
++
++RVPR(kcras16, 2, 2);
++
++static inline void do_ukcras16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = ssubu16(env, 0, a[H2(i)], b[H2(i + 1)]);
++    d[H2(i + 1)] = saddu16(env, 0, a[H2(i + 1)], b[H2(i)]);
++}
++
++RVPR(ukcras16, 2, 2);
++
++static inline void do_crsa16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = a[H2(i)] + b[H2(i + 1)];
++    d[H2(i + 1)] = a[H2(i + 1)] - b[H2(i)];
++}
++
++RVPR(crsa16, 2, 2);
++
++static inline void do_rcrsa16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = hadd32(a[H2(i)], b[H2(i + 1)]);
++    d[H2(i + 1)] = hsub32(a[H2(i + 1)], b[H2(i)]);
++}
++
++RVPR(rcrsa16, 2, 2);
++
++static inline void do_urcrsa16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = haddu32(a[H2(i)], b[H2(i + 1)]);
++    d[H2(i + 1)] = hsubu64(a[H2(i + 1)], b[H2(i)]);
++}
++
++RVPR(urcrsa16, 2, 2);
++
++static inline void do_kcrsa16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = sadd16(env, 0, a[H2(i)], b[H2(i + 1)]);
++    d[H2(i + 1)] = ssub16(env, 0, a[H2(i + 1)], b[H2(i)]);
++}
++
++RVPR(kcrsa16, 2, 2);
++
++static inline void do_ukcrsa16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = saddu16(env, 0, a[H2(i)], b[H2(i + 1)]);
++    d[H2(i + 1)] = ssubu16(env, 0, a[H2(i + 1)], b[H2(i)]);
++}
++
++RVPR(ukcrsa16, 2, 2);
++
++static inline void do_stas16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = a[H2(i)] - b[H2(i)];
++    d[H2(i + 1)] = a[H2(i + 1)] + b[H2(i + 1)];
++}
++
++RVPR(stas16, 2, 2);
++
++static inline void do_rstas16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = hsub32(a[H2(i)], b[H2(i)]);
++    d[H2(i + 1)] = hadd32(a[H2(i + 1)], b[H2(i + 1)]);
++}
++
++RVPR(rstas16, 2, 2);
++
++static inline void do_urstas16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = hsubu64(a[H2(i)], b[H2(i)]);
++    d[H2(i + 1)] = haddu32(a[H2(i + 1)], b[H2(i + 1)]);
++}
++
++RVPR(urstas16, 2, 2);
++
++static inline void do_kstas16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = ssub16(env, 0, a[H2(i)], b[H2(i)]);
++    d[H2(i + 1)] = sadd16(env, 0, a[H2(i + 1)], b[H2(i + 1)]);
++}
++
++RVPR(kstas16, 2, 2);
++
++static inline void do_ukstas16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = ssubu16(env, 0, a[H2(i)], b[H2(i)]);
++    d[H2(i + 1)] = saddu16(env, 0, a[H2(i + 1)], b[H2(i + 1)]);
++}
++
++RVPR(ukstas16, 2, 2);
++
++static inline void do_stsa16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = a[H2(i)] + b[H2(i)];
++    d[H2(i + 1)] = a[H2(i + 1)] - b[H2(i + 1)];
++}
++
++RVPR(stsa16, 2, 2);
++
++static inline void do_rstsa16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = hadd32(a[H2(i)], b[H2(i)]);
++    d[H2(i + 1)] = hsub32(a[H2(i + 1)], b[H2(i + 1)]);
++}
++
++RVPR(rstsa16, 2, 2);
++
++static inline void do_urstsa16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = haddu32(a[H2(i)], b[H2(i)]);
++    d[H2(i + 1)] = hsubu64(a[H2(i + 1)], b[H2(i + 1)]);
++}
++
++RVPR(urstsa16, 2, 2);
++
++static inline void do_kstsa16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = sadd16(env, 0, a[H2(i)], b[H2(i)]);
++    d[H2(i + 1)] = ssub16(env, 0, a[H2(i + 1)], b[H2(i + 1)]);
++}
++
++RVPR(kstsa16, 2, 2);
++
++static inline void do_ukstsa16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i)] = saddu16(env, 0, a[H2(i)], b[H2(i)]);
++    d[H2(i + 1)] = ssubu16(env, 0, a[H2(i + 1)], b[H2(i + 1)]);
++}
++
++RVPR(ukstsa16, 2, 2);
++
++/* 8-bit Addition & Subtraction Instructions */
++static inline void do_radd8(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va, *b = vb;
++    d[i] = hadd32(a[i], b[i]);
++}
++
++RVPR(radd8, 1, 1);
++
++static inline void do_uradd8(CPURISCVState *env, void *vd, void *va,
++                                  void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va, *b = vb;
++    d[i] = haddu32(a[i], b[i]);
++}
++
++RVPR(uradd8, 1, 1);
++
++static inline void do_kadd8(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va, *b = vb;
++    d[i] = sadd8(env, 0, a[i], b[i]);
++}
++
++RVPR(kadd8, 1, 1);
++
++static inline void do_ukadd8(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va, *b = vb;
++    d[i] = saddu8(env, 0, a[i], b[i]);
++}
++
++RVPR(ukadd8, 1, 1);
++
++static inline void do_rsub8(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va, *b = vb;
++    d[i] = hsub32(a[i], b[i]);
++}
++
++RVPR(rsub8, 1, 1);
++
++static inline void do_ursub8(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va, *b = vb;
++    d[i] = hsubu64(a[i], b[i]);
++}
++
++RVPR(ursub8, 1, 1);
++
++static inline void do_ksub8(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va, *b = vb;
++    d[i] = ssub8(env, 0, a[i], b[i]);
++}
++
++RVPR(ksub8, 1, 1);
++
++static inline void do_uksub8(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va, *b = vb;
++    d[i] = ssubu8(env, 0, a[i], b[i]);
++}
++
++RVPR(uksub8, 1, 1);
++
++/* 16-bit Shift Instructions */
++static inline void do_sra16(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0xf;
++    d[i] = a[i] >> shift;
++}
++
++RVPR(sra16, 1, 2);
++
++static inline void do_srl16(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0xf;
++    d[i] = a[i] >> shift;
++}
++
++RVPR(srl16, 1, 2);
++
++static inline void do_sll16(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0xf;
++    d[i] = a[i] << shift;
++}
++
++RVPR(sll16, 1, 2);
++
++static inline void do_sra16_u(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0xf;
++
++    d[i] = vssra16(env, 0, a[i], shift);
++}
++
++RVPR(sra16_u, 1, 2);
++
++static inline void do_srl16_u(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0xf;
++
++    d[i] = vssrl16(env, 0, a[i], shift);
++}
++
++RVPR(srl16_u, 1, 2);
++
++static inline void do_ksll16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, result;
++    uint8_t shift = *(uint8_t *)vb & 0xf;
++
++    result = a[i] << shift;
++    if (shift > (clrsb32(a[i]) - 16)) {
++        env->vxsat = 0x1;
++        d[i] = (a[i] & INT16_MIN) ? INT16_MIN : INT16_MAX;
++    } else {
++        d[i] = result;
++    }
++}
++
++RVPR(ksll16, 1, 2);
++
++static inline void do_kslra16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va;
++    int32_t shift = sextract32((*(target_ulong *)vb), 0, 5);
++
++    if (shift >= 0) {
++        do_ksll16(env, vd, va, vb, i);
++    } else {
++        shift = -shift;
++        shift = (shift == 16) ? 15 : shift;
++        d[i] = a[i] >> shift;
++    }
++}
++
++RVPR(kslra16, 1, 2);
++
++static inline void do_kslra16_u(CPURISCVState *env, void *vd, void *va,
++                                void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va;
++    int32_t shift = sextract32((*(uint32_t *)vb), 0, 5);
++
++    if (shift >= 0) {
++        do_ksll16(env, vd, va, vb, i);
++    } else {
++        shift = -shift;
++        shift = (shift == 16) ? 15 : shift;
++        d[i] = vssra16(env, 0, a[i], shift);
++    }
++}
++
++RVPR(kslra16_u, 1, 2);
++
++/* SIMD 8-bit Shift Instructions */
++static inline void do_sra8(CPURISCVState *env, void *vd, void *va,
++                           void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x7;
++    d[i] = a[i] >> shift;
++}
++
++RVPR(sra8, 1, 1);
++
++static inline void do_srl8(CPURISCVState *env, void *vd, void *va,
++                           void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x7;
++    d[i] = a[i] >> shift;
++}
++
++RVPR(srl8, 1, 1);
++
++static inline void do_sll8(CPURISCVState *env, void *vd, void *va,
++                           void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x7;
++    d[i] = a[i] << shift;
++}
++
++RVPR(sll8, 1, 1);
++
++static inline void do_sra8_u(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x7;
++    d[i] =  vssra8(env, 0, a[i], shift);
++}
++
++RVPR(sra8_u, 1, 1);
++
++static inline void do_srl8_u(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x7;
++    d[i] =  vssrl8(env, 0, a[i], shift);
++}
++
++RVPR(srl8_u, 1, 1);
++
++static inline void do_ksll8(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va, result;
++    uint8_t shift = *(uint8_t *)vb & 0x7;
++
++    result = a[i] << shift;
++    if (shift > (clrsb32(a[i]) - 24)) {
++        env->vxsat = 0x1;
++        d[i] = (a[i] & INT8_MIN) ? INT8_MIN : INT8_MAX;
++    } else {
++        d[i] = result;
++    }
++}
++
++RVPR(ksll8, 1, 1);
++
++static inline void do_kslra8(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va;
++    int32_t shift = sextract32((*(uint32_t *)vb), 0, 4);
++
++    if (shift >= 0) {
++        do_ksll8(env, vd, va, vb, i);
++    } else {
++        shift = -shift;
++        shift = (shift == 8) ? 7 : shift;
++        d[i] = a[i] >> shift;
++    }
++}
++
++RVPR(kslra8, 1, 1);
++
++static inline void do_kslra8_u(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va;
++    int32_t shift = sextract32((*(uint32_t *)vb), 0, 4);
++
++    if (shift >= 0) {
++        do_ksll8(env, vd, va, vb, i);
++    } else {
++        shift = -shift;
++        shift = (shift == 8) ? 7 : shift;
++        d[i] =  vssra8(env, 0, a[i], shift);
++    }
++}
++
++RVPR(kslra8_u, 1, 1);
++
++/* SIMD 16-bit Compare Instructions */
++static inline void do_cmpeq16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[i] = (a[i] == b[i]) ? 0xffff : 0x0;
++}
++
++RVPR(cmpeq16, 1, 2);
++
++static inline void do_scmplt16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[i] = (a[i] < b[i]) ? 0xffff : 0x0;
++}
++
++RVPR(scmplt16, 1, 2);
++
++static inline void do_scmple16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++    d[i] = (a[i] <= b[i]) ? 0xffff : 0x0;
++}
++
++RVPR(scmple16, 1, 2);
++
++static inline void do_ucmplt16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[i] = (a[i] < b[i]) ? 0xffff : 0x0;
++}
++
++RVPR(ucmplt16, 1, 2);
++
++static inline void do_ucmple16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[i] = (a[i] <= b[i]) ? 0xffff : 0x0;
++}
++
++RVPR(ucmple16, 1, 2);
++
++/* SIMD 8-bit Compare Instructions */
++static inline void do_cmpeq8(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va, *b = vb;
++    d[i] = (a[i] == b[i]) ? 0xff : 0x0;
++}
++
++RVPR(cmpeq8, 1, 1);
++
++static inline void do_scmplt8(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va, *b = vb;
++    d[i] = (a[i] < b[i]) ? 0xff : 0x0;
++}
++
++RVPR(scmplt8, 1, 1);
++
++static inline void do_scmple8(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va, *b = vb;
++    d[i] = (a[i] <= b[i]) ? 0xff : 0x0;
++}
++
++RVPR(scmple8, 1, 1);
++
++static inline void do_ucmplt8(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va, *b = vb;
++    d[i] = (a[i] < b[i]) ? 0xff : 0x0;
++}
++
++RVPR(ucmplt8, 1, 1);
++
++static inline void do_ucmple8(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va, *b = vb;
++    d[i] = (a[i] <= b[i]) ? 0xff : 0x0;
++}
++
++RVPR(ucmple8, 1, 1);
++
++/* SIMD 16-bit Multiply Instructions */
++typedef void PackedFn3(CPURISCVState *, void *, void *, void *);
++static inline uint64_t rvpr64(CPURISCVState *env, target_ulong a,
++                              target_ulong b, PackedFn3 *fn)
++{
++    uint64_t result;
++
++    fn(env, &result, &a, &b);
++    return result;
++}
++
++#define RVPR64(NAME)                                            \
++uint64_t HELPER(NAME)(CPURISCVState *env, target_ulong a,       \
++                      target_ulong b)                           \
++{                                                               \
++    return rvpr64(env, a, b, (PackedFn3 *)do_##NAME);           \
++}
++
++static inline void do_smul16(CPURISCVState *env, void *vd, void *va, void *vb)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    d[H4(0)] = (int32_t)a[H2(0)] * b[H2(0)];
++    d[H4(1)] = (int32_t)a[H2(1)] * b[H2(1)];
++}
++
++RVPR64(smul16);
++
++static inline void do_smulx16(CPURISCVState *env, void *vd, void *va, void *vb)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    d[H4(0)] = (int32_t)a[H2(0)] * b[H2(1)];
++    d[H4(1)] = (int32_t)a[H2(1)] * b[H2(0)];
++}
++
++RVPR64(smulx16);
++
++static inline void do_umul16(CPURISCVState *env, void *vd, void *va, void *vb,
++                             uint8_t i)
++{
++    uint32_t *d = vd;
++    uint16_t *a = va, *b = vb;
++    d[H4(0)] = (uint32_t)a[H2(0)] * b[H2(0)];
++    d[H4(1)] = (uint32_t)a[H2(1)] * b[H2(1)];
++}
++
++RVPR64(umul16);
++
++static inline void do_umulx16(CPURISCVState *env, void *vd, void *va, void *vb,
++                              uint8_t i)
++{
++    uint32_t *d = vd;
++    uint16_t *a = va, *b = vb;
++    d[H4(0)] = (uint32_t)a[H2(0)] * b[H2(1)];
++    d[H4(1)] = (uint32_t)a[H2(1)] * b[H2(0)];
++}
++
++RVPR64(umulx16);
++
++static inline void do_khm16(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++
++    if (a[i] == INT16_MIN && b[i] == INT16_MIN) {
++        env->vxsat = 0x1;
++        d[i] = INT16_MAX;
++    } else {
++        d[i] = (int32_t)a[i] * b[i] >> 15;
++    }
++}
++
++RVPR(khm16, 1, 2);
++
++static inline void do_khmx16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++
++    /*
++     * t[x] = ra.H[x] s* rb.H[y];
++     * rt.H[x] = SAT.Q15(t[x] s>> 15);
++     *
++     * (RV32: (x,y)=(1,0),(0,1),
++     *  RV64: (x,y)=(3,2),(2,3),
++     *              (1,0),(0,1)
++     */
++    if (a[H2(i)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        env->vxsat = 0x1;
++        d[H2(i)] = INT16_MAX;
++    } else {
++        d[H2(i)] = (int32_t)a[H2(i)] * b[H2(i + 1)] >> 15;
++    }
++    if (a[H2(i + 1)] == INT16_MIN && b[H2(i)] == INT16_MIN) {
++        env->vxsat = 0x1;
++        d[H2(i + 1)] = INT16_MAX;
++    } else {
++        d[H2(i + 1)] = (int32_t)a[H2(i + 1)] * b[H2(i)] >> 15;
++    }
++}
++
++RVPR(khmx16, 2, 2);
++
++/* SIMD 8-bit Multiply Instructions */
++static inline void do_smul8(CPURISCVState *env, void *vd, void *va, void *vb)
++{
++    int16_t *d = vd;
++    int8_t *a = va, *b = vb;
++    d[H2(0)] = (int16_t)a[H1(0)] * b[H1(0)];
++    d[H2(1)] = (int16_t)a[H1(1)] * b[H1(1)];
++    d[H2(2)] = (int16_t)a[H1(2)] * b[H1(2)];
++    d[H2(3)] = (int16_t)a[H1(3)] * b[H1(3)];
++}
++
++RVPR64(smul8);
++
++static inline void do_smulx8(CPURISCVState *env, void *vd, void *va, void *vb)
++{
++    int16_t *d = vd;
++    int8_t *a = va, *b = vb;
++    d[H2(0)] = (int16_t)a[H1(0)] * b[H1(1)];
++    d[H2(1)] = (int16_t)a[H1(1)] * b[H1(0)];
++    d[H2(2)] = (int16_t)a[H1(2)] * b[H1(3)];
++    d[H2(3)] = (int16_t)a[H1(3)] * b[H1(2)];
++}
++
++RVPR64(smulx8);
++
++static inline void do_umul8(CPURISCVState *env, void *vd, void *va, void *vb)
++{
++    uint16_t *d = vd;
++    uint8_t *a = va, *b = vb;
++    d[H2(0)] = (uint16_t)a[H1(0)] * b[H1(0)];
++    d[H2(1)] = (uint16_t)a[H1(1)] * b[H1(1)];
++    d[H2(2)] = (uint16_t)a[H1(2)] * b[H1(2)];
++    d[H2(3)] = (uint16_t)a[H1(3)] * b[H1(3)];
++}
++
++RVPR64(umul8);
++
++static inline void do_umulx8(CPURISCVState *env, void *vd, void *va, void *vb)
++{
++    uint16_t *d = vd;
++    uint8_t *a = va, *b = vb;
++    d[H2(0)] = (uint16_t)a[H1(0)] * b[H1(1)];
++    d[H2(1)] = (uint16_t)a[H1(1)] * b[H1(0)];
++    d[H2(2)] = (uint16_t)a[H1(2)] * b[H1(3)];
++    d[H2(3)] = (uint16_t)a[H1(3)] * b[H1(2)];
++}
++
++RVPR64(umulx8);
++
++static inline void do_khm8(CPURISCVState *env, void *vd, void *va,
++                           void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va, *b = vb;
++
++    if (a[i] == INT8_MIN && b[i] == INT8_MIN) {
++        env->vxsat = 0x1;
++        d[i] = INT8_MAX;
++    } else {
++        d[i] = (int16_t)a[i] * b[i] >> 7;
++    }
++}
++
++RVPR(khm8, 1, 1);
++
++static inline void do_khmx8(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va, *b = vb;
++    /*
++     * t[x] = ra.B[x] s* rb.B[y];
++     * rt.B[x] = SAT.Q7(t[x] s>> 7);
++     *
++     * (RV32: (x,y)=(3,2),(2,3),
++     *              (1,0),(0,1),
++     * (RV64: (x,y)=(7,6),(6,7),(5,4),(4,5),
++     *              (3,2),(2,3),(1,0),(0,1))
++     */
++    if (a[H1(i)] == INT8_MIN && b[H1(i + 1)] == INT8_MIN) {
++        env->vxsat = 0x1;
++        d[H1(i)] = INT8_MAX;
++    } else {
++        d[H1(i)] = (int16_t)a[H1(i)] * b[H1(i + 1)] >> 7;
++    }
++    if (a[H1(i + 1)] == INT8_MIN && b[H1(i)] == INT8_MIN) {
++        env->vxsat = 0x1;
++        d[H1(i + 1)] = INT8_MAX;
++    } else {
++        d[H1(i + 1)] = (int16_t)a[H1(i + 1)] * b[H1(i)] >> 7;
++    }
++}
++
++RVPR(khmx8, 2, 1);
++
++/* SIMD 16-bit Miscellaneous Instructions */
++static inline void do_smin16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] < b[i]) ? a[i] : b[i];
++}
++
++RVPR(smin16, 1, 2);
++
++static inline void do_umin16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] < b[i]) ? a[i] : b[i];
++}
++
++RVPR(umin16, 1, 2);
++
++static inline void do_smax16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] > b[i]) ? a[i] : b[i];
++}
++
++RVPR(smax16, 1, 2);
++
++static inline void do_umax16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] > b[i]) ? a[i] : b[i];
++}
++
++RVPR(umax16, 1, 2);
++
++static int64_t sat64(CPURISCVState *env, int64_t a, uint8_t shift)
++{
++    int64_t max = shift >= 64 ? INT64_MAX : (1ull << shift) - 1;
++    int64_t min = shift >= 64 ? INT64_MIN : -(1ull << shift);
++    int64_t result;
++
++    if (a > max) {
++        result = max;
++        env->vxsat = 0x1;
++    } else if (a < min) {
++        result = min;
++        env->vxsat = 0x1;
++    } else {
++        result = a;
++    }
++    return result;
++}
++
++static inline void do_sclip16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0xf;
++
++    d[i] = sat64(env, a[i], shift);
++}
++
++RVPR(sclip16, 1, 2);
++
++static uint64_t satu64(CPURISCVState *env, uint64_t a, uint8_t shift)
++{
++    uint64_t max = shift >= 64 ? UINT64_MAX : (1ull << shift) - 1;
++    uint64_t result;
++
++    if (a > max) {
++        result = max;
++        env->vxsat = 0x1;
++    } else {
++        result = a;
++    }
++    return result;
++}
++
++static inline void do_uclip16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int16_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0xf;
++
++    if (a[i] < 0) {
++        d[i] = 0;
++        env->vxsat = 0x1;
++    } else {
++        d[i] = satu64(env, a[i], shift);
++    }
++}
++
++RVPR(uclip16, 1, 2);
++
++typedef void PackedFn2i(CPURISCVState *, void *, void *, uint8_t);
++
++static inline target_ulong rvpr2(CPURISCVState *env, target_ulong a,
++                                 uint8_t step, uint8_t size, PackedFn2i *fn)
++{
++    int i, passes = sizeof(target_ulong) / size;
++    target_ulong result;
++    target_ulong vxsat_bak;
++
++    pre_fn(env, &vxsat_bak);
++    for (i = 0; i < passes; i += step) {
++        fn(env, &result, &a, i);
++    }
++    post_fn(env, vxsat_bak);
++    return result;
++}
++
++#define RVPR2(NAME, STEP, SIZE)                                  \
++target_ulong HELPER(NAME)(CPURISCVState *env, target_ulong a)    \
++{                                                                \
++    return rvpr2(env, a, STEP, SIZE, (PackedFn2i *)do_##NAME);   \
++}
++
++static inline void do_kabs16(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int16_t *d = vd, *a = va;
++
++    if (a[i] == INT16_MIN) {
++        d[i] = INT16_MAX;
++        env->vxsat = 0x1;
++    } else {
++        d[i] = abs(a[i]);
++    }
++}
++
++RVPR2(kabs16, 1, 2);
++
++static inline void do_clrs16(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int16_t *d = vd, *a = va;
++    d[i] = clrsb32(a[i]) - 16;
++}
++
++RVPR2(clrs16, 1, 2);
++
++static inline void do_clz16(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int16_t *d = vd, *a = va;
++    d[i] = (a[i] < 0) ? 0 : (clz32(a[i]) - 16);
++}
++
++RVPR2(clz16, 1, 2);
++
++static inline void do_clo16(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int16_t *d = vd, *a = va;
++    d[i] = (a[i] >= 0) ? 0 : (clo32(a[i]) - 16);
++}
++
++RVPR2(clo16, 1, 2);
++
++static inline void do_swap16(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int16_t *d = vd, *a = va;
++    d[H2(i)] = a[H2(i + 1)];
++    d[H2(i + 1)] = a[H2(i)];
++}
++
++RVPR2(swap16, 2, 2);
++
++/* SIMD 8-bit Miscellaneous Instructions */
++static inline void do_smin8(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] < b[i]) ? a[i] : b[i];
++}
++
++RVPR(smin8, 1, 1);
++
++static inline void do_umin8(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] < b[i]) ? a[i] : b[i];
++}
++
++RVPR(umin8, 1, 1);
++
++static inline void do_smax8(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] > b[i]) ? a[i] : b[i];
++}
++
++RVPR(smax8, 1, 1);
++
++static inline void do_umax8(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    uint8_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] > b[i]) ? a[i] : b[i];
++}
++
++RVPR(umax8, 1, 1);
++
++static inline void do_sclip8(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x7;
++
++    d[i] = sat64(env, a[i], shift);
++}
++
++RVPR(sclip8, 1, 1);
++
++static inline void do_uclip8(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int8_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x7;
++
++    if (a[i] < 0) {
++        d[i] = 0;
++        env->vxsat = 0x1;
++    } else {
++        d[i] = satu64(env, a[i], shift);
++    }
++}
++
++RVPR(uclip8, 1, 1);
++
++static inline void do_kabs8(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int8_t *d = vd, *a = va;
++
++    if (a[i] == INT8_MIN) {
++        d[i] = INT8_MAX;
++        env->vxsat = 0x1;
++    } else {
++        d[i] = abs(a[i]);
++    }
++}
++
++RVPR2(kabs8, 1, 1);
++
++static inline void do_clrs8(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int8_t *d = vd, *a = va;
++    d[i] = clrsb32(a[i]) - 24;
++}
++
++RVPR2(clrs8, 1, 1);
++
++static inline void do_clz8(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int8_t *d = vd, *a = va;
++    d[i] = (a[i] < 0) ? 0 : (clz32(a[i]) - 24);
++}
++
++RVPR2(clz8, 1, 1);
++
++static inline void do_clo8(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int8_t *d = vd, *a = va;
++    d[i] = (a[i] >= 0) ? 0 : (clo32(a[i]) - 24);
++}
++
++RVPR2(clo8, 1, 1);
++
++static inline void do_swap8(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int8_t *d = vd, *a = va;
++    d[H1(i)] = a[H1(i + 1)];
++    d[H1(i + 1)] = a[H1(i)];
++}
++
++RVPR2(swap8, 2, 1);
++
++/* 8-bit Unpacking Instructions */
++static inline void
++do_sunpkd810(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int8_t *a = va;
++    int16_t *d = vd;
++
++    d[H2(i / 2)] = a[H1(i)];
++    d[H2(i / 2 + 1)] = a[H1(i + 1)];
++}
++
++RVPR2(sunpkd810, 4, 1);
++
++static inline void
++do_sunpkd820(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int8_t *a = va;
++    int16_t *d = vd;
++
++    d[H2(i / 2)] = a[H1(i)];
++    d[H2(i / 2 + 1)] = a[H1(i + 2)];
++}
++
++RVPR2(sunpkd820, 4, 1);
++
++static inline void
++do_sunpkd830(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int8_t *a = va;
++    int16_t *d = vd;
++
++    d[H2(i / 2)] = a[H1(i)];
++    d[H2(i / 2 + 1)] = a[H1(i + 3)];
++}
++
++RVPR2(sunpkd830, 4, 1);
++
++static inline void
++do_sunpkd831(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int8_t *a = va;
++    int16_t *d = vd;
++
++    d[H2(i / 2)] = a[H1(i) + 1];
++    d[H2(i / 2 + 1)] = a[H1(i + 3)];
++}
++
++RVPR2(sunpkd831, 4, 1);
++
++static inline void
++do_sunpkd832(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int8_t *a = va;
++    int16_t *d = vd;
++
++    d[H2(i / 2)] = a[H1(i) + 2];
++    d[H2(i / 2 + 1)] = a[H1(i + 3)];
++}
++
++RVPR2(sunpkd832, 4, 1);
++
++static inline void
++do_zunpkd810(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    uint8_t *a = va;
++    uint16_t *d = vd;
++
++    d[H2(i / 2)] = a[H1(i)];
++    d[H2(i / 2 + 1)] = a[H1(i + 1)];
++}
++
++RVPR2(zunpkd810, 4, 1);
++
++static inline void
++do_zunpkd820(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    uint8_t *a = va;
++    uint16_t *d = vd;
++
++    d[H2(i / 2)] = a[H1(i)];
++    d[H2(i / 2 + 1)] = a[H1(i + 2)];
++}
++
++RVPR2(zunpkd820, 4, 1);
++
++static inline void
++do_zunpkd830(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    uint8_t *a = va;
++    uint16_t *d = vd;
++
++    d[H2(i / 2)] = a[H1(i)];
++    d[H2(i / 2 + 1)] = a[H1(i + 3)];
++}
++
++RVPR2(zunpkd830, 4, 1);
++
++static inline void
++do_zunpkd831(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    uint8_t *a = va;
++    uint16_t *d = vd;
++
++    d[H2(i / 2)] = a[H1(i) + 1];
++    d[H2(i / 2 + 1)] = a[H1(i + 3)];
++}
++
++RVPR2(zunpkd831, 4, 1);
++
++static inline void
++do_zunpkd832(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    uint8_t *a = va;
++    uint16_t *d = vd;
++
++    d[H2(i / 2)] = a[H1(i) + 2];
++    d[H2(i / 2 + 1)] = a[H1(i + 3)];
++}
++
++RVPR2(zunpkd832, 4, 1);
++
++/*
++ *** Partial-SIMD Data Processing Instructions
++ */
++
++/* 16-bit Packing Instructions */
++static inline void do_pkbb16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i + 1)] = a[H2(i)];
++    d[H2(i)] = b[H2(i)];
++}
++
++RVPR(pkbb16, 2, 2);
++
++static inline void do_pkbt16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i + 1)] = a[H2(i)];
++    d[H2(i)] = b[H2(i + 1)];
++}
++
++RVPR(pkbt16, 2, 2);
++
++static inline void do_pktt16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i + 1)] = a[H2(i + 1)];
++    d[H2(i)] = b[H2(i + 1)];
++}
++
++RVPR(pktt16, 2, 2);
++
++static inline void do_pktb16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint16_t *d = vd, *a = va, *b = vb;
++    d[H2(i + 1)] = a[H2(i + 1)];
++    d[H2(i)] = b[H2(i)];
++}
++
++RVPR(pktb16, 2, 2);
++
++/* Most Significant Word “32x32” Multiply & Add Instructions */
++static inline void do_smmul(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[i] = (int64_t)a[i] * b[i] >> 32;
++}
++
++RVPR(smmul, 1, 4);
++
++static inline void do_smmul_u(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[i] = ((int64_t)a[i] * b[i] + (uint32_t)INT32_MIN) >> 32;
++}
++
++RVPR(smmul_u, 1, 4);
++
++typedef void PackedFn4i(CPURISCVState *, void *, void *,
++                        void *, void *, uint8_t);
++
++static inline target_ulong
++rvpr_acc(CPURISCVState *env, target_ulong a,
++         target_ulong b, target_ulong c,
++         uint8_t step, uint8_t size, PackedFn4i *fn)
++{
++    int i, passes = sizeof(target_ulong) / size;
++    target_ulong result = 0;
++
++    for (i = 0; i < passes; i += step) {
++        fn(env, &result, &a, &b, &c, i);
++    }
++    return result;
++}
++
++#define RVPR_ACC(NAME, STEP, SIZE)                                     \
++target_ulong HELPER(NAME)(CPURISCVState *env, target_ulong a,          \
++                          target_ulong b, target_ulong c)              \
++{                                                                      \
++    return rvpr_acc(env, a, b, c, STEP, SIZE, (PackedFn4i *)do_##NAME);\
++}
++
++static inline void do_kmmac(CPURISCVState *env, void *vd, void *va,
++                            void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb, *c = vc;
++    d[i] = sadd32(env, 0, ((int64_t)a[i] * b[i]) >> 32, c[i]);
++}
++
++RVPR_ACC(kmmac, 1, 4);
++
++static inline void do_kmmac_u(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb, *c = vc;
++    d[i] = sadd32(env, 0, ((int64_t)a[i] * b[i] +
++                           (uint32_t)INT32_MIN) >> 32, c[i]);
++}
++
++RVPR_ACC(kmmac_u, 1, 4);
++
++static inline void do_kmmsb(CPURISCVState *env, void *vd, void *va,
++                            void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb, *c = vc;
++    d[i] = ssub32(env, 0, c[i], (int64_t)a[i] * b[i] >> 32);
++}
++
++RVPR_ACC(kmmsb, 1, 4);
++
++static inline void do_kmmsb_u(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb, *c = vc;
++    d[i] = ssub32(env, 0, c[i], ((int64_t)a[i] * b[i] +
++                                 (uint32_t)INT32_MIN) >> 32);
++}
++
++RVPR_ACC(kmmsb_u, 1, 4);
++
++static inline void do_kwmmul(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    if (a[i] == INT32_MIN && b[i] == INT32_MIN) {
++        env->vxsat = 0x1;
++        d[i] = INT32_MAX;
++    } else {
++        d[i] = (int64_t)a[i] * b[i] >> 31;
++    }
++}
++
++RVPR(kwmmul, 1, 4);
++
++static inline void do_kwmmul_u(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    if (a[i] == INT32_MIN && b[i] == INT32_MIN) {
++        env->vxsat = 0x1;
++        d[i] = INT32_MAX;
++    } else {
++        d[i] = ((int64_t)a[i] * b[i] + (1ull << 30)) >> 31;
++    }
++}
++
++RVPR(kwmmul_u, 1, 4);
++
++/* Most Significant Word “32x16” Multiply & Add Instructions */
++static inline void do_smmwb(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    int16_t *b = vb;
++    d[H4(i)] = (int64_t)a[H4(i)] * b[H2(2 * i)] >> 16;
++}
++
++RVPR(smmwb, 1, 4);
++
++static inline void do_smmwb_u(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    int16_t *b = vb;
++    d[H4(i)] = ((int64_t)a[H4(i)] * b[H2(2 * i)] + (1ull << 15)) >> 16;
++}
++
++RVPR(smmwb_u, 1, 4);
++
++static inline void do_smmwt(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    int16_t *b = vb;
++    d[H4(i)] = (int64_t)a[H4(i)] * b[H2(2 * i + 1)] >> 16;
++}
++
++RVPR(smmwt, 1, 4);
++
++static inline void do_smmwt_u(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    int16_t *b = vb;
++    d[H4(i)] = ((int64_t)a[H4(i)] * b[H2(2 * i + 1)] + (1ull << 15)) >> 16;
++}
++
++RVPR(smmwt_u, 1, 4);
++
++static inline void do_kmmawb(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *c = vc;
++    int16_t *b = vb;
++    d[H4(i)] = sadd32(env, 0, (int64_t)a[H4(i)] * b[H2(2 * i)] >> 16, c[H4(i)]);
++}
++
++RVPR_ACC(kmmawb, 1, 4);
++
++static inline void do_kmmawb_u(CPURISCVState *env, void *vd, void *va,
++                               void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *c = vc;
++    int16_t *b = vb;
++    d[H4(i)] = sadd32(env, 0, ((int64_t)a[H4(i)] * b[H2(2 * i)] +
++                               (1ull << 15)) >> 16, c[H4(i)]);
++}
++
++RVPR_ACC(kmmawb_u, 1, 4);
++
++static inline void do_kmmawt(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *c = vc;
++    int16_t *b = vb;
++    d[H4(i)] = sadd32(env, 0, (int64_t)a[H4(i)] * b[H2(2 * i + 1)] >> 16,
++                      c[H4(i)]);
++}
++
++RVPR_ACC(kmmawt, 1, 4);
++
++static inline void do_kmmawt_u(CPURISCVState *env, void *vd, void *va,
++                               void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *c = vc;
++    int16_t *b = vb;
++    d[H4(i)] = sadd32(env, 0, ((int64_t)a[H4(i)] * b[H2(2 * i + 1)] +
++                               (1ull << 15)) >> 16, c[H4(i)]);
++}
++
++RVPR_ACC(kmmawt_u, 1, 4);
++
++static inline void do_kmmwb2(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    int16_t *b = vb;
++    if (a[H4(i)] == INT32_MIN && b[H2(2 * i)] == INT16_MIN) {
++        env->vxsat = 0x1;
++        d[H4(i)] = INT32_MAX;
++    } else {
++        d[H4(i)] = (int64_t)a[H4(i)] * b[H2(2 * i)] >> 15;
++    }
++}
++
++RVPR(kmmwb2, 1, 4);
++
++static inline void do_kmmwb2_u(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    int16_t *b = vb;
++    if (a[H4(i)] == INT32_MIN && b[H2(2 * i)] == INT16_MIN) {
++        env->vxsat = 0x1;
++        d[H4(i)] = INT32_MAX;
++    } else {
++        d[H4(i)] = ((int64_t)a[H4(i)] * b[H2(2 * i)] + (1ull << 14)) >> 15;
++    }
++}
++
++RVPR(kmmwb2_u, 1, 4);
++
++static inline void do_kmmwt2(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    int16_t *b = vb;
++    if (a[H4(i)] == INT32_MIN && b[H2(2 * i + 1)] == INT16_MIN) {
++        env->vxsat = 0x1;
++        d[H4(i)] = INT32_MAX;
++    } else {
++        d[H4(i)] = (int64_t)a[H4(i)] * b[H2(2 * i + 1)] >> 15;
++    }
++}
++
++RVPR(kmmwt2, 1, 4);
++
++static inline void do_kmmwt2_u(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    int16_t *b = vb;
++    if (a[H4(i)] == INT32_MIN && b[H2(2 * i + 1)] == INT16_MIN) {
++        env->vxsat = 0x1;
++        d[H4(i)] = INT32_MAX;
++    } else {
++        d[H4(i)] = ((int64_t)a[H4(i)] * b[H2(2 * i + 1)] + (1ull << 14)) >> 15;
++    }
++}
++
++RVPR(kmmwt2_u, 1, 4);
++
++static inline void do_kmmawb2(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *c = vc, result;
++    int16_t *b = vb;
++    if (a[H4(i)] == INT32_MIN && b[H2(2 * i)] == INT16_MIN) {
++        env->vxsat = 0x1;
++        result = INT32_MAX;
++    } else {
++        result = (int64_t)a[H4(i)] * b[H2(2 * i)] >> 15;
++    }
++    d[H4(i)] = sadd32(env, 0, result, c[H4(i)]);
++}
++
++RVPR_ACC(kmmawb2, 1, 4);
++
++static inline void do_kmmawb2_u(CPURISCVState *env, void *vd, void *va,
++                                void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *c = vc, result;
++    int16_t *b = vb;
++    if (a[H4(i)] == INT32_MIN && b[H2(2 * i)] == INT16_MIN) {
++        env->vxsat = 0x1;
++        result = INT32_MAX;
++    } else {
++        result = ((int64_t)a[H4(i)] * b[H2(2 * i)] + (1ull << 14)) >> 15;
++    }
++    d[H4(i)] = sadd32(env, 0, result, c[H4(i)]);
++}
++
++RVPR_ACC(kmmawb2_u, 1, 4);
++
++static inline void do_kmmawt2(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *c = vc, result;
++    int16_t *b = vb;
++    if (a[H4(i)] == INT32_MIN && b[H2(2 * i + 1)] == INT16_MIN) {
++        env->vxsat = 0x1;
++        result = INT32_MAX;
++    } else {
++        result = (int64_t)a[H4(i)] * b[H2(2 * i + 1)] >> 15;
++    }
++    d[H4(i)] = sadd32(env, 0, result, c[H4(i)]);
++}
++
++RVPR_ACC(kmmawt2, 1, 4);
++
++static inline void do_kmmawt2_u(CPURISCVState *env, void *vd, void *va,
++                                void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *c = vc, result;
++    int16_t *b = vb;
++    if (a[H4(i)] == INT32_MIN && b[H2(2 * i + 1)] == INT16_MIN) {
++        env->vxsat = 0x1;
++        result = INT32_MAX;
++    } else {
++        result = ((int64_t)a[H4(i)] * b[H2(2 * i + 1)] + (1ull << 14)) >> 15;
++    }
++    d[H4(i)] = sadd32(env, 0, result, c[H4(i)]);
++}
++
++RVPR_ACC(kmmawt2_u, 1, 4);
++
++/* Signed 16-bit Multiply with 32-bit Add/Subtract Instruction */
++static inline void do_smbb16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    d[H4(i)] = (int32_t)a[H2(2 * i)] * b[H2(2 * i)];
++}
++
++RVPR(smbb16, 1, 4);
++
++static inline void do_smbt16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    d[H4(i)] = (int32_t)a[H2(2 * i)] * b[H2(2 * i + 1)];
++}
++
++RVPR(smbt16, 1, 4);
++
++static inline void do_smtt16(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    d[H4(i)] = (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i + 1)];
++}
++
++RVPR(smtt16, 1, 4);
++
++static inline void do_kmda(CPURISCVState *env, void *vd, void *va,
++                           void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    if (a[H2(2 * i)] == INT16_MIN && a[H2(2 * i + 1)] == INT16_MIN &&
++        b[H2(2 * i)] == INT16_MIN && a[H2(2 * i + 1)] == INT16_MIN) {
++        d[H4(i)] = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        d[H4(i)] = (int32_t)a[H2(2 * i)] * b[H2(2 * i)] +
++                   (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i + 1)];
++    }
++}
++
++RVPR(kmda, 1, 4);
++
++static inline void do_kmxda(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    if (a[H2(2 * i)] == INT16_MIN && a[H2(2 * i + 1)] == INT16_MIN &&
++        b[H2(2 * i)] == INT16_MIN && a[H2(2 * i + 1)] == INT16_MIN) {
++        d[H4(i)] = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        d[H4(i)] = (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i)] +
++                   (int32_t)a[H2(2 * i)] * b[H2(2 * i + 1)];
++    }
++}
++
++RVPR(kmxda, 1, 4);
++
++static inline void do_smds(CPURISCVState *env, void *vd, void *va,
++                           void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    d[H4(i)] = (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i + 1)] -
++               (int32_t)a[H2(2 * i)] * b[H2(2 * i)];
++}
++
++RVPR(smds, 1, 4);
++
++static inline void do_smdrs(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    d[H4(i)] = (int32_t)a[H2(2 * i)] * b[H2(2 * i)] -
++               (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i + 1)];
++}
++
++RVPR(smdrs, 1, 4);
++
++static inline void do_smxds(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    d[H4(i)] = (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i)] -
++               (int32_t)a[H2(2 * i)] * b[H2(2 * i + 1)];
++}
++
++RVPR(smxds, 1, 4);
++
++static inline void do_kmabb(CPURISCVState *env, void *vd, void *va,
++                            void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++    d[H4(i)] = sadd32(env, 0, (int32_t)a[H2(2 * i)] * b[H2(2 * i)], c[H4(i)]);
++}
++
++RVPR_ACC(kmabb, 1, 4);
++
++static inline void do_kmabt(CPURISCVState *env, void *vd, void *va,
++                            void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++    d[H4(i)] = sadd32(env, 0, (int32_t)a[H2(2 * i)] * b[H2(2 * i + 1)],
++                      c[H4(i)]);
++}
++
++RVPR_ACC(kmabt, 1, 4);
++
++static inline void do_kmatt(CPURISCVState *env, void *vd, void *va,
++                            void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++    d[H4(i)] = sadd32(env, 0, (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i + 1)],
++                      c[H4(i)]);
++}
++
++RVPR_ACC(kmatt, 1, 4);
++
++static inline void do_kmada(CPURISCVState *env, void *vd, void *va,
++                            void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++    int32_t p1, p2;
++    p1 = (int32_t)a[H2(2 * i)] * b[H2(2 * i)];
++    p2 = (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i + 1)];
++
++    if (a[H2(i)] == INT16_MIN && a[H2(i + 1)] == INT16_MIN &&
++        b[H2(i)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        if (c[H4(i)] < 0) {
++            d[H4(i)] = INT32_MAX + c[H4(i)] + 1ll;
++        } else {
++            env->vxsat = 0x1;
++            d[H4(i)] = INT32_MAX;
++        }
++    } else {
++        d[H4(i)] = sadd32(env, 0, p1 + p2, c[H4(i)]);
++    }
++}
++
++RVPR_ACC(kmada, 1, 4);
++
++static inline void do_kmaxda(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++    int32_t p1, p2;
++    p1 = (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i)];
++    p2 = (int32_t)a[H2(2 * i)] * b[H2(2 * i + 1)];
++
++    if (a[H2(2 * i)] == INT16_MIN && a[H2(2 * i + 1)] == INT16_MIN &&
++        b[H2(2 * i)] == INT16_MIN && b[H2(2 * i + 1)] == INT16_MIN) {
++        if (c[H4(i)] < 0) {
++            d[H4(i)] = INT32_MAX + c[H4(i)] + 1ll;
++        } else {
++            env->vxsat = 0x1;
++            d[H4(i)] = INT32_MAX;
++        }
++    } else {
++        d[H4(i)] = sadd32(env, 0, p1 + p2, c[H4(i)]);
++    }
++}
++
++RVPR_ACC(kmaxda, 1, 4);
++
++static inline void do_kmads(CPURISCVState *env, void *vd, void *va,
++                            void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++    int32_t p1, p2;
++    p1 =   (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i + 1)];
++    p2 =   (int32_t)a[H2(2 * i)] * b[H2(2 * i)];
++
++    d[H4(i)] = sadd32(env, 0, p1 - p2, c[H4(i)]);
++}
++
++RVPR_ACC(kmads, 1, 4);
++
++static inline void do_kmadrs(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void * vc, uint8_t i)
++{
++    int32_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++    int32_t p1, p2;
++    p1 = (int32_t)a[H2(2 * i)] * b[H2(2 * i)];
++    p2 = (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i + 1)];
++
++    d[H4(i)] = sadd32(env, 0, p1 - p2, c[H4(i)]);
++}
++
++RVPR_ACC(kmadrs, 1, 4);
++
++static inline void do_kmaxds(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++    int32_t p1, p2;
++    p1 = (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i)];
++    p2 = (int32_t)a[H2(2 * i)] * b[H2(2 * i + 1)];
++
++    d[H4(i)] = sadd32(env, 0, p1 - p2, c[H4(i)]);
++}
++
++RVPR_ACC(kmaxds, 1, 4);
++
++static inline void do_kmsda(CPURISCVState *env, void *vd, void *va,
++                            void *vb, void *vc, uint8_t i)
++{
++    int32_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++    int32_t p1, p2;
++    p1 = (int32_t)a[H2(2 * i)] * b[H2(2 * i)];
++    p2 = (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i + 1)];
++
++    if (a[H2(i)] == INT16_MIN && a[H2(i + 1)] == INT16_MIN &&
++        b[H2(i)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        if (c[H4(i)] < 0) {
++            env->vxsat = 0x1;
++            d[H4(i)] = INT32_MIN;
++        } else {
++            d[H4(i)] = c[H4(i)] - 1ll - INT32_MAX;
++        }
++    } else {
++        d[H4(i)] = ssub32(env, 0, c[H4(i)], p1 + p2);
++    }
++}
++
++RVPR_ACC(kmsda, 1, 4);
++
++static inline void do_kmsxda(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void * vc, uint8_t i)
++{
++    int32_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++    int32_t p1, p2;
++    p1 = (int32_t)a[H2(2 * i)] * b[H2(2 * i + 1)];
++    p2 = (int32_t)a[H2(2 * i + 1)] * b[H2(2 * i)];
++
++    if (a[H2(i)] == INT16_MIN && a[H2(i + 1)] == INT16_MIN &&
++        b[H2(i)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        if (d[H4(i)] < 0) {
++            env->vxsat = 0x1;
++            d[H4(i)] = INT32_MIN;
++        } else {
++            d[H4(i)] = c[H4(i)] - 1ll - INT32_MAX;
++        }
++    } else {
++        d[H4(i)] = ssub32(env, 0, c[H4(i)], p1 + p2);
++    }
++}
++
++RVPR_ACC(kmsxda, 1, 4);
++
++/* Signed 16-bit Multiply with 64-bit Add/Subtract Instructions */
++static inline void do_smal(CPURISCVState *env, void *vd, void *va,
++                           void *vb, uint8_t i)
++{
++    int64_t *d = vd, *a = va;
++    int16_t *b = vb;
++
++    if (i == 0) {
++        *d = *a;
++    }
++
++    *d += b[H2(i)] * b[H2(i + 1)];
++}
++
++uint64_t helper_smal(CPURISCVState *env, uint64_t a, target_ulong b)
++{
++    int i;
++    int64_t result = 0;
++
++    for (i = 0; i < sizeof(target_ulong) / 2; i += 2) {
++        do_smal(env, &result, &a, &b, i);
++    }
++    return result;
++}
++
++/* Partial-SIMD Miscellaneous Instructions */
++static inline void do_sclip32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x1f;
++
++    d[i] = sat64(env, a[i], shift);
++}
++
++RVPR(sclip32, 1, 4);
++
++static inline void do_uclip32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x1f;
++
++    if (a[i] < 0) {
++        d[i] = 0;
++        env->vxsat = 0x1;
++    } else {
++        d[i] = satu64(env, a[i], shift);
++    }
++}
++
++RVPR(uclip32, 1, 4);
++
++static inline void do_clrs32(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    d[i] = clrsb32(a[i]);
++}
++
++RVPR2(clrs32, 1, 4);
++
++static inline void do_clz32(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    d[i] = clz32(a[i]);
++}
++
++RVPR2(clz32, 1, 4);
++
++static inline void do_clo32(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    d[i] = clo32(a[i]);
++}
++
++RVPR2(clo32, 1, 4);
++
++static inline void do_pbsad(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_ulong *d = vd;
++    uint8_t *a = va, *b = vb;
++    *d += abs(a[i] - b[i]);
++}
++
++RVPR(pbsad, 1, 1);
++
++static inline void do_pbsada(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    target_ulong *d = vd, *c = vc;
++    uint8_t *a = va, *b = vb;
++    if (i == 0) {
++        *d += *c;
++    }
++    *d += abs(a[i] - b[i]);
++}
++
++RVPR_ACC(pbsada, 1, 1);
++
++/* 8-bit Multiply with 32-bit Add Instructions */
++static inline void do_smaqa(CPURISCVState *env, void *vd, void *va,
++                            void *vb, void *vc, uint8_t i)
++{
++    int8_t *a = va, *b = vb;
++    int32_t *d = vd, *c = vc;
++
++    d[H4(i)] = c[H4(i)] + a[H1(i * 4)] * b[H1(i * 4)] +
++               a[H1(i * 4 + 1)] * b[H1(i * 4 + 1)] +
++               a[H1(i * 4 + 2)] * b[H1(i * 4 + 2)] +
++               a[H1(i * 4 + 3)] * b[H1(i * 4 + 3)];
++}
++
++RVPR_ACC(smaqa, 1, 4);
++
++static inline void do_umaqa(CPURISCVState *env, void *vd, void *va,
++                            void *vb, void *vc, uint8_t i)
++{
++    uint8_t *a = va, *b = vb;
++    uint32_t *d = vd, *c = vc;
++
++    d[H4(i)] = c[H4(i)] + a[H1(i * 4)] * b[H1(i * 4)] +
++               a[H1(i * 4 + 1)] * b[H1(i * 4 + 1)] +
++               a[H1(i * 4 + 2)] * b[H1(i * 4 + 2)] +
++               a[H1(i * 4 + 3)] * b[H1(i * 4 + 3)];
++}
++
++RVPR_ACC(umaqa, 1, 4);
++
++static inline void do_smaqa_su(CPURISCVState *env, void *vd, void *va,
++                               void *vb, void *vc, uint8_t i)
++{
++    int8_t *a = va;
++    uint8_t *b = vb;
++    int32_t *d = vd, *c = vc;
++
++    d[H4(i)] = c[H4(i)] + a[H1(i * 4)] * b[H1(i * 4)] +
++               a[H1(i * 4 + 1)] * b[H1(i * 4 + 1)] +
++               a[H1(i * 4 + 2)] * b[H1(i * 4 + 2)] +
++               a[H1(i * 4 + 3)] * b[H1(i * 4 + 3)];
++}
++
++RVPR_ACC(smaqa_su, 1, 4);
++
++/*
++ *** 64-bit Profile Instructions
++ */
++/* 64-bit Addition & Subtraction Instructions */
++
++/* Define a common function to loop elements in packed register */
++static inline uint64_t
++rvpr64_64_64(CPURISCVState *env, uint64_t a, uint64_t b,
++             uint8_t step, uint8_t size, PackedFn3i *fn)
++{
++    int i, passes = sizeof(uint64_t) / size;
++    uint64_t result = 0;
++    target_ulong vxsat_bak = 0;
++
++    pre_fn(env, &vxsat_bak);
++    for (i = 0; i < passes; i += step) {
++        fn(env, &result, &a, &b, i);
++    }
++    post_fn(env, vxsat_bak);
++    return result;
++}
++
++#define RVPR64_64_64(NAME, STEP, SIZE)                                    \
++uint64_t HELPER(NAME)(CPURISCVState *env, uint64_t a, uint64_t b)         \
++{                                                                         \
++    return rvpr64_64_64(env, a, b, STEP, SIZE, (PackedFn3i *)do_##NAME);  \
++}
++
++static inline void do_add64(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int64_t *d = vd, *a = va, *b = vb;
++    *d = *a + *b;
++}
++
++RVPR64_64_64(add64, 1, 8);
++
++static inline int64_t hadd64(int64_t a, int64_t b)
++{
++    int64_t res = a + b;
++    int64_t over = (res ^ a) & (res ^ b) & INT64_MIN;
++
++    /* With signed overflow, bit 64 is inverse of bit 63. */
++    return (res >> 1) ^ over;
++}
++
++static inline void do_radd64(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int64_t *d = vd, *a = va, *b = vb;
++    *d = hadd64(*a, *b);
++}
++
++RVPR64_64_64(radd64, 1, 8);
++
++static inline uint64_t haddu64(uint64_t a, uint64_t b)
++{
++    uint64_t res = a + b;
++    bool over = res < a;
++
++    return over ? ((res >> 1) | INT64_MIN) : (res >> 1);
++}
++
++static inline void do_uradd64(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    uint64_t *d = vd, *a = va, *b = vb;
++    *d = haddu64(*a, *b);
++}
++
++RVPR64_64_64(uradd64, 1, 8);
++
++static inline void do_kadd64(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int64_t *d = vd, *a = va, *b = vb;
++    *d = sadd64(env, 0, *a, *b);
++}
++
++RVPR64_64_64(kadd64, 1, 8);
++
++static inline void do_ukadd64(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    uint64_t *d = vd, *a = va, *b = vb;
++    *d = saddu64(env, 0, *a, *b);
++}
++
++RVPR64_64_64(ukadd64, 1, 8);
++
++static inline void do_sub64(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int64_t *d = vd, *a = va, *b = vb;
++    *d = *a - *b;
++}
++
++RVPR64_64_64(sub64, 1, 8);
++
++static inline void do_rsub64(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int64_t *d = vd, *a = va, *b = vb;
++    *d = hsub64(*a, *b);
++}
++
++RVPR64_64_64(rsub64, 1, 8);
++
++static inline void do_ursub64(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    uint64_t *d = vd, *a = va, *b = vb;
++    *d = hsubu64(*a, *b);
++}
++
++RVPR64_64_64(ursub64, 1, 8);
++
++static inline void do_ksub64(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int64_t *d = vd, *a = va, *b = vb;
++    *d = ssub64(env, 0, *a, *b);
++}
++
++RVPR64_64_64(ksub64, 1, 8);
++
++static inline void do_uksub64(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    uint64_t *d = vd, *a = va, *b = vb;
++    *d = ssubu64(env, 0, *a, *b);
++}
++
++RVPR64_64_64(uksub64, 1, 8);
++
++/* 32-bit Multiply with 64-bit Add/Subtract Instructions */
++static inline uint64_t
++rvpr64_acc(CPURISCVState *env, target_ulong a,
++           target_ulong b, uint64_t c,
++           uint8_t step, uint8_t size, PackedFn4i *fn)
++{
++    int i, passes = sizeof(target_ulong) / size;
++    uint64_t result = 0;
++    target_ulong vxsat_bak = 0;
++
++    pre_fn(env, &vxsat_bak);
++    for (i = 0; i < passes; i += step) {
++        fn(env, &result, &a, &b, &c, i);
++    }
++    post_fn(env, vxsat_bak);
++    return result;
++}
++
++#define RVPR64_ACC(NAME, STEP, SIZE)                                     \
++uint64_t HELPER(NAME)(CPURISCVState *env, target_ulong a,                \
++                      target_ulong b, uint64_t c)                        \
++{                                                                        \
++    return rvpr64_acc(env, a, b, c, STEP, SIZE, (PackedFn4i *)do_##NAME);\
++}
++
++static inline void do_smar64(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int32_t *a = va, *b = vb;
++    int64_t *d = vd, *c = vc;
++    if (i == 0) {
++        *d = *c;
++    }
++    *d += (int64_t)a[H4(i)] * b[H4(i)];
++}
++
++RVPR64_ACC(smar64, 1, 4);
++
++static inline void do_smsr64(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int32_t *a = va, *b = vb;
++    int64_t *d = vd, *c = vc;
++    if (i == 0) {
++        *d = *c;
++    }
++    *d -= (int64_t)a[H4(i)] * b[H4(i)];
++}
++
++RVPR64_ACC(smsr64, 1, 4);
++
++static inline void do_umar64(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    uint32_t *a = va, *b = vb;
++    uint64_t *d = vd, *c = vc;
++    if (i == 0) {
++        *d = *c;
++    }
++    *d += (uint64_t)a[H4(i)] * b[H4(i)];
++}
++
++RVPR64_ACC(umar64, 1, 4);
++
++static inline void do_umsr64(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    uint32_t *a = va, *b = vb;
++    uint64_t *d = vd, *c = vc;
++    if (i == 0) {
++        *d = *c;
++    }
++    *d -= (uint64_t)a[H4(i)] * b[H4(i)];
++}
++
++RVPR64_ACC(umsr64, 1, 4);
++
++static inline void do_kmar64(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int32_t *a = va, *b = vb;
++    int64_t *d = vd, *c = vc;
++    int64_t m0 =  (int64_t)a[H4(i)] * b[H4(i)];
++    if (riscv_cpu_mxl(env) == MXL_RV64) {
++        int64_t m1 =  (int64_t)a[H4(i + 1)] * b[H4(i + 1)];
++        if (a[H4(i)] == INT32_MIN && b[H4(i)] == INT32_MIN &&
++            a[H4(i + 1)] == INT32_MIN && b[H4(i + 1)] == INT32_MIN) {
++            if (*c >= 0) {
++                *d = INT64_MAX;
++                env->vxsat = 0x1;
++            } else {
++                *d = sadd64(env, 0, *c + m0, m1);
++            }
++        } else {
++            *d = sadd64(env, 0, *c, m0 + m1);
++        }
++    } else {
++        *d = sadd64(env, 0, *c, m0);
++    }
++}
++
++RVPR64_ACC(kmar64, 1, sizeof(target_ulong));
++
++static inline void do_kmsr64(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int32_t *a = va, *b = vb;
++    int64_t *d = vd, *c = vc;
++
++    int64_t m0 =  (int64_t)a[H4(i)] * b[H4(i)];
++    if (riscv_cpu_mxl(env) == MXL_RV64) {
++        int64_t m1 =  (int64_t)a[H4(i + 1)] * b[H4(i + 1)];
++        if (a[H4(i)] == INT32_MIN && b[H4(i)] == INT32_MIN &&
++            a[H4(i + 1)] == INT32_MIN && b[H4(i + 1)] == INT32_MIN) {
++            if (*c <= 0) {
++                *d = INT64_MIN;
++                env->vxsat = 0x1;
++            } else {
++                *d = ssub64(env, 0, *c - m0, m1);
++            }
++        } else {
++            *d = ssub64(env, 0, *c, m0 + m1);
++        }
++    } else {
++        *d = ssub64(env, 0, *c, m0);
++    }
++}
++
++RVPR64_ACC(kmsr64, 1, sizeof(target_ulong));
++
++static inline void do_ukmar64(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    uint32_t *a = va, *b = vb;
++    uint64_t *d = vd, *c = vc;
++
++    if (i == 0) {
++        *d = *c;
++    }
++    *d = saddu64(env, 0, *d, (uint64_t)a[H4(i)] * b[H4(i)]);
++}
++
++RVPR64_ACC(ukmar64, 1, 4);
++
++static inline void do_ukmsr64(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    uint32_t *a = va, *b = vb;
++    uint64_t *d = vd, *c = vc;
++
++    if (i == 0) {
++        *d = *c;
++    }
++    *d = ssubu64(env, 0, *d, (uint64_t)a[i] * b[i]);
++}
++
++RVPR64_ACC(ukmsr64, 1, 4);
++
++/* Signed 16-bit Multiply with 64-bit Add/Subtract Instructions */
++static inline void do_smalbb(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++
++    if (i == 0) {
++        *d = *c;
++    }
++
++    *d += (int64_t)a[H2(i)] * b[H2(i)];
++}
++
++RVPR64_ACC(smalbb, 2, 2);
++
++static inline void do_smalbt(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++
++    if (i == 0) {
++        *d = *c;
++    }
++
++    *d += (int64_t)a[H2(i)] * b[H2(i + 1)];
++}
++
++RVPR64_ACC(smalbt, 2, 2);
++
++static inline void do_smaltt(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++
++    if (i == 0) {
++        *d = *c;
++    }
++
++    *d += (int64_t)a[H2(i + 1)] * b[H2(i + 1)];
++}
++
++RVPR64_ACC(smaltt, 2, 2);
++
++static inline void do_smalda(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++
++    if (i == 0) {
++        *d = *c;
++    }
++
++    *d += (int64_t)a[H2(i)] * b[H2(i)] + (int64_t)a[H2(i + 1)] * b[H2(i + 1)];
++}
++
++RVPR64_ACC(smalda, 2, 2);
++
++static inline void do_smalxda(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++
++    if (i == 0) {
++        *d = *c;
++    }
++
++    *d += (int64_t)a[H2(i)] * b[H2(i + 1)] + (int64_t)a[H2(i + 1)] * b[H2(i)];
++}
++
++RVPR64_ACC(smalxda, 2, 2);
++
++static inline void do_smalds(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++
++    if (i == 0) {
++        *d = *c;
++    }
++
++    *d += (int64_t)a[H2(i + 1)] * b[H2(i + 1)] - (int64_t)a[H2(i)] * b[H2(i)];
++}
++
++RVPR64_ACC(smalds, 2, 2);
++
++static inline void do_smaldrs(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++
++    if (i == 0) {
++        *d = *c;
++    }
++
++    *d += (int64_t)a[H2(i)] * b[H2(i)] - (int64_t)a[H2(i + 1)] * b[H2(i + 1)];
++}
++
++RVPR64_ACC(smaldrs, 2, 2);
++
++static inline void do_smalxds(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++
++    if (i == 0) {
++        *d = *c;
++    }
++
++    *d += (int64_t)a[H2(i + 1)] * b[H2(i)] - (int64_t)a[H2(i)] * b[H2(i + 1)];
++}
++
++RVPR64_ACC(smalxds, 2, 2);
++
++static inline void do_smslda(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++
++    if (i == 0) {
++        *d = *c;
++    }
++
++    *d -= (int64_t)a[H2(i)] * b[H2(i)] + (int64_t)a[H2(i + 1)] * b[H2(i + 1)];
++}
++
++RVPR64_ACC(smslda, 2, 2);
++
++static inline void do_smslxda(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int16_t *a = va, *b = vb;
++
++    if (i == 0) {
++        *d = *c;
++    }
++
++    *d -= (int64_t)a[H2(i + 1)] * b[H2(i)] + (int64_t)a[H2(i)] * b[H2(i + 1)];
++}
++
++RVPR64_ACC(smslxda, 2, 2);
++
++/* Q15 saturation instructions */
++static inline void do_kaddh(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int32_t *a = va, *b = vb;
++
++    *d = sat64(env, (int64_t)a[H4(i)] + b[H4(i)], 15);
++}
++
++RVPR(kaddh, 2, 4);
++
++static inline void do_ksubh(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int32_t *a = va, *b = vb;
++
++    *d = sat64(env, (int64_t)a[H4(i)] - b[H4(i)], 15);
++}
++
++RVPR(ksubh, 2, 4);
++
++static inline void do_khmbb(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int16_t *a = va, *b = vb;
++
++    *d = sat64(env, (int64_t)a[H2(i)] * b[H2(i)] >> 15, 15);
++}
++
++RVPR(khmbb, 4, 2);
++
++static inline void do_khmbt(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int16_t *a = va, *b = vb;
++
++    *d = sat64(env, (int64_t)a[H2(i)] * b[H2(i + 1)] >> 15, 15);
++}
++
++RVPR(khmbt, 4, 2);
++
++static inline void do_khmtt(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int16_t *a = va, *b = vb;
++
++    *d = sat64(env, (int64_t)a[H2(i + 1)] * b[H2(i + 1)] >> 15, 15);
++}
++
++RVPR(khmtt, 4, 2);
++
++static inline void do_ukaddh(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    uint32_t *a = va, *b = vb;
++
++    *d = (int16_t)satu64(env, saddu32(env, 0, a[H4(i)], b[H4(i)]), 16);
++}
++
++RVPR(ukaddh, 2, 4);
++
++static inline void do_uksubh(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    uint32_t *a = va, *b = vb;
++
++    *d = (int16_t)satu64(env, ssubu32(env, 0, a[H4(i)], b[H4(i)]), 16);
++}
++
++RVPR(uksubh, 2, 4);
++
++/* Q31 saturation Instructions */
++static inline void do_kaddw(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int32_t *a = va, *b = vb;
++
++    *d = sadd32(env, 0, a[H4(i)], b[H4(i)]);
++}
++
++RVPR(kaddw, 2, 4);
++
++static inline void do_ukaddw(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    uint32_t *a = va, *b = vb;
++
++    *d = (int32_t)saddu32(env, 0, a[H4(i)], b[H4(i)]);
++}
++
++RVPR(ukaddw, 2, 4);
++
++static inline void do_ksubw(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int32_t *a = va, *b = vb;
++
++    *d = ssub32(env, 0, a[H4(i)], b[H4(i)]);
++}
++
++RVPR(ksubw, 2, 4);
++
++static inline void do_uksubw(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    uint32_t *a = va, *b = vb;
++
++    *d = (int32_t)ssubu32(env, 0, a[H4(i)], b[H4(i)]);
++}
++
++RVPR(uksubw, 2, 4);
++
++static inline void do_kdmbb(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int16_t *a = va, *b = vb;
++
++    if (a[H2(i)] == INT16_MIN && b[H2(i)] == INT16_MIN) {
++        *d = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        *d = (int64_t)a[H2(i)] * b[H2(i)] << 1;
++    }
++}
++
++RVPR(kdmbb, 4, 2);
++
++static inline void do_kdmbt(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int16_t *a = va, *b = vb;
++
++    if (a[H2(i)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        *d = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        *d = (int64_t)a[H2(i)] * b[H2(i + 1)] << 1;
++    }
++}
++
++RVPR(kdmbt, 4, 2);
++
++static inline void do_kdmtt(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int16_t *a = va, *b = vb;
++
++    if (a[H2(i + 1)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        *d = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        *d = (int64_t)a[H2(i + 1)] * b[H2(i + 1)] << 1;
++    }
++}
++
++RVPR(kdmtt, 4, 2);
++
++static inline void do_kslraw(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int32_t *a = va;
++    int32_t shift = sextract32((*(uint32_t *)vb), 0, 6);
++
++    if (shift >= 0) {
++        *d = (int32_t)sat64(env, (int64_t)a[H4(i)] << shift, 31);
++    } else {
++        shift = -shift;
++        shift = (shift == 32) ? 31 : shift;
++        *d = a[H4(i)] >> shift;
++    }
++}
++
++RVPR(kslraw, 2, 4);
++
++static inline void do_kslraw_u(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int32_t *a = va;
++    int32_t shift = sextract32((*(uint32_t *)vb), 0, 6);
++
++    if (shift >= 0) {
++        *d = (int32_t)sat64(env, (int64_t)a[H4(i)] << shift, 31);
++    } else {
++        shift = -shift;
++        shift = (shift == 32) ? 31 : shift;
++        *d = vssra32(env, 0, a[H4(i)], shift);
++    }
++}
++
++RVPR(kslraw_u, 2, 4);
++
++static inline void do_ksllw(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int32_t *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x1f;
++
++    *d = (int32_t)sat64(env, (int64_t)a[H4(i)] << shift, 31);
++}
++
++RVPR(ksllw, 2, 4);
++
++static inline void do_kdmabb(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++
++{
++    target_long *d = vd;
++    int16_t *a = va, *b = vb;
++    int32_t *c = vc, m0;
++
++    if (a[H2(i)] == INT16_MIN && b[H2(i)] == INT16_MIN) {
++        m0 = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        m0 = (int32_t)a[H2(i)] * b[H2(i)] << 1;
++    }
++    *d = sadd32(env, 0, c[H4(i)], m0);
++}
++
++RVPR_ACC(kdmabb, 4, 2);
++
++static inline void do_kdmabt(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++
++{
++    target_long *d = vd;
++    int16_t *a = va, *b = vb;
++    int32_t *c = vc, m0;
++
++    if (a[H2(i)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        m0 = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        m0 = (int32_t)a[H2(i)] * b[H2(i + 1)] << 1;
++    }
++    *d = sadd32(env, 0, c[H4(i)], m0);
++}
++
++RVPR_ACC(kdmabt, 4, 2);
++
++static inline void do_kdmatt(CPURISCVState *env, void *vd, void *va,
++                             void *vb, void *vc, uint8_t i)
++
++{
++    target_long *d = vd;
++    int16_t *a = va, *b = vb;
++    int32_t *c = vc, m0;
++
++    if (a[H2(i + 1)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        m0 = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        m0 = (int32_t)a[H2(i + 1)] * b[H2(i + 1)] << 1;
++    }
++    *d = sadd32(env, 0, c[H4(i)], m0);
++}
++
++RVPR_ACC(kdmatt, 4, 2);
++
++static inline void do_kabsw(CPURISCVState *env, void *vd, void *va, uint8_t i)
++
++{
++    target_long *d = vd;
++    int32_t *a = va;
++
++    if (a[H4(i)] == INT32_MIN) {
++        *d = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        *d = (int32_t)abs(a[H4(i)]);
++    }
++}
++
++RVPR2(kabsw, 2, 4);
++
++/* 32-bit Computation Instructions */
++static inline void do_raddw(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int32_t *a = va, *b = vb;
++    target_long *d = vd;
++
++    *d = hadd32(a[H4(i)], b[H4(i)]);
++}
++
++RVPR(raddw, 2, 4);
++
++static inline void do_uraddw(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint32_t *a = va, *b = vb;
++    target_long *d = vd;
++
++    *d = (int32_t)haddu32(a[H4(i)], b[H4(i)]);
++}
++
++RVPR(uraddw, 2, 4);
++
++static inline void do_rsubw(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int32_t *a = va, *b = vb;
++    target_long *d = vd;
++
++    *d = hsub32(a[H4(i)], b[H4(i)]);
++}
++
++RVPR(rsubw, 2, 4);
++
++static inline void do_ursubw(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint32_t *a = va, *b = vb;
++    target_long *d = vd;
++
++    *d = (int32_t)hsubu64(a[H4(i)], b[H4(i)]);
++}
++
++RVPR(ursubw, 2, 4);
++
++static inline void do_maxw(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int32_t *a = va, *b = vb;
++
++    *d = (a[H4(i)] > b[H4(i)]) ? a[H4(i)] : b[H4(i)];
++}
++
++RVPR(maxw, 2, 4);
++
++static inline void do_minw(CPURISCVState *env, void *vd, void *va,
++                           void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int32_t *a = va, *b = vb;
++
++    *d = (a[H4(i)] < b[H4(i)]) ? a[H4(i)] : b[H4(i)];
++}
++
++RVPR(minw, 2, 4);
++
++static inline void do_mulr64(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint64_t *d = vd;
++    uint32_t *a = va, *b = vb;
++
++    *d = (uint64_t)a[H4(0)] * b[H4(0)];
++}
++
++RVPR64(mulr64);
++
++static inline void do_mulsr64(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int64_t result;
++    int32_t *a = va, *b = vb;
++
++    result = (int64_t)a[H4(0)] * b[H4(0)];
++    d[H4(1)] = result >> 32;
++    d[H4(0)] = result & UINT32_MAX;
++}
++
++RVPR64(mulsr64);
++
++/* Miscellaneous Instructions */
++static inline void do_ave(CPURISCVState *env, void *vd, void *va,
++                          void *vb, uint8_t i)
++{
++    target_long *d = vd, *a = va, *b = vb, half;
++
++    half = hadd64(*a, *b);
++    if ((*a ^ *b) & 0x1) {
++        half++;
++    }
++    *d = half;
++}
++
++RVPR(ave, 1, sizeof(target_ulong));
++
++static inline void do_sra_u(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    target_long *d = vd, *a = va;
++    uint8_t *b = vb;
++    uint8_t shift = (riscv_cpu_mxl(env) == MXL_RV32) ? (*b & 0x1f) : (*b & 0x3f);
++
++    *d = vssra64(env, 0, *a, shift);
++}
++
++RVPR(sra_u, 1, sizeof(target_ulong));
++
++static inline void do_bitrev(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    target_ulong *d = vd, *a = va;
++    uint8_t *b = vb;
++    uint8_t shift = (riscv_cpu_mxl(env) == MXL_RV32) ? (*b & 0x1f) : (*b & 0x3f);
++
++    *d = revbit64(*a) >> (64 - shift - 1);
++}
++
++RVPR(bitrev, 1, sizeof(target_ulong));
++
++static inline target_ulong
++rvpr_64(CPURISCVState *env, uint64_t a, target_ulong b, PackedFn3 *fn)
++{
++    target_ulong result = 0;
++    target_ulong vxsat_bak = 0;
++
++    pre_fn(env, &vxsat_bak);
++    fn(env, &result, &a, &b);
++    post_fn(env, vxsat_bak);
++    return result;
++}
++
++#define RVPR_64(NAME)                                       \
++target_ulong HELPER(NAME)(CPURISCVState *env, uint64_t a,   \
++                          target_ulong b)                   \
++{                                                           \
++    return rvpr_64(env, a, b, (PackedFn3 *)do_##NAME);      \
++}
++
++static inline void do_wext(CPURISCVState *env, void *vd, void *va,
++                           void *vb, uint8_t i)
++{
++    target_long *d = vd;
++    int64_t *a = va;
++    uint8_t b = *(uint8_t *)vb & 0x1f;
++
++    *d = sextract64(*a, b, 32);
++}
++
++RVPR_64(wext);
++
++static inline void do_bpick(CPURISCVState *env, void *vd, void *va,
++                            void *vb, void *vc, uint8_t i)
++{
++    target_long *d = vd, *a = va, *b = vb, *c = vc;
++
++    *d = (*c & *a) | (~*c & *b);
++}
++
++RVPR_ACC(bpick, 1, sizeof(target_ulong));
++
++/*
++ *** RV64 Only Instructions
++ */
++/* (RV64 Only) SIMD 32-bit Add/Subtract Instructions */
++static inline void do_radd32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint16_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[i] = hadd32(a[i], b[i]);
++}
++
++RVPR64_64_64(radd32, 1, 4);
++
++static inline void do_uradd32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint16_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[i] = haddu32(a[i], b[i]);
++}
++
++RVPR64_64_64(uradd32, 1, 4);
++
++static inline void do_kadd32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint16_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[i] = sadd32(env, 0, a[i], b[i]);
++}
++
++RVPR64_64_64(kadd32, 1, 4);
++
++static inline void do_ukadd32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint16_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[i] = saddu32(env, 0, a[i], b[i]);
++}
++
++RVPR64_64_64(ukadd32, 1, 4);
++
++static inline void do_rsub32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint16_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[i] = hsub32(a[i], b[i]);
++}
++
++RVPR64_64_64(rsub32, 1, 4);
++
++static inline void do_ursub32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint16_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[i] = hsubu64(a[i], b[i]);
++}
++
++RVPR64_64_64(ursub32, 1, 4);
++
++static inline void do_ksub32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint16_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[i] = ssub32(env, 0, a[i], b[i]);
++}
++
++RVPR64_64_64(ksub32, 1, 4);
++
++static inline void do_uksub32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint16_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[i] = ssubu32(env, 0, a[i], b[i]);
++}
++
++RVPR64_64_64(uksub32, 1, 4);
++
++static inline void do_cras32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = a[H4(i)] - b[H4(i + 1)];
++    d[H4(i + 1)] = a[H4(i + 1)] + b[H4(i)];
++}
++
++RVPR64_64_64(cras32, 2, 4);
++
++static inline void do_rcras32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = hsub32(a[H4(i)], b[H4(i + 1)]);
++    d[H4(i + 1)] = hadd32(a[H4(i + 1)], b[H4(i)]);
++}
++
++RVPR64_64_64(rcras32, 2, 4);
++
++static inline void do_urcras32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = hsubu64(a[H4(i)], b[H4(i + 1)]);
++    d[H4(i + 1)] = haddu32(a[H4(i + 1)], b[H4(i)]);
++}
++
++RVPR64_64_64(urcras32, 2, 4);
++
++static inline void do_kcras32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = ssub32(env, 0, a[H4(i)], b[H4(i + 1)]);
++    d[H4(i + 1)] = sadd32(env, 0, a[H4(i + 1)], b[H4(i)]);
++}
++
++RVPR64_64_64(kcras32, 2, 4);
++
++static inline void do_ukcras32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = ssubu32(env, 0, a[H4(i)], b[H4(i + 1)]);
++    d[H4(i + 1)] = saddu32(env, 0, a[H4(i + 1)], b[H4(i)]);
++}
++
++RVPR64_64_64(ukcras32, 2, 4);
++
++static inline void do_crsa32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = a[H4(i)] + b[H4(i + 1)];
++    d[H4(i + 1)] = a[H4(i + 1)] - b[H4(i)];
++}
++
++RVPR64_64_64(crsa32, 2, 4);
++
++static inline void do_rcrsa32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = hadd32(a[H4(i)], b[H4(i + 1)]);
++    d[H4(i + 1)] = hsub32(a[H4(i + 1)], b[H4(i)]);
++}
++
++RVPR64_64_64(rcrsa32, 2, 4);
++
++static inline void do_urcrsa32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = haddu32(a[H4(i)], b[H4(i + 1)]);
++    d[H4(i + 1)] = hsubu64(a[H4(i + 1)], b[H4(i)]);
++}
++
++RVPR64_64_64(urcrsa32, 2, 4);
++
++static inline void do_kcrsa32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = sadd32(env, 0, a[H4(i)], b[H4(i + 1)]);
++    d[H4(i + 1)] = ssub32(env, 0, a[H4(i + 1)], b[H4(i)]);
++}
++
++RVPR64_64_64(kcrsa32, 2, 4);
++
++static inline void do_ukcrsa32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = saddu32(env, 0, a[H4(i)], b[H4(i + 1)]);
++    d[H4(i + 1)] = ssubu32(env, 0, a[H4(i + 1)], b[H4(i)]);
++}
++
++RVPR64_64_64(ukcrsa32, 2, 4);
++
++static inline void do_stas32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = a[H4(i)] - b[H4(i)];
++    d[H4(i + 1)] = a[H4(i + 1)] + b[H4(i + 1)];
++}
++
++RVPR64_64_64(stas32, 2, 4);
++
++static inline void do_rstas32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = hsub32(a[H4(i)], b[H4(i)]);
++    d[H4(i + 1)] = hadd32(a[H4(i + 1)], b[H4(i + 1)]);
++}
++
++RVPR64_64_64(rstas32, 2, 4);
++
++static inline void do_urstas32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = hsubu64(a[H4(i)], b[H4(i)]);
++    d[H4(i + 1)] = haddu32(a[H4(i + 1)], b[H4(i + 1)]);
++}
++
++RVPR64_64_64(urstas32, 2, 4);
++
++static inline void do_kstas32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = ssub32(env, 0, a[H4(i)], b[H4(i)]);
++    d[H4(i + 1)] = sadd32(env, 0, a[H4(i + 1)], b[H4(i + 1)]);
++}
++
++RVPR64_64_64(kstas32, 2, 4);
++
++static inline void do_ukstas32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = ssubu32(env, 0, a[H4(i)], b[H4(i)]);
++    d[H4(i + 1)] = saddu32(env, 0, a[H4(i + 1)], b[H4(i + 1)]);
++}
++
++RVPR64_64_64(ukstas32, 2, 4);
++
++static inline void do_stsa32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = a[H4(i)] + b[H4(i)];
++    d[H4(i + 1)] = a[H4(i + 1)] - b[H4(i + 1)];
++}
++
++RVPR64_64_64(stsa32, 2, 4);
++
++static inline void do_rstsa32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = hadd32(a[H4(i)], b[H4(i)]);
++    d[H4(i + 1)] = hsub32(a[H4(i + 1)], b[H4(i + 1)]);
++}
++
++RVPR64_64_64(rstsa32, 2, 4);
++
++static inline void do_urstsa32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = haddu32(a[H4(i)], b[H4(i)]);
++    d[H4(i + 1)] = hsubu64(a[H4(i + 1)], b[H4(i + 1)]);
++}
++
++RVPR64_64_64(urstsa32, 2, 4);
++
++static inline void do_kstsa32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = sadd32(env, 0, a[H4(i)], b[H4(i)]);
++    d[H4(i + 1)] = ssub32(env, 0, a[H4(i + 1)], b[H4(i + 1)]);
++}
++
++RVPR64_64_64(kstsa32, 2, 4);
++
++static inline void do_ukstsa32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = saddu32(env, 0, a[H4(i)], b[H4(i)]);
++    d[H4(i + 1)] = ssubu32(env, 0, a[H4(i + 1)], b[H4(i + 1)]);
++}
++
++RVPR64_64_64(ukstsa32, 2, 4);
++
++/* (RV64 Only) SIMD 32-bit Shift Instructions */
++static inline void do_sra32(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x1f;
++    d[i] = a[i] >> shift;
++}
++
++RVPR64_64_64(sra32, 1, 4);
++
++static inline void do_srl32(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x1f;
++    d[i] = a[i] >> shift;
++}
++
++RVPR64_64_64(srl32, 1, 4);
++
++static inline void do_sll32(CPURISCVState *env, void *vd, void *va,
++                            void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x1f;
++    d[i] = a[i] << shift;
++}
++
++RVPR64_64_64(sll32, 1, 4);
++
++static inline void do_sra32_u(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x1f;
++
++    d[i] = vssra32(env, 0, a[i], shift);
++}
++
++RVPR64_64_64(sra32_u, 1, 4);
++
++static inline void do_srl32_u(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va;
++    uint8_t shift = *(uint8_t *)vb & 0x1f;
++
++    d[i] = vssrl32(env, 0, a[i], shift);
++}
++
++RVPR64_64_64(srl32_u, 1, 4);
++
++static inline void do_ksll32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, result;
++    uint8_t shift = *(uint64_t *)vb & 0x1f;
++
++    result = a[i] << shift;
++    if (shift > clrsb32(a[i])) {
++        env->vxsat = 0x1;
++        d[i] = (a[i] & INT32_MIN) ? INT32_MIN : INT32_MAX;
++    } else {
++        d[i] = result;
++    }
++}
++
++RVPR64_64_64(ksll32, 1, 4);
++
++static inline void do_kslra32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++    int64_t shift = sextract64(*(uint64_t *)vb, 0, 6);
++
++    if (shift >= 0) {
++        do_ksll32(env, vd, va, vb, i);
++    } else {
++        shift = -shift;
++        shift = (shift == 32) ? 31 : shift;
++        d[i] = a[i] >> shift;
++    }
++}
++
++RVPR64_64_64(kslra32, 1, 4);
++
++static inline void do_kslra32_u(CPURISCVState *env, void *vd, void *va,
++                                void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va;
++    int32_t shift = sextract32((*(uint32_t *)vb), 0, 6);
++
++    if (shift >= 0) {
++        do_ksll32(env, vd, va, vb, i);
++    } else {
++        shift = -shift;
++        shift = (shift == 32) ? 31 : shift;
++        d[i] = vssra32(env, 0, a[i], shift);
++    }
++}
++
++RVPR64_64_64(kslra32_u, 1, 4);
++
++/* (RV64 Only) SIMD 32-bit Miscellaneous Instructions */
++static inline void do_smin32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] < b[i]) ? a[i] : b[i];
++}
++
++RVPR64_64_64(smin32, 1, 4);
++
++static inline void do_umin32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] < b[i]) ? a[i] : b[i];
++}
++
++RVPR64_64_64(umin32, 1, 4);
++
++static inline void do_smax32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int32_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] > b[i]) ? a[i] : b[i];
++}
++
++RVPR64_64_64(smax32, 1, 4);
++
++static inline void do_umax32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++
++    d[i] = (a[i] > b[i]) ? a[i] : b[i];
++}
++
++RVPR64_64_64(umax32, 1, 4);
++
++static inline void do_kabs32(CPURISCVState *env, void *vd, void *va, uint8_t i)
++{
++    int32_t *d = vd, *a = va;
++
++    if (a[i] == INT32_MIN) {
++        d[i] = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        d[i] = abs(a[i]);
++    }
++}
++
++RVPR2(kabs32, 1, 4);
++
++/* (RV64 Only) SIMD Q15 saturating Multiply Instructions */
++static inline void do_khmbb16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++
++    d[H4(i / 2)] = sat64(env, (int64_t)a[H2(i)] * b[H2(i)] >> 15, 15);
++}
++
++RVPR64_64_64(khmbb16, 2, 2);
++
++static inline void do_khmbt16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++
++    d[H4(i / 2)] = sat64(env, (int64_t)a[H2(i)] * b[H2(i + 1)] >> 15, 15);
++}
++
++RVPR64_64_64(khmbt16, 2, 2);
++
++static inline void do_khmtt16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++
++    d[H4(i / 2)] = sat64(env, (int64_t)a[H2(i + 1)] * b[H2(i + 1)] >> 15, 15);
++}
++
++RVPR64_64_64(khmtt16, 2, 2);
++
++static inline void do_kdmbb16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++
++    if (a[H2(i)] == INT16_MIN && b[H2(i)] == INT16_MIN) {
++        d[H4(i / 2)] = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        d[H4(i / 2)] = (int64_t)a[H2(i)] * b[H2(i)] << 1;
++    }
++}
++
++RVPR64_64_64(kdmbb16, 2, 2);
++
++static inline void do_kdmbt16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++
++    if (a[H2(i)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        d[H4(i / 2)] = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        d[H4(i / 2)] = (int64_t)a[H2(i)] * b[H2(i + 1)] << 1;
++    }
++}
++
++RVPR64_64_64(kdmbt16, 2, 2);
++
++static inline void do_kdmtt16(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++
++    if (a[H2(i + 1)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        d[H4(i / 2)] = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        d[H4(i / 2)] = (int64_t)a[H2(i + 1)] * b[H2(i + 1)] << 1;
++    }
++}
++
++RVPR64_64_64(kdmtt16, 2, 2);
++
++static inline void do_kdmabb16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, void *vc, uint8_t i)
++
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    int32_t *c = vc, m0;
++
++    if (a[H2(i)] == INT16_MIN && b[H2(i)] == INT16_MIN) {
++        m0 = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        m0 = (int32_t)a[H2(i)] * b[H2(i)] << 1;
++    }
++    d[H4(i / 2)] = sadd32(env, 0, c[H4(i / 2)], m0);
++}
++
++RVPR_ACC(kdmabb16, 2, 2);
++
++static inline void do_kdmabt16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, void *vc, uint8_t i)
++
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    int32_t *c = vc, m0;
++
++    if (a[H2(i)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        m0 = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        m0 = (int32_t)a[H2(i)] * b[H2(i + 1)] << 1;
++    }
++    d[H4(i / 2)] = sadd32(env, 0, c[H4(i / 2)], m0);
++}
++
++RVPR_ACC(kdmabt16, 2, 2);
++
++static inline void do_kdmatt16(CPURISCVState *env, void *vd, void *va,
++                               void *vb, void *vc, uint8_t i)
++
++{
++    int32_t *d = vd;
++    int16_t *a = va, *b = vb;
++    int32_t *c = vc, m0;
++
++    if (a[H2(i + 1)] == INT16_MIN && b[H2(i + 1)] == INT16_MIN) {
++        m0 = INT32_MAX;
++        env->vxsat = 0x1;
++    } else {
++        m0 = (int32_t)a[H2(i + 1)] * b[H2(i + 1)] << 1;
++    }
++    d[H4(i / 2)] = sadd32(env, 0, c[H4(i / 2)], m0);
++}
++
++RVPR_ACC(kdmatt16, 2, 2);
++
++/* (RV64 Only) 32-bit Multiply Instructions */
++static inline void do_smbb32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int64_t *d = vd;
++    int32_t *a = va, *b = vb;
++    *d = (int64_t)a[H4(2 * i)] * b[H4(2 * i)];
++}
++
++RVPR64_64_64(smbb32, 1, 8);
++
++static inline void do_smbt32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int64_t *d = vd;
++    int32_t *a = va, *b = vb;
++    *d = (int64_t)a[H4(2 * i)] * b[H4(2 * i + 1)];
++}
++
++RVPR64_64_64(smbt32, 1, 8);
++
++static inline void do_smtt32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int64_t *d = vd;
++    int32_t *a = va, *b = vb;
++    *d = (int64_t)a[H4(2 * i + 1)] * b[H4(2 * i + 1)];
++}
++
++RVPR64_64_64(smtt32, 1, 8);
++
++/* (RV64 Only) 32-bit Multiply & Add Instructions */
++static inline void do_kmabb32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int32_t *a = va, *b = vb;
++    *d = sadd64(env, 0, (int64_t)a[H4(2 * i)] * b[H4(2 * i)], *c);
++}
++
++RVPR_ACC(kmabb32, 1, 8);
++
++static inline void do_kmabt32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int32_t *a = va, *b = vb;
++    *d = sadd64(env, 0, (int64_t)a[H4(2 * i)] * b[H4(2 * i + 1)], *c);
++}
++
++RVPR_ACC(kmabt32, 1, 8);
++
++static inline void do_kmatt32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int32_t *a = va, *b = vb;
++    *d = sadd64(env, 0, (int64_t)a[H4(2 * i + 1)] * b[H4(2 * i + 1)], *c);
++}
++
++RVPR_ACC(kmatt32, 1, 8);
++
++/* (RV64 Only) 32-bit Parallel Multiply & Add Instructions */
++static inline void do_kmda32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int64_t *d = vd;
++    int32_t *a = va, *b = vb;
++    if (a[H4(i)] == INT32_MIN && b[H4(i)] == INT32_MIN &&
++        a[H4(i + 1)] == INT32_MIN && b[H4(i + 1)] == INT32_MIN) {
++        *d = INT64_MAX;
++        env->vxsat = 0x1;
++    } else {
++        *d = (int64_t)a[H4(i)] * b[H4(i)] +
++             (int64_t)a[H4(i + 1)] * b[H4(i + 1)];
++    }
++}
++
++RVPR64_64_64(kmda32, 1, 8);
++
++static inline void do_kmxda32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int64_t *d = vd;
++    int32_t *a = va, *b = vb;
++    if (a[H4(i)] == INT32_MIN && b[H4(i)] == INT32_MIN &&
++        a[H4(i + 1)] == INT32_MIN && b[H4(i + 1)] == INT32_MIN) {
++        *d = INT64_MAX;
++        env->vxsat = 0x1;
++    } else {
++        *d = (int64_t)a[H4(i)] * b[H4(i + 1)] +
++             (int64_t)a[H4(i + 1)] * b[H4(i)];
++    }
++}
++
++RVPR64_64_64(kmxda32, 1, 8);
++
++static inline void do_kmaxda32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int32_t *a = va, *b = vb;
++    int64_t p1, p2;
++    p1 = (int64_t)a[H4(i)] * b[H4(i + 1)];
++    p2 = (int64_t)a[H4(i + 1)] * b[H4(i)];
++
++    if (a[H4(i)] == INT32_MIN && a[H4(i + 1)] == INT32_MIN &&
++        b[H4(i)] == INT32_MIN && b[H4(i + 1)] == INT32_MIN) {
++        if (*d < 0) {
++            *d = (INT64_MAX + *c) + 1ll;
++        } else {
++            env->vxsat = 0x1;
++            *d = INT64_MAX;
++        }
++    } else {
++        *d = sadd64(env, 0, p1 + p2, *c);
++    }
++}
++
++RVPR_ACC(kmaxda32, 1, 8);
++
++static inline void do_kmads32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int32_t *a = va, *b = vb;
++    int64_t t0, t1;
++    t1 = (int64_t)a[H4(i + 1)] * b[H4(i + 1)];
++    t0 = (int64_t)a[H4(i)] * b[H4(i)];
++
++    *d = sadd64(env, 0, t1 - t0, *c);
++}
++
++RVPR_ACC(kmads32, 1, 8);
++
++static inline void do_kmadrs32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int32_t *a = va, *b = vb;
++    int64_t t0, t1;
++    t1 = (int64_t)a[H4(i + 1)] * b[H4(i + 1)];
++    t0 = (int64_t)a[H4(i)] * b[H4(i)];
++
++    *d = sadd64(env, 0, t0 - t1, *c);
++}
++
++RVPR_ACC(kmadrs32, 1, 8);
++
++static inline void do_kmaxds32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int32_t *a = va, *b = vb;
++    int64_t t01, t10;
++    t01 = (int64_t)a[H4(i)] * b[H4(i + 1)];
++    t10 = (int64_t)a[H4(i + 1)] * b[H4(i)];
++
++    *d = sadd64(env, 0, t10 - t01, *c);
++}
++
++RVPR_ACC(kmaxds32, 1, 8);
++
++static inline void do_kmsda32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int32_t *a = va, *b = vb;
++    int64_t t0, t1;
++    t0 = (int64_t)a[H4(i)] * b[H4(i)];
++    t1 = (int64_t)a[H4(i + 1)] * b[H4(i + 1)];
++
++    if (a[H4(i)] == INT32_MIN && a[H4(i + 1)] == INT32_MIN &&
++        b[H4(i)] == INT32_MIN && b[H4(i + 1)] == INT32_MIN) {
++        if (*c < 0) {
++            env->vxsat = 0x1;
++            *d = INT64_MIN;
++        } else {
++            *d = *c - 1ll - INT64_MAX;
++        }
++    } else {
++        *d = ssub64(env, 0, *c, t0 + t1);
++    }
++}
++
++RVPR_ACC(kmsda32, 1, 8);
++
++static inline void do_kmsxda32(CPURISCVState *env, void *vd, void *va,
++                               void *vb, void *vc, uint8_t i)
++{
++    int64_t *d = vd, *c = vc;
++    int32_t *a = va, *b = vb;
++    int64_t t01, t10;
++    t10 = (int64_t)a[H4(i + 1)] * b[H4(i)];
++    t01 = (int64_t)a[H4(i)] * b[H4(i + 1)];
++
++    if (a[H4(i)] == INT32_MIN && a[H4(i + 1)] == INT32_MIN &&
++        b[H4(i)] == INT32_MIN && b[H4(i + 1)] == INT32_MIN) {
++        if (*c < 0) {
++            env->vxsat = 0x1;
++            *d = INT64_MIN;
++        } else {
++            *d = *c - 1ll - INT64_MAX;
++        }
++    } else {
++        *d = ssub64(env, 0, *c, t10 + t01);
++    }
++}
++
++RVPR_ACC(kmsxda32, 1, 8);
++
++static inline void do_smds32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    int64_t *d = vd;
++    int32_t *a = va, *b = vb;
++    *d = (int64_t)a[H4(i + 1)] * b[H4(i + 1)] -
++         (int64_t)a[H4(i)] * b[H4(i)];
++}
++
++RVPR64_64_64(smds32, 1, 8);
++
++static inline void do_smdrs32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int64_t *d = vd;
++    int32_t *a = va, *b = vb;
++    *d = (int64_t)a[H4(i)] * b[H4(i)] -
++         (int64_t)a[H4(i + 1)] * b[H4(i + 1)];
++}
++
++RVPR64_64_64(smdrs32, 1, 8);
++
++static inline void do_smxds32(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int64_t *d = vd;
++    int32_t *a = va, *b = vb;
++    *d = (int64_t)a[H4(i + 1)] * b[H4(i)] -
++         (int64_t)a[H4(i)] * b[H4(i + 1)];
++}
++
++RVPR64_64_64(smxds32, 1, 8);
++
++/* (RV64 Only) Non-SIMD 32-bit Shift Instructions */
++static inline void do_sraiw_u(CPURISCVState *env, void *vd, void *va,
++                              void *vb, uint8_t i)
++{
++    int64_t *d = vd;
++    int32_t *a = va;
++    uint8_t shift = *(uint8_t *)vb;
++
++    *d = vssra32(env, 0, a[H4(i)], shift);
++}
++
++RVPR64_64_64(sraiw_u, 1, 8);
++
++/* (RV64 Only)  32-bit packing instructions here */
++static inline void do_pkbb32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = b[H4(i)];
++    d[H4(i + 1)] = a[H4(i)];
++}
++
++RVPR64_64_64(pkbb32, 2, 4);
++
++static inline void do_pkbt32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = b[H4(i + 1)];
++    d[H4(i + 1)] = a[H4(i)];
++}
++
++RVPR64_64_64(pkbt32, 2, 4);
++
++static inline void do_pktb32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = b[H4(i)];
++    d[H4(i + 1)] = a[H4(i + 1)];
++}
++
++RVPR64_64_64(pktb32, 2, 4);
++
++static inline void do_pktt32(CPURISCVState *env, void *vd, void *va,
++                             void *vb, uint8_t i)
++{
++    uint32_t *d = vd, *a = va, *b = vb;
++    d[H4(i)] = b[H4(i + 1)];
++    d[H4(i + 1)] = a[H4(i + 1)];
++}
++
++RVPR64_64_64(pktt32, 2, 4);
+diff --git a/target/riscv/tcg/tcg-cpu.c b/target/riscv/tcg/tcg-cpu.c
+index a51f7e8778..e51a350182 100644
+--- a/target/riscv/tcg/tcg-cpu.c
++++ b/target/riscv/tcg/tcg-cpu.c
+@@ -198,6 +198,35 @@ static void riscv_cpu_validate_priv_spec(RISCVCPU *cpu, Error **errp)
+     }
+ }
+ 
++static void riscv_cpu_validate_p(CPURISCVState *env, RISCVCPUConfig *cfg,
++                                 Error **errp)
++{
++    if (cfg->ext_zvknha || cfg->ext_zvknhb) {
++        error_setg(errp, "The Zvknh"
++                         "sub-extension is conflict with RVP.");
++        return;
++    }
++    if (cfg->pext_spec) {
++        if (!g_strcmp0(cfg->pext_spec, "v0.5.2")) {
++                    env->pext_ver = PEXT_VERSION_0_05_2;
++        } else {
++            error_setg(errp, "Unsupported packed spec version '%s'",
++                       cfg->pext_spec);
++            return;
++        }
++    } else {
++            qemu_log("packed verison is not specified, "
++                     "use the default value v0.9.4\n");
++    }
++    if (riscv_cpu_mxl(env) == MXL_RV64) {
++        if (!cfg->ext_psfoperand) {
++            error_setg(errp, "The Zpsfoperand"
++                             "sub-extensions is required for RV64P.");
++            return;
++        }
++    }
++}
++
+ static void riscv_cpu_validate_v(CPURISCVState *env, RISCVCPUConfig *cfg,
+                                  Error **errp)
+ {
+@@ -372,6 +401,14 @@ void riscv_cpu_validate_set_extensions(RISCVCPU *cpu, Error **errp)
+         return;
+     }
+ 
++    if (riscv_has_ext(env, RVP)) {
++        riscv_cpu_validate_p(env, &cpu->cfg, &local_err);
++        if (local_err != NULL) {
++            error_propagate(errp, local_err);
++            return;
++        }
++    }
++
+     if (riscv_has_ext(env, RVV)) {
+         riscv_cpu_validate_v(env, &cpu->cfg, &local_err);
+         if (local_err != NULL) {
+@@ -1023,6 +1060,7 @@ static void riscv_init_max_cpu_extensions(Object *obj)
+ 
+     /* set vector version */
+     env->vext_ver = VEXT_VERSION_1_00_0;
++    env->pext_ver = PEXT_VERSION_0_05_2;
+ 
+     /* Zfinx is not compatible with F. Disable it */
+     isa_ext_update_enabled(cpu, CPU_CFG_OFFSET(ext_zfinx), false);
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index 161a22f1ba..a4b8ef6836 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -1099,6 +1099,8 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+ #include "insn_trans/trans_rvf.c.inc"
+ #include "insn_trans/trans_rvd.c.inc"
+ #include "insn_trans/trans_rvh.c.inc"
++#include "decode-insn32_rvp.c.inc"
++#include "insn_trans/trans_rvp.c.inc"
+ #include "insn_trans/trans_rvv.c.inc"
+ #include "insn_trans/trans_rvb.c.inc"
+ #include "insn_trans/trans_rvzicond.c.inc"
+@@ -1149,6 +1151,7 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
+         bool (*decode_func)(DisasContext *, uint32_t);
+     } decoders[] = {
+         { always_true_p,  decode_insn32 },
++        { has_no_zvknh_p, decode_insn32_rvp},
+         { has_xthead_p, decode_xthead },
+         { has_XVentanaCondOps_p,  decode_XVentanaCodeOps },
+         { has_XAndesV5Ops_p,  decode_XAndesV5Ops },
+diff --git a/target/riscv/vector_helper.c b/target/riscv/vector_helper.c
+index fa7bfe9f4c..7a850ce10f 100644
+--- a/target/riscv/vector_helper.c
++++ b/target/riscv/vector_helper.c
+@@ -1959,8 +1959,7 @@ void HELPER(NAME)(void *vd, void *v0, void *vs1, void *vs2,     \
+                  do_##NAME, ESZ);                               \
+ }
+ 
+-static inline uint8_t saddu8(CPURISCVState *env, int vxrm, uint8_t a,
+-                             uint8_t b)
++uint8_t saddu8(CPURISCVState *env, int vxrm, uint8_t a, uint8_t b)
+ {
+     uint8_t res = a + b;
+     if (res < a) {
+@@ -1970,8 +1969,7 @@ static inline uint8_t saddu8(CPURISCVState *env, int vxrm, uint8_t a,
+     return res;
+ }
+ 
+-static inline uint16_t saddu16(CPURISCVState *env, int vxrm, uint16_t a,
+-                               uint16_t b)
++uint16_t saddu16(CPURISCVState *env, int vxrm, uint16_t a, uint16_t b)
+ {
+     uint16_t res = a + b;
+     if (res < a) {
+@@ -1981,8 +1979,7 @@ static inline uint16_t saddu16(CPURISCVState *env, int vxrm, uint16_t a,
+     return res;
+ }
+ 
+-static inline uint32_t saddu32(CPURISCVState *env, int vxrm, uint32_t a,
+-                               uint32_t b)
++uint32_t saddu32(CPURISCVState *env, int vxrm, uint32_t a, uint32_t b)
+ {
+     uint32_t res = a + b;
+     if (res < a) {
+@@ -1992,8 +1989,7 @@ static inline uint32_t saddu32(CPURISCVState *env, int vxrm, uint32_t a,
+     return res;
+ }
+ 
+-static inline uint64_t saddu64(CPURISCVState *env, int vxrm, uint64_t a,
+-                               uint64_t b)
++uint64_t saddu64(CPURISCVState *env, int vxrm, uint64_t a, uint64_t b)
+ {
+     uint64_t res = a + b;
+     if (res < a) {
+@@ -2094,7 +2090,7 @@ GEN_VEXT_VX_RM(vsaddu_vx_h, 2)
+ GEN_VEXT_VX_RM(vsaddu_vx_w, 4)
+ GEN_VEXT_VX_RM(vsaddu_vx_d, 8)
+ 
+-static inline int8_t sadd8(CPURISCVState *env, int vxrm, int8_t a, int8_t b)
++int8_t sadd8(CPURISCVState *env, int vxrm, int8_t a, int8_t b)
+ {
+     int8_t res = a + b;
+     if ((res ^ a) & (res ^ b) & INT8_MIN) {
+@@ -2104,8 +2100,7 @@ static inline int8_t sadd8(CPURISCVState *env, int vxrm, int8_t a, int8_t b)
+     return res;
+ }
+ 
+-static inline int16_t sadd16(CPURISCVState *env, int vxrm, int16_t a,
+-                             int16_t b)
++int16_t sadd16(CPURISCVState *env, int vxrm, int16_t a, int16_t b)
+ {
+     int16_t res = a + b;
+     if ((res ^ a) & (res ^ b) & INT16_MIN) {
+@@ -2115,8 +2110,7 @@ static inline int16_t sadd16(CPURISCVState *env, int vxrm, int16_t a,
+     return res;
+ }
+ 
+-static inline int32_t sadd32(CPURISCVState *env, int vxrm, int32_t a,
+-                             int32_t b)
++int32_t sadd32(CPURISCVState *env, int vxrm, int32_t a, int32_t b)
+ {
+     int32_t res = a + b;
+     if ((res ^ a) & (res ^ b) & INT32_MIN) {
+@@ -2126,8 +2120,7 @@ static inline int32_t sadd32(CPURISCVState *env, int vxrm, int32_t a,
+     return res;
+ }
+ 
+-static inline int64_t sadd64(CPURISCVState *env, int vxrm, int64_t a,
+-                             int64_t b)
++int64_t sadd64(CPURISCVState *env, int vxrm, int64_t a, int64_t b)
+ {
+     int64_t res = a + b;
+     if ((res ^ a) & (res ^ b) & INT64_MIN) {
+@@ -2155,8 +2148,7 @@ GEN_VEXT_VX_RM(vsadd_vx_h, 2)
+ GEN_VEXT_VX_RM(vsadd_vx_w, 4)
+ GEN_VEXT_VX_RM(vsadd_vx_d, 8)
+ 
+-static inline uint8_t ssubu8(CPURISCVState *env, int vxrm, uint8_t a,
+-                             uint8_t b)
++uint8_t ssubu8(CPURISCVState *env, int vxrm, uint8_t a, uint8_t b)
+ {
+     uint8_t res = a - b;
+     if (res > a) {
+@@ -2166,8 +2158,7 @@ static inline uint8_t ssubu8(CPURISCVState *env, int vxrm, uint8_t a,
+     return res;
+ }
+ 
+-static inline uint16_t ssubu16(CPURISCVState *env, int vxrm, uint16_t a,
+-                               uint16_t b)
++uint16_t ssubu16(CPURISCVState *env, int vxrm, uint16_t a, uint16_t b)
+ {
+     uint16_t res = a - b;
+     if (res > a) {
+@@ -2177,8 +2168,7 @@ static inline uint16_t ssubu16(CPURISCVState *env, int vxrm, uint16_t a,
+     return res;
+ }
+ 
+-static inline uint32_t ssubu32(CPURISCVState *env, int vxrm, uint32_t a,
+-                               uint32_t b)
++uint32_t ssubu32(CPURISCVState *env, int vxrm, uint32_t a, uint32_t b)
+ {
+     uint32_t res = a - b;
+     if (res > a) {
+@@ -2188,8 +2178,7 @@ static inline uint32_t ssubu32(CPURISCVState *env, int vxrm, uint32_t a,
+     return res;
+ }
+ 
+-static inline uint64_t ssubu64(CPURISCVState *env, int vxrm, uint64_t a,
+-                               uint64_t b)
++uint64_t ssubu64(CPURISCVState *env, int vxrm, uint64_t a, uint64_t b)
+ {
+     uint64_t res = a - b;
+     if (res > a) {
+@@ -2217,7 +2206,7 @@ GEN_VEXT_VX_RM(vssubu_vx_h, 2)
+ GEN_VEXT_VX_RM(vssubu_vx_w, 4)
+ GEN_VEXT_VX_RM(vssubu_vx_d, 8)
+ 
+-static inline int8_t ssub8(CPURISCVState *env, int vxrm, int8_t a, int8_t b)
++int8_t ssub8(CPURISCVState *env, int vxrm, int8_t a, int8_t b)
+ {
+     int8_t res = a - b;
+     if ((res ^ a) & (a ^ b) & INT8_MIN) {
+@@ -2227,8 +2216,7 @@ static inline int8_t ssub8(CPURISCVState *env, int vxrm, int8_t a, int8_t b)
+     return res;
+ }
+ 
+-static inline int16_t ssub16(CPURISCVState *env, int vxrm, int16_t a,
+-                             int16_t b)
++int16_t ssub16(CPURISCVState *env, int vxrm, int16_t a, int16_t b)
+ {
+     int16_t res = a - b;
+     if ((res ^ a) & (a ^ b) & INT16_MIN) {
+@@ -2238,8 +2226,7 @@ static inline int16_t ssub16(CPURISCVState *env, int vxrm, int16_t a,
+     return res;
+ }
+ 
+-static inline int32_t ssub32(CPURISCVState *env, int vxrm, int32_t a,
+-                             int32_t b)
++int32_t ssub32(CPURISCVState *env, int vxrm, int32_t a, int32_t b)
+ {
+     int32_t res = a - b;
+     if ((res ^ a) & (a ^ b) & INT32_MIN) {
+@@ -2249,8 +2236,7 @@ static inline int32_t ssub32(CPURISCVState *env, int vxrm, int32_t a,
+     return res;
+ }
+ 
+-static inline int64_t ssub64(CPURISCVState *env, int vxrm, int64_t a,
+-                             int64_t b)
++int64_t ssub64(CPURISCVState *env, int vxrm, int64_t a, int64_t b)
+ {
+     int64_t res = a - b;
+     if ((res ^ a) & (a ^ b) & INT64_MIN) {
+@@ -2564,8 +2550,7 @@ GEN_VEXT_VX_RM(vsmul_vx_w, 4)
+ GEN_VEXT_VX_RM(vsmul_vx_d, 8)
+ 
+ /* Vector Single-Width Scaling Shift Instructions */
+-static inline uint8_t
+-vssrl8(CPURISCVState *env, int vxrm, uint8_t a, uint8_t b)
++uint8_t vssrl8(CPURISCVState *env, int vxrm, uint8_t a, uint8_t b)
+ {
+     uint8_t round, shift = b & 0x7;
+     uint8_t res;
+@@ -2574,24 +2559,21 @@ vssrl8(CPURISCVState *env, int vxrm, uint8_t a, uint8_t b)
+     res = (a >> shift) + round;
+     return res;
+ }
+-static inline uint16_t
+-vssrl16(CPURISCVState *env, int vxrm, uint16_t a, uint16_t b)
++uint16_t vssrl16(CPURISCVState *env, int vxrm, uint16_t a, uint16_t b)
+ {
+     uint8_t round, shift = b & 0xf;
+ 
+     round = get_round(vxrm, a, shift);
+     return (a >> shift) + round;
+ }
+-static inline uint32_t
+-vssrl32(CPURISCVState *env, int vxrm, uint32_t a, uint32_t b)
++uint32_t vssrl32(CPURISCVState *env, int vxrm, uint32_t a, uint32_t b)
+ {
+     uint8_t round, shift = b & 0x1f;
+ 
+     round = get_round(vxrm, a, shift);
+     return (a >> shift) + round;
+ }
+-static inline uint64_t
+-vssrl64(CPURISCVState *env, int vxrm, uint64_t a, uint64_t b)
++uint64_t vssrl64(CPURISCVState *env, int vxrm, uint64_t a, uint64_t b)
+ {
+     uint8_t round, shift = b & 0x3f;
+ 
+@@ -2616,32 +2598,28 @@ GEN_VEXT_VX_RM(vssrl_vx_h, 2)
+ GEN_VEXT_VX_RM(vssrl_vx_w, 4)
+ GEN_VEXT_VX_RM(vssrl_vx_d, 8)
+ 
+-static inline int8_t
+-vssra8(CPURISCVState *env, int vxrm, int8_t a, int8_t b)
++int8_t vssra8(CPURISCVState *env, int vxrm, int8_t a, int8_t b)
+ {
+     uint8_t round, shift = b & 0x7;
+ 
+     round = get_round(vxrm, a, shift);
+     return (a >> shift) + round;
+ }
+-static inline int16_t
+-vssra16(CPURISCVState *env, int vxrm, int16_t a, int16_t b)
++int16_t vssra16(CPURISCVState *env, int vxrm, int16_t a, int16_t b)
+ {
+     uint8_t round, shift = b & 0xf;
+ 
+     round = get_round(vxrm, a, shift);
+     return (a >> shift) + round;
+ }
+-static inline int32_t
+-vssra32(CPURISCVState *env, int vxrm, int32_t a, int32_t b)
++int32_t vssra32(CPURISCVState *env, int vxrm, int32_t a, int32_t b)
+ {
+     uint8_t round, shift = b & 0x1f;
+ 
+     round = get_round(vxrm, a, shift);
+     return (a >> shift) + round;
+ }
+-static inline int64_t
+-vssra64(CPURISCVState *env, int vxrm, int64_t a, int64_t b)
++int64_t vssra64(CPURISCVState *env, int vxrm, int64_t a, int64_t b)
+ {
+     uint8_t round, shift = b & 0x3f;
+ 
+diff --git a/target/riscv/vector_internals.h b/target/riscv/vector_internals.h
+index 8133111e5f..78c3352219 100644
+--- a/target/riscv/vector_internals.h
++++ b/target/riscv/vector_internals.h
+@@ -30,26 +30,6 @@ static inline uint32_t vext_nf(uint32_t desc)
+     return FIELD_EX32(simd_data(desc), VDATA, NF);
+ }
+ 
+-/*
+- * Note that vector data is stored in host-endian 64-bit chunks,
+- * so addressing units smaller than that needs a host-endian fixup.
+- */
+-#if HOST_BIG_ENDIAN
+-#define H1(x)   ((x) ^ 7)
+-#define H1_2(x) ((x) ^ 6)
+-#define H1_4(x) ((x) ^ 4)
+-#define H2(x)   ((x) ^ 3)
+-#define H4(x)   ((x) ^ 1)
+-#define H8(x)   ((x))
+-#else
+-#define H1(x)   (x)
+-#define H1_2(x) (x)
+-#define H1_4(x) (x)
+-#define H2(x)   (x)
+-#define H4(x)   (x)
+-#define H8(x)   (x)
+-#endif
+-
+ /*
+  * Encode LMUL to lmul as following:
+  *     LMUL    vlmul    lmul
+-- 
+2.34.1
+

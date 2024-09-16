@@ -1,0 +1,38 @@
+From 7b095d79a749baf1618d4df95ffb923b116d6d96 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 28 Dec 2023 10:30:11 +0800
+Subject: [PATCH 160/241] gdbstub: Let gdb unsupported 'nds' command to return
+ 'OK' directly
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ gdbstub/andes_ace_gdb.c.inc | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/gdbstub/andes_ace_gdb.c.inc b/gdbstub/andes_ace_gdb.c.inc
+index 87a65d40d7..1a56b09ba8 100644
+--- a/gdbstub/andes_ace_gdb.c.inc
++++ b/gdbstub/andes_ace_gdb.c.inc
+@@ -117,6 +117,7 @@ int32_t gdb_ace_get_file_name_for_gdb(unsigned char *platform, char *soname)
+ #define NDS_QUERY_ENDIAN_CMD    "nds query endian"
+ #define NDS_QUERY_CPUID_CMD     "nds query cpuid"
+ #define NDS_ACE_CMD             "nds ace "
++#define NDS_OTHER_CMD           "nds "
+ 
+ int gdb_handle_query_rcmd_nds_query(GArray *params, void *user_ctx)
+ {
+@@ -164,6 +165,11 @@ int gdb_handle_query_rcmd_nds_query(GArray *params, void *user_ctx)
+         gdb_put_strbuf();
+         return 0;
+     }
++    if (!strncmp((const char *)gdbserver_state.mem_buf->data,
++        NDS_OTHER_CMD, strlen(NDS_OTHER_CMD))) {
++         gdb_put_packet("OK");
++        return 0;
++    }
+     return -1;
+ }
+ #endif
+-- 
+2.34.1
+

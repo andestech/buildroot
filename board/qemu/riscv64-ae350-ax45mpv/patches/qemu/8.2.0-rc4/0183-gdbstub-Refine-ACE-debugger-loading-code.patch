@@ -1,0 +1,116 @@
+From 6dbdbf79df3843dd38d413c3fcfe24d426aaa7f6 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 26 Jan 2024 09:35:41 +0800
+Subject: [PATCH 183/241] gdbstub: Refine ACE debugger loading code
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ gdbstub/andes_ace_gdb.c.inc         | 28 ++++++++++++----------------
+ target/riscv/andes_ace_helper.c.inc |  2 +-
+ target/riscv/gdbstub.c              |  8 ++++++++
+ 3 files changed, 21 insertions(+), 17 deletions(-)
+
+diff --git a/gdbstub/andes_ace_gdb.c.inc b/gdbstub/andes_ace_gdb.c.inc
+index 1a56b09ba8..68d9977bba 100644
+--- a/gdbstub/andes_ace_gdb.c.inc
++++ b/gdbstub/andes_ace_gdb.c.inc
+@@ -19,19 +19,9 @@ ACR_INFO_T_V5 *global_acr_info_list_v5;
+ INSN_CODE_T_V5* (*gen_get_value_code) (char *name, unsigned index);
+ INSN_CODE_T_V5* (*gen_set_value_code) (char *name, unsigned index);
+ 
+-#define LE(msg) do {        \
+-    err_str = dlerror();    \
+-    if (err_str != NULL) {  \
+-        qemu_printf("%s\n", msg);  \
+-        return -1;          \
+-    }                       \
+-} while (0)
+-
+ int32_t gdb_ace_load_lib(const char *so_name)
+ {
+-    char *err_str = NULL;
+     void *handle;
+-
+     /*
+      * Check whether already load ACE debugger library,
+      * we don't support multi-ace and/or multi-ace-dbg
+@@ -42,17 +32,23 @@ int32_t gdb_ace_load_lib(const char *so_name)
+ 
+     /* dlopen a shared object named 'so_name' */
+     handle = dlopen(so_name, RTLD_NOW | RTLD_LOCAL);
+-    LE("unable to dlopen the acelibdbg library");
+-
+-    assert(handle != NULL);
++    if (handle == NULL) {
++        return -1;
++    }
+ 
+     global_ace_lib_for_gdb_v5 =
+         (const char *) dlsym(handle, "ace_lib_for_gdb");
+-    LE("unable to load symbol ace_lib_for_gdb");
++    if (global_ace_lib_for_gdb_v5 == NULL) {
++        qemu_printf("Unable to load symbol ace_lib_for_gdb\n");
++        return -1;
++    }
+ 
+     global_ace_lib_for_gdb_len_v5 =
+         (unsigned *) dlsym(handle, "ace_lib_for_gdb_len");
+-    LE("unable to load symbol ace_lib_for_gdb_len");
++    if (global_ace_lib_for_gdb_len_v5 == NULL) {
++        qemu_printf("Unable to load symbol ace_lib_for_gdb_len\n");
++        return -1;
++    }
+ 
+     /*
+      * Below ACR relative symbols can be skip since some .ace file
+@@ -167,7 +163,7 @@ int gdb_handle_query_rcmd_nds_query(GArray *params, void *user_ctx)
+     }
+     if (!strncmp((const char *)gdbserver_state.mem_buf->data,
+         NDS_OTHER_CMD, strlen(NDS_OTHER_CMD))) {
+-         gdb_put_packet("OK");
++        gdb_put_packet("OK");
+         return 0;
+     }
+     return -1;
+diff --git a/target/riscv/andes_ace_helper.c.inc b/target/riscv/andes_ace_helper.c.inc
+index 8cf68c4228..93638b3467 100644
+--- a/target/riscv/andes_ace_helper.c.inc
++++ b/target/riscv/andes_ace_helper.c.inc
+@@ -36,7 +36,7 @@ int32_t qemu_ace_load_wrapper(const char *filename, target_ulong hartid)
+         return 0;
+     }
+     aceapis[hartid].qemu_ace_wrapper_handle = dlopen(filename,
+-                                                     RTLD_NOW | RTLD_DEEPBIND);
++                                                     RTLD_NOW | RTLD_LOCAL);
+     if (!aceapis[hartid].qemu_ace_wrapper_handle) {
+         return -1;
+     }
+diff --git a/target/riscv/gdbstub.c b/target/riscv/gdbstub.c
+index 75b97b29a2..bfa68d2fdc 100644
+--- a/target/riscv/gdbstub.c
++++ b/target/riscv/gdbstub.c
+@@ -276,6 +276,10 @@ static int nds_ace_get_reg(CPURISCVState *env, int reg_n)
+     uint32_t curr_reg_no = 0;
+     ACR_INFO_T_V5 *acr_info_list_v5 = global_acr_info_list_v5;
+ 
++    if (global_acr_info_list_v5 == NULL) {
++        return 0;
++    }
++
+     /* Check ACR get function whether exist */
+     if (gen_get_value_code == NULL) {
+         return -1;
+@@ -394,6 +398,10 @@ static int nds_ace_set_reg(CPURISCVState *env, unsigned char *val, int reg_n)
+     uint32_t curr_reg_no = 0;
+     ACR_INFO_T_V5 *acr_info_list_v5 = global_acr_info_list_v5;
+ 
++    if (global_acr_info_list_v5 == NULL) {
++        return 0;
++    }
++
+     /* Check ACR get function whether exist */
+     if (gen_set_value_code == NULL) {
+         return -1;
+-- 
+2.34.1
+

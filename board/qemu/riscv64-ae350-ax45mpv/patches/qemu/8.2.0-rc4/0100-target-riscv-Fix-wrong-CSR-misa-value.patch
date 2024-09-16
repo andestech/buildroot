@@ -1,0 +1,33 @@
+From 3ed9cce3b410f5f874dc4a3a79696504e59e4658 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 27 Oct 2023 09:16:01 +0800
+Subject: [PATCH 100/241] target/riscv: Fix wrong CSR misa value.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 5354a40476..c7d9286855 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -696,7 +696,6 @@ static void rv64_andes_common_cpu_init(Object *obj, fp_spec_csr_init_fn spec_csr
+     if (!env->misa_ext) {
+         set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     }
+-    riscv_cpu_add_user_properties(obj);
+     register_andes_cpu_props(obj);
+     env->priv_ver = PRIV_VERSION_1_12_0;
+ 
+@@ -991,7 +990,6 @@ static void rv32_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+     if (!env->misa_ext) {
+         set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     }
+-    riscv_cpu_add_user_properties(obj);
+     register_andes_cpu_props(obj);
+     env->priv_ver = PRIV_VERSION_1_12_0;
+ 
+-- 
+2.34.1
+

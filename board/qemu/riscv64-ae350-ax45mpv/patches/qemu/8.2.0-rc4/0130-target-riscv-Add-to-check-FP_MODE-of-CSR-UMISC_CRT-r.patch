@@ -1,0 +1,261 @@
+From a3aef9191e0a8b8f3ac34349662619f7485c4143 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 23 Nov 2023 13:35:55 +0800
+Subject: [PATCH 130/241] target/riscv: Add to check FP_MODE of CSR UMISC_CRT
+ register for BF16/FP16 mode switch status
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/andes_fpu_helper.c | 39 +++++++++++++++++--------
+ target/riscv/andes_fpu_helper.h |  2 +-
+ target/riscv/fpu_helper.c       |  4 +--
+ target/riscv/vector_helper.c    | 50 +++++++++++++++++++++++++++++----
+ 4 files changed, 74 insertions(+), 21 deletions(-)
+
+diff --git a/target/riscv/andes_fpu_helper.c b/target/riscv/andes_fpu_helper.c
+index 26b0dbc2ec..2079c58560 100644
+--- a/target/riscv/andes_fpu_helper.c
++++ b/target/riscv/andes_fpu_helper.c
+@@ -14,14 +14,20 @@
+ #include "internals.h"
+ #include "andes_fpu_helper.h"
+ 
+-int check_fp_mode(void)
++bool check_fp_mode(CPURISCVState *env)
+ {
+-    return true;
++    target_ulong umisc_ctl_val;
++    RISCVException ret;
++    ret = riscv_csrrw(env, CSR_UMISC_CTL, &umisc_ctl_val, 0, 0);
++    if (ret != RISCV_EXCP_NONE) {
++        return false;
++    }
++    return (umisc_ctl_val & MASK_UMISC_CTL_FP_MODE);
+ }
+ 
+ float16 nds_check_nanbox_h(CPURISCVState *env, uint64_t f)
+ {
+-    if (check_fp_mode()) {
++    if (check_fp_mode(env)) {
+         return check_nanbox_h_bf16(env, f);
+     }
+     return check_nanbox_h(env, f);
+@@ -30,7 +36,8 @@ float16 nds_check_nanbox_h(CPURISCVState *env, uint64_t f)
+ #define GEN_NDS_FP_MODE_TYPE1(FP16, BF16, ITYPE, OTYPE) \
+ OTYPE nds_##FP16(ITYPE a, float_status *status)         \
+ {                                                       \
+-    if (check_fp_mode()) {                              \
++    CPURISCVState *env = container_of(status, CPURISCVState, fp_status); \
++    if (check_fp_mode(env)) {                              \
+         return BF16(a, status);                         \
+     }                                                   \
+     return FP16(a, status);                             \
+@@ -39,7 +46,8 @@ OTYPE nds_##FP16(ITYPE a, float_status *status)         \
+ #define GEN_NDS_FP_MODE_TYPE2(FP16, BF16, ITYPE, ITYPE2, OTYPE) \
+ OTYPE nds_##FP16(ITYPE a, ITYPE2 b, float_status *status)       \
+ {                                                               \
+-    if (check_fp_mode()) {                                      \
++    CPURISCVState *env = container_of(status, CPURISCVState, fp_status); \
++    if (check_fp_mode(env)) {                                      \
+         return BF16(a, b, status);                              \
+     }                                                           \
+     return FP16(a, b, status);                                  \
+@@ -48,7 +56,8 @@ OTYPE nds_##FP16(ITYPE a, ITYPE2 b, float_status *status)       \
+ float16 nds_float16_muladd(float16 a, float16 b, float16 c,
+     int z, float_status *status)
+ {
+-    if (check_fp_mode()) {
++    CPURISCVState *env = container_of(status, CPURISCVState, fp_status);
++    if (check_fp_mode(env)) {
+         return bfloat16_muladd(a, b, c, z, status);
+     }
+     return float16_muladd(a, b, c, z, status);
+@@ -95,7 +104,8 @@ GEN_NDS_FP_MODE_TYPE1(uint64_to_float16, uint64_to_bfloat16, uint64_t, float16);
+ /* Since fp16 and bf16 below four functions are differnt parameters */
+ float16 nds_float32_to_float16(float32 a, bool b, float_status *status)
+ {
+-    if (check_fp_mode()) {
++    CPURISCVState *env = container_of(status, CPURISCVState, fp_status);
++    if (check_fp_mode(env)) {
+         /* bf16 function doesn't have ieee option */
+         return float32_to_bfloat16(a, status);
+     }
+@@ -103,7 +113,8 @@ float16 nds_float32_to_float16(float32 a, bool b, float_status *status)
+ }
+ float32 nds_float16_to_float32(float16 a, bool b, float_status *status)
+ {
+-    if (check_fp_mode()) {
++    CPURISCVState *env = container_of(status, CPURISCVState, fp_status);
++    if (check_fp_mode(env)) {
+         /* bf16 function doesn't have ieee option */
+         return bfloat16_to_float32(a, status);
+     }
+@@ -111,7 +122,8 @@ float32 nds_float16_to_float32(float16 a, bool b, float_status *status)
+ }
+ float16 nds_float64_to_float16(float64 a, bool b, float_status *status)
+ {
+-    if (check_fp_mode()) {
++    CPURISCVState *env = container_of(status, CPURISCVState, fp_status);
++    if (check_fp_mode(env)) {
+         /* bf16 function doesn't have ieee option */
+         return float64_to_bfloat16(a, status);
+     }
+@@ -119,7 +131,8 @@ float16 nds_float64_to_float16(float64 a, bool b, float_status *status)
+ }
+ float64 nds_float16_to_float64(float16 a, bool b, float_status *status)
+ {
+-    if (check_fp_mode()) {
++    CPURISCVState *env = container_of(status, CPURISCVState, fp_status);
++    if (check_fp_mode(env)) {
+         /* bf16 function doesn't have ieee option */
+         return bfloat16_to_float64(a, status);
+     }
+@@ -145,14 +158,16 @@ GEN_NDS_FP_MODE_TYPE1(int8_to_float16, int8_to_bfloat16, int8_t, float16);
+ /* int4 */
+ float16 nds_int64_to_float16_scalbn(int64_t a, int b, float_status *status)
+ {
+-    if (check_fp_mode()) {
++    CPURISCVState *env = container_of(status, CPURISCVState, fp_status);
++    if (check_fp_mode(env)) {
+         return int64_to_bfloat16_scalbn(a, b, status);
+     }
+     return int64_to_float16_scalbn(a, b, status);
+ }
+ float16 nds_uint64_to_float16_scalbn(uint64_t a, int b, float_status *status)
+ {
+-    if (check_fp_mode()) {
++    CPURISCVState *env = container_of(status, CPURISCVState, fp_status);
++    if (check_fp_mode(env)) {
+         return uint64_to_bfloat16_scalbn(a, b, status);
+     }
+     return uint64_to_float16_scalbn(a, b, status);
+diff --git a/target/riscv/andes_fpu_helper.h b/target/riscv/andes_fpu_helper.h
+index f048f47c50..b5e5b995c3 100644
+--- a/target/riscv/andes_fpu_helper.h
++++ b/target/riscv/andes_fpu_helper.h
+@@ -11,7 +11,7 @@
+ #include "exec/exec-all.h"
+ #include "fpu/softfloat.h"
+ 
+-int check_fp_mode(void);
++bool check_fp_mode(CPURISCVState *env);
+ float16 nds_check_nanbox_h(CPURISCVState *env, uint64_t f);
+ 
+ float16 nds_float16_muladd(float16, float16, float16, int,
+diff --git a/target/riscv/fpu_helper.c b/target/riscv/fpu_helper.c
+index 0e7c09879f..1167d1294f 100644
+--- a/target/riscv/fpu_helper.c
++++ b/target/riscv/fpu_helper.c
+@@ -655,7 +655,7 @@ target_ulong helper_feq_h(CPURISCVState *env, uint64_t rs1, uint64_t rs2)
+ target_ulong helper_fclass_h(CPURISCVState *env, uint64_t rs1)
+ {
+     float16 frs1 = nds_check_nanbox_h(env, rs1);
+-    if (check_fp_mode()) {
++    if (check_fp_mode(env)) {
+         return fclass_h_bf16(frs1);
+     }
+     return fclass_h(frs1);
+@@ -667,7 +667,7 @@ uint64_t helper_fround_h(CPURISCVState *env, uint64_t rs1)
+     uint16_t nx_old = get_float_exception_flags(fs) & float_flag_inexact;
+     float16 frs1 = nds_check_nanbox_h(env, rs1);
+ 
+-    frs1 = nds_float16_round_to_int(frs1, fs);
++    frs1 = nds_float16_round_to_int(frs1, &env->fp_status);
+ 
+     /* Restore the original NX flag. */
+     uint16_t flags = get_float_exception_flags(fs);
+diff --git a/target/riscv/vector_helper.c b/target/riscv/vector_helper.c
+index 028cb0256f..6675a32702 100644
+--- a/target/riscv/vector_helper.c
++++ b/target/riscv/vector_helper.c
+@@ -3617,7 +3617,8 @@ static float16 frsqrt7_h(float16 f, float_status *s)
+ 
+ static float16 nds_frsqrt7_h(float16 f, float_status *s)
+ {
+-    if (check_fp_mode()) {
++    CPURISCVState *env = container_of(s, CPURISCVState, fp_status);
++    if (check_fp_mode(env)) {
+         return frsqrt7_h_bf16(f, s);
+     }
+     return frsqrt7_h(f, s);
+@@ -3864,7 +3865,8 @@ static float16 frec7_h(float16 f, float_status *s)
+ 
+ static float16 nds_frec7_h(float16 f, float_status *s)
+ {
+-    if (check_fp_mode()) {
++    CPURISCVState *env = container_of(s, CPURISCVState, fp_status);
++    if (check_fp_mode(env)) {
+         return frec7_h_bf16(f, s);
+     }
+     return frec7_h(f, s);
+@@ -4220,6 +4222,41 @@ GEN_VEXT_CMP_VF(vmfge_vf_w, uint32_t, H4, vmfge32)
+ GEN_VEXT_CMP_VF(vmfge_vf_d, uint64_t, H8, vmfge64)
+ 
+ /* Vector Floating-Point Classify Instruction */
++#define OPIVV1N(NAME, TD, T2, TX2, HD, HS2, OP)        \
++static void do_##NAME(void *vd, void *vs2, int i,      \
++                      CPURISCVState *env)              \
++{                                                      \
++    TX2 s2 = *((T2 *)vs2 + HS2(i));                    \
++    *((TD *)vd + HD(i)) = OP(s2, &env->fp_status);     \
++}
++
++#define GEN_VEXT_VN(NAME, ESZ)                         \
++void HELPER(NAME)(void *vd, void *v0, void *vs2,       \
++                  CPURISCVState *env, uint32_t desc)   \
++{                                                      \
++    uint32_t vm = vext_vm(desc);                       \
++    uint32_t vl = env->vl;                             \
++    uint32_t total_elems =                             \
++        vext_get_total_elems(env, desc, ESZ);          \
++    uint32_t vta = vext_vta(desc);                     \
++    uint32_t vma = vext_vma(desc);                     \
++    uint32_t i;                                        \
++                                                       \
++    for (i = env->vstart; i < vl; i++) {               \
++        if (!vm && !vext_elem_mask(v0, i)) {           \
++            /* set masked-off elements to 1s */        \
++            vext_set_elems_1s(vd, vma, i * ESZ,        \
++                              (i + 1) * ESZ);          \
++            continue;                                  \
++        }                                              \
++        do_##NAME(vd, vs2, i, env);                    \
++    }                                                  \
++    env->vstart = 0;                                   \
++    /* set tail elements to 1s */                      \
++    vext_set_elems_1s(vd, vta, vl * ESZ,               \
++                      total_elems * ESZ);              \
++}
++
+ #define OPIVV1(NAME, TD, T2, TX2, HD, HS2, OP)         \
+ static void do_##NAME(void *vd, void *vs2, int i)      \
+ {                                                      \
+@@ -4292,9 +4329,10 @@ target_ulong fclass_h(uint64_t frs1)
+     }
+ }
+ 
+-static target_ulong nds_fclass_h(uint64_t frs1)
++static target_ulong nds_fclass_h(uint64_t frs1, float_status *fs)
+ {
+-    if (check_fp_mode()) {
++    CPURISCVState *env = container_of(fs, CPURISCVState, fp_status);
++    if (check_fp_mode(env)) {
+         return fclass_h_bf16(frs1);
+     }
+     return fclass_h(frs1);
+@@ -4338,10 +4376,10 @@ target_ulong fclass_d(uint64_t frs1)
+     }
+ }
+ 
+-RVVCALL(OPIVV1, vfclass_v_h, OP_UU_H, H2, H2, nds_fclass_h)
++RVVCALL(OPIVV1N, vfclass_v_h, OP_UU_H, H2, H2, nds_fclass_h)
+ RVVCALL(OPIVV1, vfclass_v_w, OP_UU_W, H4, H4, fclass_s)
+ RVVCALL(OPIVV1, vfclass_v_d, OP_UU_D, H8, H8, fclass_d)
+-GEN_VEXT_V(vfclass_v_h, 2)
++GEN_VEXT_VN(vfclass_v_h, 2)
+ GEN_VEXT_V(vfclass_v_w, 4)
+ GEN_VEXT_V(vfclass_v_d, 8)
+ 
+-- 
+2.34.1
+

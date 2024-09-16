@@ -1,0 +1,44 @@
+From 9dc047b61bff9fc82366365ad52e511da483a9f1 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 4 Jan 2024 09:33:23 +0800
+Subject: [PATCH 164/241] target/riscv: Fix translate EXEC.IT instruction may
+ return wrong value if UITB.HW == 1
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/insn_trans/trans_xandescodenseops.c.inc | 8 +++-----
+ 1 file changed, 3 insertions(+), 5 deletions(-)
+
+diff --git a/target/riscv/insn_trans/trans_xandescodenseops.c.inc b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+index ae5f4522fb..6ac5a93fba 100644
+--- a/target/riscv/insn_trans/trans_xandescodenseops.c.inc
++++ b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+@@ -112,7 +112,7 @@ static void decode_opc_andes(CPURISCVState *env,
+     gen_exception_illegal(ctx);
+ }
+ 
+-static int andes_v5_gen_codense_exec_it(DisasContext *ctx,
++static bool andes_v5_gen_codense_exec_it(DisasContext *ctx,
+                                         arg_execit *a)
+ {
+     uint32_t insn;
+@@ -158,14 +158,12 @@ static int andes_v5_gen_codense_exec_it(DisasContext *ctx,
+ static bool trans_execit(DisasContext *ctx, arg_execit *a)
+ {
+     REQUIRE_EXECIT;
+-    andes_v5_gen_codense_exec_it(ctx, a);
+-    return true;
++    return andes_v5_gen_codense_exec_it(ctx, a);
+ }
+ 
+ static bool trans_nexecit(DisasContext *ctx, arg_nexecit *a)
+ {
+     REQUIRE_NEXECIT;
+     /* type casting arg_nexecit to arg_execit since they will be the same */
+-    andes_v5_gen_codense_exec_it(ctx, (arg_execit *)a);
+-    return true;
++    return andes_v5_gen_codense_exec_it(ctx, (arg_execit *)a);
+ }
+-- 
+2.34.1
+

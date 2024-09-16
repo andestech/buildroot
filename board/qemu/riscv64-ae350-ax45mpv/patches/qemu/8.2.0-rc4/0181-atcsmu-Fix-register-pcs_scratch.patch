@@ -1,0 +1,40 @@
+From 42d1d2956e53565aa44b525efd2ddf093d734952 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Tue, 23 Jan 2024 15:45:37 +0800
+Subject: [PATCH 181/241] atcsmu: Fix register pcs_scratch
+
+* Fix pcs_registers to support 8 harts
+* Fix offset of PCS9_SCRATCH, PCS10_SCRATCH
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ include/hw/misc/andes_atcsmu.h | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/include/hw/misc/andes_atcsmu.h b/include/hw/misc/andes_atcsmu.h
+index ae73ffff4e..24a5c8c43a 100644
+--- a/include/hw/misc/andes_atcsmu.h
++++ b/include/hw/misc/andes_atcsmu.h
+@@ -39,7 +39,7 @@ typedef struct AndesATCSMUState {
+     uint32_t smu_base_addr;
+     uint32_t smu_base_size;
+     uint32_t scratch;
+-    pcs_registers pcs_regs[4];
++    pcs_registers pcs_regs[8];
+ } AndesATCSMUState;
+ 
+ #define ATCSMU_WRSR         0x10
+@@ -60,8 +60,8 @@ typedef struct AndesATCSMUState {
+ #define ATCSMU_PCS6_SCRATCH          0xE4
+ #define ATCSMU_PCS7_SCRATCH          0x104
+ #define ATCSMU_PCS8_SCRATCH          0x124
+-#define ATCSMU_PCS9_SCRATCH          0x164
+-#define ATCSMU_PCS10_SCRATCH         0x184
++#define ATCSMU_PCS9_SCRATCH          0x144
++#define ATCSMU_PCS10_SCRATCH         0x164
+ 
+ #define ATCSMU_HART4_RESET_VECTOR_LO 0x200
+ #define ATCSMU_HART5_RESET_VECTOR_LO 0x204
+-- 
+2.34.1
+

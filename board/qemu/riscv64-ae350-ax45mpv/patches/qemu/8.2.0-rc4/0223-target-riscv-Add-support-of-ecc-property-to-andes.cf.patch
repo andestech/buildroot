@@ -1,0 +1,39 @@
+From 48ca6b8d30c7cf569392192d1965f50b01a5c9e6 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 15 Apr 2024 16:08:55 +0800
+Subject: [PATCH 223/241] target/riscv: Add support of "ecc" property to
+ andes.cfg.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ docs/config/andes.cfg    | 1 +
+ target/riscv/csr_andes.c | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/docs/config/andes.cfg b/docs/config/andes.cfg
+index f1d29cf218..2bebd21c53 100644
+--- a/docs/config/andes.cfg
++++ b/docs/config/andes.cfg
+@@ -31,6 +31,7 @@
+ [andes-config "cpu"]
+ #set riscv timebase freq if user doesn't use the default 1Ghz
+ freq = "60000000"
++ecc = "on"
+ isa-codense = "on"
+ powerbrake = "on"
+ stack-protection = "on"
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 539415ceca..c55d76736b 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -850,6 +850,7 @@ typedef struct AndesCsrConfigInfo {
+ } AndesCsrConfigInfo;
+ 
+ AndesCsrConfigInfo csr_mmsc_cfg_map[] = {
++    {CONFIG_BOOL,   MASK_MMSC_CFG_ECC, "ecc"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_ECD, "isa-codense"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_PFT, "powerbrake"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_HSP, "stack-protection"},
+-- 
+2.34.1
+

@@ -1,0 +1,118 @@
+From 99c6827a2abb68e98d214a190b876b9dc079322b Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Thu, 21 Dec 2023 15:26:11 +0800
+Subject: [PATCH 159/241] target/riscv: Add itrigger_pending flag into ITRIGGER
+ TB_FLAGS
+
+Currently we only determine ctx->itrigger by env->itrigger_enabled, and
+it is used to generate helper_itrigger_match() to check if any icount
+trigger is matched. Now we should check if any icount trigger is fired.
+Therefore, this commit adds itrigger_pending flag to determine the value
+of ITRIGGER TB_FLAGS also. We can only gen_helper_itrigger_fire() when
+ctx->itrigger is true.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/cpu.h        |  1 +
+ target/riscv/cpu_helper.c |  3 ++-
+ target/riscv/debug.c      | 24 +++++++++++++++++++++++-
+ target/riscv/translate.c  |  6 ++++--
+ 4 files changed, 30 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index c6063567be..a86d3ed431 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -355,6 +355,7 @@ struct CPUArchState {
+     QEMUTimer *itrigger_timer[RV_MAX_TRIGGERS];
+     int64_t last_icount;
+     bool itrigger_enabled;
++    bool itrigger_pending;
+     target_ulong tcontrol;
+     target_ulong scontext;
+     target_ulong mcontext;
+diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
+index b8f1197620..65ba643493 100644
+--- a/target/riscv/cpu_helper.c
++++ b/target/riscv/cpu_helper.c
+@@ -127,7 +127,8 @@ void cpu_get_tb_cpu_state(CPURISCVState *env, vaddr *pc,
+     }
+ 
+     if (cpu->cfg.debug && !icount_enabled()) {
+-        flags = FIELD_DP32(flags, TB_FLAGS, ITRIGGER, env->itrigger_enabled);
++        flags = FIELD_DP32(flags, TB_FLAGS, ITRIGGER,
++                           env->itrigger_enabled || env->itrigger_pending);
+     }
+ #endif
+ 
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index 6e8f1e5f98..51a2d09b44 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -834,6 +834,9 @@ static inline void itrigger_set_hit(CPURISCVState *env, int index, bool hit)
+ 
+ void helper_itrigger_fire(CPURISCVState *env)
+ {
++    bool hit = false;
++    int hit_index = -1;
++
+     for (int i = 0; i < RV_MAX_TRIGGERS; i++) {
+         if (get_trigger_type(env, i) != TRIGGER_TYPE_INST_CNT) {
+             continue;
+@@ -845,9 +848,27 @@ void helper_itrigger_fire(CPURISCVState *env)
+             /* This icount trigger can fire */
+             itrigger_set_pending(env, i, false);    /* clear icount.PENDING */
+             itrigger_set_hit(env, i, true);         /* set icount.HIT       */
+-            do_trigger_action(env, i);
++            hit = true;
++            hit_index = i;
++            break;
+         }
+     }
++
++    /* Re-determine if any icount trigger is pending */
++    env->itrigger_pending = false;
++    for (int i = 0; i < RV_MAX_TRIGGERS; i++) {
++        if (get_trigger_type(env, i) != TRIGGER_TYPE_INST_CNT) {
++            continue;
++        }
++        if (itrigger_get_pending(env, i)) {
++            env->itrigger_pending = true;
++            break;
++        }
++    }
++
++    if (hit) {
++        do_trigger_action(env, hit_index);
++    }
+ }
+ 
+ bool riscv_itrigger_enabled(CPURISCVState *env)
+@@ -891,6 +912,7 @@ void helper_itrigger_match(CPURISCVState *env)
+         if (count == 1) {
+             /* When count is 1 and the trigger matches, set pending. */
+             itrigger_set_pending(env, i, true);
++            env->itrigger_pending = true;
+         }
+         itrigger_set_count(env, i, --count);
+         if (!count) {
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index 0d2d0f8c4b..b730091d44 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -1265,8 +1265,10 @@ static void riscv_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
+     uint16_t opcode16 = translator_lduw(env, &ctx->base, ctx->base.pc_next);
+ 
+ #ifndef CONFIG_USER_ONLY
+-    /* Check if icount triggers can fire before any further instructions */
+-    gen_helper_itrigger_fire(tcg_env);
++    if (ctx->itrigger) {
++        /* Check if icount triggers can fire before any further instructions */
++        gen_helper_itrigger_fire(tcg_env);
++    }
+ #endif
+ 
+     ctx->ol = ctx->xl;
+-- 
+2.34.1
+

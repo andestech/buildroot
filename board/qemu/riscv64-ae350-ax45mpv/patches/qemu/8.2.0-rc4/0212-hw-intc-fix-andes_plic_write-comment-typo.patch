@@ -1,0 +1,26 @@
+From 52902b3489c5d820e5f4f9c7c336d187caa1903d Mon Sep 17 00:00:00 2001
+From: Leo Yu-Chi Liang <ycliang@andestech.com>
+Date: Tue, 5 Mar 2024 14:23:37 +0800
+Subject: [PATCH 212/241] hw/intc: fix andes_plic_write comment typo
+
+Signed-off-by: Leo Yu-Chi Liang <ycliang@andestech.com>
+---
+ hw/intc/andes_plic.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hw/intc/andes_plic.c b/hw/intc/andes_plic.c
+index 46f6296fd3..63fde1f35d 100644
+--- a/hw/intc/andes_plic.c
++++ b/hw/intc/andes_plic.c
+@@ -272,7 +272,7 @@ andes_plic_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+     /* write must be 4 byte words */
+     if ((addr & 0x3) != 0) {
+         qemu_log_mask(LOG_GUEST_ERROR,
+-                      "%s: Invalid register read 0x%" HWADDR_PRIx "\n",
++                      "%s: Invalid register write 0x%" HWADDR_PRIx "\n",
+                       __func__, addr);
+         return;
+     }
+-- 
+2.34.1
+

@@ -1,0 +1,80 @@
+From 62565b5fe9de0640a3e4c823560312e0ce686d08 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Wed, 10 Jan 2024 10:54:19 +0800
+Subject: [PATCH 172/241] hw/riscv: target/riscv: Remove local memory CPU
+ properties
+
+ILM/DLM use the same properties of CPU, SoC and riscv_harts to
+record some LM states. But if user assigns cpu properties for these LM
+properties, but these assignment doesn't have any effect since it just
+is an internal usage property. So I remove CPU properties to avoid user
+confuses with them
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ hw/riscv/andes_ae350.c |  1 +
+ hw/riscv/riscv_hart.c  | 14 ++++++--------
+ target/riscv/cpu.c     | 10 ----------
+ 3 files changed, 7 insertions(+), 18 deletions(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 62b045bb86..7e16976cb4 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -342,6 +342,7 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     s->ilm_base &= ~(s->ilm_size - 1);
+     s->dlm_base &= ~(s->dlm_size - 1);
+ 
++    /* Set riscv_harts properties for Local Memory */
+     qdev_prop_set_bit(DEVICE(&s->cpus), "ilm_default_enable",
+                         s->ilm_default_enable);
+     qdev_prop_set_bit(DEVICE(&s->cpus), "dlm_default_enable",
+diff --git a/hw/riscv/riscv_hart.c b/hw/riscv/riscv_hart.c
+index 370883d9f2..31a49fbd24 100644
+--- a/hw/riscv/riscv_hart.c
++++ b/hw/riscv/riscv_hart.c
+@@ -58,14 +58,12 @@ static void riscv_harts_cpu_reset(void *opaque)
+ 
+ static void andes_hart_prop_set(RISCVHartArrayState *s, int idx)
+ {
+-    qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "ilm_base", s->ilm_base);
+-    qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "dlm_base", s->dlm_base);
+-    qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "ilm_size", s->ilm_size);
+-    qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "dlm_size", s->dlm_size);
+-    qdev_prop_set_bit(DEVICE(&s->harts[idx]), "ilm_default_enable",
+-                      s->ilm_default_enable);
+-    qdev_prop_set_bit(DEVICE(&s->harts[idx]), "dlm_default_enable",
+-                      s->dlm_default_enable);
++    s->harts[idx].env.ilm_base = s->ilm_base;
++    s->harts[idx].env.dlm_base = s->dlm_base;
++    s->harts[idx].env.ilm_size = s->ilm_size;
++    s->harts[idx].env.dlm_size = s->dlm_size;
++    s->harts[idx].env.ilm_default_enable = s->ilm_default_enable;
++    s->harts[idx].env.dlm_default_enable = s->dlm_default_enable;
+ }
+ 
+ 
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index b601365e96..ce4076d8ec 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -2253,16 +2253,6 @@ static Property riscv_cpu_properties[] = {
+ };
+ 
+ static Property andes_cpu_property[] = {
+-#ifndef CONFIG_USER_ONLY
+-    DEFINE_PROP_UINT64("ilm_base", RISCVCPU, env.ilm_base, 0),
+-    DEFINE_PROP_UINT64("dlm_base", RISCVCPU, env.dlm_base, 0x200000),
+-    DEFINE_PROP_UINT32("ilm_size", RISCVCPU, env.ilm_size, 0x200000),
+-    DEFINE_PROP_UINT32("dlm_size", RISCVCPU, env.dlm_size, 0x200000),
+-    DEFINE_PROP_BOOL("ilm_default_enable", RISCVCPU, env.ilm_default_enable,
+-                     false),
+-    DEFINE_PROP_BOOL("dlm_default_enable", RISCVCPU, env.dlm_default_enable,
+-                     false),
+-#endif
+     DEFINE_PROP_STRING("xandesacelib", RISCVCPU, cfg.XAndesAceLib),
+     DEFINE_PROP_STRING("xandesaceextlibpath", RISCVCPU,
+                        cfg.XAndesAceExtLibPath),
+-- 
+2.34.1
+

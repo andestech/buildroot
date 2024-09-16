@@ -1,0 +1,1306 @@
+From 00e16a4aa8fea71ba723f4d6e4068b8dd6b52bf6 Mon Sep 17 00:00:00 2001
+From: Dylan Jhong <dylan@andestech.com>
+Date: Tue, 9 Mar 2021 16:20:56 +0800
+Subject: [PATCH 001/241] Andes RISC-V PLIC
+
+Andes PLIC (Platform-Level Interrupt Controller) device provides an
+interrupt controller functionality based on Andes's PLIC specification.
+
+The Andes PLIC can handle either external interrupts (PLIC)
+or interprocessor interrupts (PLICSW).
+
+While Andes PLIC spec includes vector interrupt and interrupt preemption,
+we leave them as future items for now.
+
+ref:
+    b88e2160b7 riscv_plic: Add hook point in riscv_plic
+    b22d0c5cf2 riscv_plic: Add riscv plic
+    ae82ed5593 Andes RISC-V PLIC
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+Signed-off-by: Ruinland ChuanTzu Tsai <ruinland@andestech.com>
+---
+ hw/intc/Kconfig               |   7 +
+ hw/intc/andes_plic.c          | 250 +++++++++++++
+ hw/intc/meson.build           |   2 +
+ hw/intc/riscv_plic.c          | 662 ++++++++++++++++++++++++++++++++++
+ hw/intc/sifive_plic.c         |   6 +-
+ include/hw/intc/andes_plic.h  | 112 ++++++
+ include/hw/intc/riscv_plic.h  | 117 ++++++
+ include/hw/intc/sifive_plic.h |  12 +-
+ 8 files changed, 1159 insertions(+), 9 deletions(-)
+ create mode 100644 hw/intc/andes_plic.c
+ create mode 100644 hw/intc/riscv_plic.c
+ create mode 100644 include/hw/intc/andes_plic.h
+ create mode 100644 include/hw/intc/riscv_plic.h
+
+diff --git a/hw/intc/Kconfig b/hw/intc/Kconfig
+index 97d550b06b..904da6e30e 100644
+--- a/hw/intc/Kconfig
++++ b/hw/intc/Kconfig
+@@ -104,3 +104,10 @@ config LOONGARCH_PCH_MSI
+ 
+ config LOONGARCH_EXTIOI
+     bool
++
++config RISCV_PLIC
++    bool
++
++config ANDES_PLIC
++    bool
++    select RISCV_PLIC
+diff --git a/hw/intc/andes_plic.c b/hw/intc/andes_plic.c
+new file mode 100644
+index 0000000000..92ac64bef1
+--- /dev/null
++++ b/hw/intc/andes_plic.c
+@@ -0,0 +1,250 @@
++/*
++ * Andes PLIC (Platform Level Interrupt Controller)
++ *
++ * Copyright (c) 2021 Andes Tech. Corp.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms and conditions of the GNU General Public License,
++ * version 2 or later, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along with
++ * this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/error-report.h"
++#include "qemu/log.h"
++#include "qapi/error.h"
++#include "hw/qdev-properties.h"
++#include "target/riscv/cpu.h"
++#include "hw/sysbus.h"
++#include "hw/intc/andes_plic.h"
++
++/* #define DEBUG_ANDES_PLIC */
++#define LOGGE(x...) qemu_log_mask(LOG_GUEST_ERROR, x)
++#define xLOG(x...)
++#define yLOG(x...) qemu_log(x)
++#ifdef DEBUG_ANDES_PLIC
++  #define LOG(x...) yLOG(x)
++#else
++  #define LOG(x...) xLOG(x)
++#endif
++
++enum register_names {
++    REG_FEATURE_ENABLE = 0x0000,
++    REG_TRIGGER_TYPE_BASE = 0x1080,
++    REG_NUM_IRQ_TARGET = 0x1100,
++    REG_VER_MAX_PRIORITY = 0x1104,
++};
++
++enum feature_enable_register {
++    FER_PREEMPT = (1u << 0),
++    FER_VECTORED = (1u << 1),
++};
++
++void andes_plichw_update(void *plic)
++{
++    AndesPLICState *andes_plic = ANDES_PLIC(plic);
++    RISCVPLICState *riscv_plic = RISCV_PLIC(andes_plic);
++    int target_id;
++
++    /* raise irq on harts where this irq is enabled */
++    for (target_id = 0; target_id < riscv_plic->num_addrs; target_id++) {
++        uint32_t hart_id = riscv_plic->addr_config[target_id].hartid;
++        PLICMode mode = riscv_plic->addr_config[target_id].mode;
++        CPUState *cpu = qemu_get_cpu(hart_id);
++        CPURISCVState *env = cpu ? cpu->env_ptr : NULL;
++        if (!env) {
++            continue;
++        }
++        int level = riscv_plic_irqs_pending(riscv_plic, target_id);
++
++        switch (mode) {
++        case PlicMode_M:
++            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_MEIP, BOOL_TO_MASK(level));
++            break;
++        case PlicMode_S:
++            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_SEIP, BOOL_TO_MASK(level));
++            break;
++        default:
++            break;
++        }
++    }
++}
++
++void andes_plicsw_update(void *plic)
++{
++    AndesPLICState *andes_plic = ANDES_PLIC(plic);
++    RISCVPLICState *riscv_plic = RISCV_PLIC(andes_plic);
++    int target_id;
++
++    /* raise irq on harts where this irq is enabled */
++    for (target_id = 0; target_id < riscv_plic->num_addrs; target_id++) {
++        uint32_t hart_id = riscv_plic->addr_config[target_id].hartid;
++        PLICMode mode = riscv_plic->addr_config[target_id].mode;
++        CPUState *cpu = qemu_get_cpu(hart_id);
++        CPURISCVState *env = cpu ? cpu->env_ptr : NULL;
++        if (!env) {
++            continue;
++        }
++        int level = riscv_plic_irqs_pending(riscv_plic, target_id);
++
++        switch (mode) {
++        case PlicMode_M:
++            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_MSIP, BOOL_TO_MASK(level));
++            break;
++        case PlicMode_S:
++            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_SSIP, BOOL_TO_MASK(level));
++            break;
++        default:
++            break;
++        }
++    }
++}
++
++static void andes_plic_write_pending(void *plic,
++    hwaddr addr, uint64_t value, unsigned size)
++{
++    AndesPLICState *andes_plic = ANDES_PLIC(plic);
++    RISCVPLICState *riscv_plic = RISCV_PLIC(andes_plic);
++
++    uint32_t word = (addr - riscv_plic->pending_base) >> 2;
++    uint32_t xchg = riscv_plic->pending[word] ^ (uint32_t)value;
++    if (xchg) {
++        riscv_plic->pending[word] |= value;
++        riscv_plic->riscv_plic_update(riscv_plic);
++    }
++
++    return;
++}
++
++static uint64_t
++andes_plic_read(void *opaque, hwaddr addr, unsigned size)
++{
++    AndesPLICState *andes_plic = ANDES_PLIC(opaque);
++    uint64_t value;
++
++    memory_region_dispatch_read(&andes_plic->parent_mmio, addr, &value,
++                size_memop(size) | MO_LE, MEMTXATTRS_UNSPECIFIED);
++
++    return value;
++}
++
++static void
++andes_plic_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
++{
++    AndesPLICState *andes_plic = ANDES_PLIC(opaque);
++
++    memory_region_dispatch_write(&andes_plic->parent_mmio, addr, value,
++            size_memop(size) | MO_LE, MEMTXATTRS_UNSPECIFIED);
++
++    return;
++}
++
++static const MemoryRegionOps andes_plic_ops = {
++    .read = andes_plic_read,
++    .write = andes_plic_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = {
++        .min_access_size = 4,
++        .max_access_size = 8
++    }
++};
++
++static void
++andes_plic_realize(DeviceState *dev, Error **errp)
++{
++    LOG("%s:\n", __func__);
++    AndesPLICState *andes_plic = ANDES_PLIC(dev);
++    RISCVPLICState *riscv_plic = RISCV_PLIC(dev);
++    AndesPLICClass *andes_plic_class = ANDES_PLIC_GET_CLASS(andes_plic);
++    Error *local_err = NULL;
++
++    andes_plic_class->parent_realize(dev, &local_err);
++    if (local_err) {
++        error_propagate(errp, local_err);
++        return;
++    }
++
++    if (strstr(andes_plic->plic_name , "SW") != NULL) {
++        riscv_plic->riscv_plic_update = andes_plicsw_update;
++    } else {
++        riscv_plic->riscv_plic_update = andes_plichw_update;
++    }
++    riscv_plic->riscv_plic_write_pending = andes_plic_write_pending;
++
++    andes_plic->parent_mmio = riscv_plic->mmio;
++    memory_region_init_io(&riscv_plic->mmio, OBJECT(dev),
++                        &andes_plic_ops, andes_plic,
++                        TYPE_ANDES_PLIC, riscv_plic->aperture_size);
++
++    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &riscv_plic->mmio);
++}
++
++static Property andes_plic_properties[] = {
++    DEFINE_PROP_STRING("plic-name", AndesPLICState, plic_name),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++static void andes_plic_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    AndesPLICClass *apc = ANDES_PLIC_CLASS(klass);
++
++    device_class_set_props(dc, andes_plic_properties);
++    device_class_set_parent_realize(dc, andes_plic_realize,
++                                    &apc->parent_realize);
++}
++
++static const TypeInfo andes_plic_info = {
++    .name          = TYPE_ANDES_PLIC,
++    .parent        = TYPE_RISCV_PLIC,
++    .instance_size = sizeof(AndesPLICState),
++    .class_init    = andes_plic_class_init,
++};
++
++static void andes_plic_register_types(void)
++{
++    LOG("%s:\n", __func__);
++    type_register_static(&andes_plic_info);
++}
++
++type_init(andes_plic_register_types)
++
++/*
++ * Create PLIC device.
++ */
++DeviceState *andes_plic_create(hwaddr plic_base,
++    const char *plic_name, char *hart_config,
++    uint32_t num_sources, uint32_t num_priorities,
++    uint32_t priority_base, uint32_t pending_base,
++    uint32_t enable_base, uint32_t enable_stride,
++    uint32_t threshold_base, uint32_t threshold_stride,
++    uint32_t aperture_size)
++{
++    DeviceState *dev = qdev_new(TYPE_ANDES_PLIC);
++
++    assert(enable_stride == (enable_stride & -enable_stride));
++    assert(threshold_stride == (threshold_stride & -threshold_stride));
++    qdev_prop_set_string(dev, "plic-name", plic_name);
++    qdev_prop_set_uint32(dev, "hartid-base", 0);
++    qdev_prop_set_string(dev, "hart-config", hart_config);
++    qdev_prop_set_uint32(dev, "num-sources", num_sources);
++    qdev_prop_set_uint32(dev, "num-priorities", num_priorities);
++    qdev_prop_set_uint32(dev, "priority-base", priority_base);
++    qdev_prop_set_uint32(dev, "pending-base", pending_base);
++    qdev_prop_set_uint32(dev, "enable-base", enable_base);
++    qdev_prop_set_uint32(dev, "enable-stride", enable_stride);
++    qdev_prop_set_uint32(dev, "context-base", threshold_base);
++    qdev_prop_set_uint32(dev, "context-stride", threshold_stride);
++    qdev_prop_set_uint32(dev, "aperture-size", aperture_size);
++
++    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
++    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, plic_base);
++    return dev;
++}
+diff --git a/hw/intc/meson.build b/hw/intc/meson.build
+index ed355941d1..3118b4cb20 100644
+--- a/hw/intc/meson.build
++++ b/hw/intc/meson.build
+@@ -37,6 +37,7 @@ if config_all_devices.has_key('CONFIG_APIC') or \
+     system_ss.add(files('kvm_irqcount.c'))
+ endif
+ 
++specific_ss.add(when: 'CONFIG_ANDES_PLIC', if_true: files('andes_plic.c'))
+ specific_ss.add(when: 'CONFIG_APIC', if_true: files('apic.c', 'apic_common.c'))
+ specific_ss.add(when: 'CONFIG_ARM_GIC', if_true: files('arm_gicv3_cpuif_common.c'))
+ specific_ss.add(when: 'CONFIG_ARM_GICV3_TCG', if_true: files('arm_gicv3_cpuif.c'))
+@@ -52,6 +53,7 @@ specific_ss.add(when: ['CONFIG_KVM', 'CONFIG_OPENPIC'],
+ 		if_true: files('openpic_kvm.c'))
+ specific_ss.add(when: 'CONFIG_POWERNV', if_true: files('xics_pnv.c', 'pnv_xive.c', 'pnv_xive2.c'))
+ specific_ss.add(when: 'CONFIG_PPC_UIC', if_true: files('ppc-uic.c'))
++specific_ss.add(when: 'CONFIG_RISCV_PLIC', if_true: files('riscv_plic.c'))
+ specific_ss.add(when: 'CONFIG_RX_ICU', if_true: files('rx_icu.c'))
+ specific_ss.add(when: 'CONFIG_S390_FLIC', if_true: files('s390_flic.c'))
+ specific_ss.add(when: 'CONFIG_S390_FLIC_KVM', if_true: files('s390_flic_kvm.c'))
+diff --git a/hw/intc/riscv_plic.c b/hw/intc/riscv_plic.c
+new file mode 100644
+index 0000000000..7d9279a1b6
+--- /dev/null
++++ b/hw/intc/riscv_plic.c
+@@ -0,0 +1,662 @@
++/*
++ * RISCV PLIC (Platform Level Interrupt Controller)
++ *
++ * Copyright (c) 2017 SiFive, Inc.
++ *
++ * This provides a parameterizable interrupt controller based on SiFive's PLIC.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms and conditions of the GNU General Public License,
++ * version 2 or later, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along with
++ * this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/log.h"
++#include "qemu/module.h"
++#include "qemu/error-report.h"
++#include "hw/sysbus.h"
++#include "hw/pci/msi.h"
++#include "hw/boards.h"
++#include "hw/qdev-properties.h"
++#include "hw/intc/riscv_plic.h"
++#include "target/riscv/cpu.h"
++#include "sysemu/sysemu.h"
++#include "migration/vmstate.h"
++
++#define RISCV_DEBUG_PLIC 0
++
++static PLICMode char_to_mode(char c)
++{
++    switch (c) {
++    case 'U': return PLICMode_U;
++    case 'S': return PLICMode_S;
++    case 'H': return PLICMode_H;
++    case 'M': return PLICMode_M;
++    default:
++        error_report("plic: invalid mode '%c'", c);
++        exit(1);
++    }
++}
++
++static char mode_to_char(PLICMode m)
++{
++    switch (m) {
++    case PLICMode_U: return 'U';
++    case PLICMode_S: return 'S';
++    case PLICMode_H: return 'H';
++    case PLICMode_M: return 'M';
++    default: return '?';
++    }
++}
++
++static void riscv_plic_print_state(RISCVPLICState *plic)
++{
++    int i;
++    int addrid;
++
++    /* pending */
++    qemu_log("pending       : ");
++    for (i = plic->bitfield_words - 1; i >= 0; i--) {
++        qemu_log("%08x", plic->pending[i]);
++    }
++    qemu_log("\n");
++
++    /* pending */
++    qemu_log("claimed       : ");
++    for (i = plic->bitfield_words - 1; i >= 0; i--) {
++        qemu_log("%08x", plic->claimed[i]);
++    }
++    qemu_log("\n");
++
++    for (addrid = 0; addrid < plic->num_addrs; addrid++) {
++        qemu_log("hart%d-%c enable: ",
++            plic->addr_config[addrid].hartid,
++            mode_to_char(plic->addr_config[addrid].mode));
++        for (i = plic->bitfield_words - 1; i >= 0; i--) {
++            qemu_log("%08x", plic->enable[addrid * plic->bitfield_words + i]);
++        }
++        qemu_log("\n");
++    }
++}
++
++static uint32_t atomic_set_masked(uint32_t *a, uint32_t mask, uint32_t value)
++{
++    uint32_t old, new, cmp = qatomic_read(a);
++
++    do {
++        old = cmp;
++        new = (old & ~mask) | (value & mask);
++        cmp = qatomic_cmpxchg(a, old, new);
++    } while (old != cmp);
++
++    return old;
++}
++
++static void riscv_plic_set_pending(RISCVPLICState *plic, int irq, bool level)
++{
++    atomic_set_masked(&plic->pending[irq >> 5], 1 << (irq & 31), -!!level);
++}
++
++static void riscv_plic_set_claimed(RISCVPLICState *plic, int irq, bool level)
++{
++    atomic_set_masked(&plic->claimed[irq >> 5], 1 << (irq & 31), -!!level);
++}
++
++int riscv_plic_irqs_pending(RISCVPLICState *plic, uint32_t addrid)
++{
++    int i, j;
++    for (i = 0; i < plic->bitfield_words; i++) {
++        uint32_t pending_enabled_not_claimed =
++            (plic->pending[i] & ~plic->claimed[i]) &
++            plic->enable[addrid * plic->bitfield_words + i];
++        if (!pending_enabled_not_claimed) {
++            continue;
++        }
++
++        for (j = 0; j < 32; j++) {
++            int irq = (i << 5) + j;
++            uint32_t prio = plic->source_priority[irq];
++            int enabled = pending_enabled_not_claimed & (1 << j);
++            if (enabled && prio > plic->target_priority[addrid]) {
++                return 1;
++            }
++        }
++    }
++    return 0;
++}
++
++static void riscv_plic_update(void *opaque)
++{
++    RISCVPLICState *plic = opaque;
++    int addrid;
++
++    /* raise irq on harts where this irq is enabled */
++    for (addrid = 0; addrid < plic->num_addrs; addrid++) {
++        uint32_t hartid = plic->addr_config[addrid].hartid;
++        PLICMode mode = plic->addr_config[addrid].mode;
++        CPUState *cpu = qemu_get_cpu(hartid);
++        CPURISCVState *env = cpu ? cpu->env_ptr : NULL;
++        if (!env) {
++            continue;
++        }
++        int level = riscv_plic_irqs_pending(plic, addrid);
++        switch (mode) {
++        case PLICMode_M:
++            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_MEIP, BOOL_TO_MASK(level));
++            break;
++        case PLICMode_S:
++            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_SEIP, BOOL_TO_MASK(level));
++            break;
++        default:
++            break;
++        }
++    }
++
++    if (RISCV_DEBUG_PLIC) {
++        riscv_plic_print_state(plic);
++    }
++}
++
++static uint32_t riscv_plic_claim(RISCVPLICState *plic, uint32_t addrid)
++{
++    int i, j;
++    uint32_t max_irq = 0;
++    uint32_t max_prio = plic->target_priority[addrid];
++
++    for (i = 0; i < plic->bitfield_words; i++) {
++        uint32_t pending_enabled_not_claimed =
++            (plic->pending[i] & ~plic->claimed[i]) &
++            plic->enable[addrid * plic->bitfield_words + i];
++        if (!pending_enabled_not_claimed) {
++            continue;
++        }
++        for (j = 0; j < 32; j++) {
++            int irq = (i << 5) + j;
++            uint32_t prio = plic->source_priority[irq];
++            int enabled = pending_enabled_not_claimed & (1 << j);
++            if (enabled && prio > max_prio) {
++                max_irq = irq;
++                max_prio = prio;
++            }
++        }
++    }
++
++    if (max_irq) {
++        riscv_plic_set_pending(plic, max_irq, false);
++        riscv_plic_set_claimed(plic, max_irq, true);
++    }
++    return max_irq;
++}
++
++static uint64_t riscv_plic_read_priority(void *opaque,
++        hwaddr addr, unsigned size)
++{
++    RISCVPLICState *plic = opaque;
++    uint32_t irq = ((addr - plic->priority_base) >> 2) + 1;
++    if (RISCV_DEBUG_PLIC) {
++        qemu_log("plic: read priority: irq=%d priority=%d\n",
++            irq, plic->source_priority[irq]);
++    }
++    return plic->source_priority[irq];
++}
++
++static uint64_t riscv_plic_read_pending(void *opaque,
++        hwaddr addr, unsigned size)
++{
++    RISCVPLICState *plic = opaque;
++    uint32_t word = (addr - plic->pending_base) >> 2;
++    if (RISCV_DEBUG_PLIC) {
++        qemu_log("plic: read pending: word=%d value=%d\n",
++            word, plic->pending[word]);
++    }
++    return plic->pending[word];
++}
++
++static uint64_t riscv_plic_read_enable(void *opaque,
++        hwaddr addr, unsigned size)
++{
++    RISCVPLICState *plic = opaque;
++    uint32_t addrid = (addr - plic->enable_base) / plic->enable_stride;
++    uint32_t wordid = (addr & (plic->enable_stride - 1)) >> 2;
++    if (wordid < plic->bitfield_words) {
++        if (RISCV_DEBUG_PLIC) {
++            qemu_log("plic: read enable: hart%d-%c word=%d value=%x\n",
++                plic->addr_config[addrid].hartid,
++                mode_to_char(plic->addr_config[addrid].mode), wordid,
++                plic->enable[addrid * plic->bitfield_words + wordid]);
++        }
++        return plic->enable[addrid * plic->bitfield_words + wordid];
++    }
++
++    return 0;
++}
++
++static uint64_t riscv_plic_read_threshold(void *opaque,
++        hwaddr addr, unsigned size)
++{
++    RISCVPLICState *plic = opaque;
++    uint32_t addrid = (addr - plic->context_base) / plic->context_stride;
++    if (RISCV_DEBUG_PLIC) {
++        qemu_log("plic: read priority: hart%d-%c priority=%x\n",
++            plic->addr_config[addrid].hartid,
++            mode_to_char(plic->addr_config[addrid].mode),
++            plic->target_priority[addrid]);
++    }
++    return plic->target_priority[addrid];
++}
++
++static uint64_t riscv_plic_read_claim(void *opaque,
++        hwaddr addr, unsigned size)
++{
++    RISCVPLICState *plic = opaque;
++    uint32_t addrid = (addr - plic->context_base) / plic->context_stride;
++    uint32_t value = riscv_plic_claim(plic, addrid);
++    if (RISCV_DEBUG_PLIC) {
++        qemu_log("plic: read claim: hart%d-%c irq=%x\n",
++            plic->addr_config[addrid].hartid,
++            mode_to_char(plic->addr_config[addrid].mode),
++            value);
++    }
++    plic->riscv_plic_update(plic);
++    return value;
++}
++
++static void riscv_plic_write_priority(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size)
++{
++    RISCVPLICState *plic = opaque;
++    uint32_t irq = ((addr - plic->priority_base) >> 2) + 1;
++    plic->source_priority[irq] = value & 7;
++    if (RISCV_DEBUG_PLIC) {
++        qemu_log("plic: write priority: irq=%d priority=%d\n",
++            irq, plic->source_priority[irq]);
++    }
++    plic->riscv_plic_update(plic);
++    return;
++}
++
++static void riscv_plic_write_pending(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size)
++{
++    qemu_log_mask(LOG_GUEST_ERROR,
++        "%s: invalid pending write: 0x%" HWADDR_PRIx "",
++        __func__, addr);
++    return;
++
++}
++
++static void riscv_plic_write_enable(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size)
++{
++    RISCVPLICState *plic = opaque;
++    uint32_t addrid = (addr - plic->enable_base) / plic->enable_stride;
++    uint32_t wordid = (addr & (plic->enable_stride - 1)) >> 2;
++    if (wordid < plic->bitfield_words) {
++        plic->enable[addrid * plic->bitfield_words + wordid] = value;
++        if (RISCV_DEBUG_PLIC) {
++            qemu_log("plic: write enable: hart%d-%c word=%d value=%x\n",
++                plic->addr_config[addrid].hartid,
++                mode_to_char(plic->addr_config[addrid].mode), wordid,
++                plic->enable[addrid * plic->bitfield_words + wordid]);
++        }
++    }
++    return;
++}
++
++static void riscv_plic_write_threshold(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size)
++{
++    RISCVPLICState *plic = opaque;
++    uint32_t addrid = (addr - plic->context_base) / plic->context_stride;
++    if (RISCV_DEBUG_PLIC) {
++        qemu_log("plic: write priority: hart%d-%c priority=%x\n",
++            plic->addr_config[addrid].hartid,
++            mode_to_char(plic->addr_config[addrid].mode),
++            plic->target_priority[addrid]);
++    }
++    if (value <= plic->num_priorities) {
++        plic->target_priority[addrid] = value;
++        plic->riscv_plic_update(plic);
++    }
++
++    return;
++}
++
++static void riscv_plic_write_complete(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size)
++{
++    RISCVPLICState *plic = opaque;
++    uint32_t addrid = (addr - plic->context_base) / plic->context_stride;
++    if (RISCV_DEBUG_PLIC) {
++        qemu_log("plic: write complete: hart%d-%c irq=%x\n",
++            plic->addr_config[addrid].hartid,
++            mode_to_char(plic->addr_config[addrid].mode),
++            (uint32_t)value);
++    }
++    if (value < plic->num_sources) {
++        riscv_plic_set_claimed(plic, value, false);
++        plic->riscv_plic_update(plic);
++    }
++    return;
++}
++
++static uint64_t riscv_plic_read(void *opaque, hwaddr addr, unsigned size)
++{
++    RISCVPLICState *plic = opaque;
++
++    /* writes must be 4 byte words */
++    if ((addr & 0x3) != 0) {
++        goto err;
++    }
++
++    if (addr >= plic->priority_base && /* 4 bytes per source */
++        addr < plic->priority_base + (plic->num_sources << 2))
++    {
++        if (plic->riscv_plic_read_priority) {
++            return plic->riscv_plic_read_priority(plic, addr, size);
++        }
++    } else if (addr >= plic->pending_base && /* 1 bit per source */
++               addr < plic->pending_base + (plic->num_sources >> 3))
++    {
++        if (plic->riscv_plic_read_pending) {
++            return plic->riscv_plic_read_pending(plic, addr, size);
++        }
++    } else if (addr >= plic->enable_base && /* 1 bit per source */
++             addr < plic->enable_base + plic->num_addrs * plic->enable_stride)
++    {
++        if (plic->riscv_plic_read_enable) {
++            return plic->riscv_plic_read_enable(plic, addr, size);
++        }
++    } else if (addr >= plic->context_base && /* 1 bit per source */
++             addr < plic->context_base + plic->num_addrs * plic->context_stride)
++    {
++        uint32_t contextid = (addr & (plic->context_stride - 1));
++        if (contextid == 0) {
++            if (plic->riscv_plic_read_threshold) {
++                return plic->riscv_plic_read_threshold(plic, addr, size);
++            }
++        } else if (contextid == 4) {
++            if (plic->riscv_plic_read_claim) {
++                return plic->riscv_plic_read_claim(plic, addr, size);
++            }
++        }
++    }
++
++err:
++    qemu_log_mask(LOG_GUEST_ERROR,
++                  "%s: Invalid register read 0x%" HWADDR_PRIx "\n",
++                  __func__, addr);
++    return 0;
++}
++
++static void riscv_plic_write(void *opaque, hwaddr addr, uint64_t value,
++        unsigned size)
++{
++    RISCVPLICState *plic = opaque;
++
++    /* writes must be 4 byte words */
++    if ((addr & 0x3) != 0) {
++        goto err;
++    }
++
++    if (addr >= plic->priority_base && /* 4 bytes per source */
++        addr < plic->priority_base + (plic->num_sources << 2))
++    {
++        if (plic->riscv_plic_write_priority) {
++            return plic->riscv_plic_write_priority(plic, addr, value, size);
++        }
++    } else if (addr >= plic->pending_base && /* 1 bit per source */
++               addr < plic->pending_base + (plic->num_sources >> 3))
++    {
++        if (plic->riscv_plic_write_pending) {
++            return plic->riscv_plic_write_pending(plic, addr, value, size);
++        }
++    } else if (addr >= plic->enable_base && /* 1 bit per source */
++        addr < plic->enable_base + plic->num_addrs * plic->enable_stride)
++    {
++        if (plic->riscv_plic_write_enable) {
++            return plic->riscv_plic_write_enable(plic, addr, value, size);
++        }
++    } else if (addr >= plic->context_base && /* 4 bytes per reg */
++        addr < plic->context_base + plic->num_addrs * plic->context_stride)
++    {
++        uint32_t contextid = (addr & (plic->context_stride - 1));
++        if (contextid == 0) {
++            if (plic->riscv_plic_write_threshold) {
++                return plic->riscv_plic_write_threshold(plic, addr, value, size);
++            }
++        } else if (contextid == 4) {
++            if (plic->riscv_plic_write_complete) {
++                return plic->riscv_plic_write_complete(plic, addr, value, size);
++            }
++        }
++    }
++
++err:
++    qemu_log_mask(LOG_GUEST_ERROR,
++                  "%s: Invalid register write 0x%" HWADDR_PRIx "\n",
++                  __func__, addr);
++}
++
++static const MemoryRegionOps riscv_plic_ops = {
++    .read = riscv_plic_read,
++    .write = riscv_plic_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = {
++        .min_access_size = 4,
++        .max_access_size = 8
++    }
++};
++
++static Property riscv_plic_properties[] = {
++    DEFINE_PROP_STRING("hart-config", RISCVPLICState, hart_config),
++    DEFINE_PROP_UINT32("hartid-base", RISCVPLICState, hartid_base, 0),
++    DEFINE_PROP_UINT32("num-sources", RISCVPLICState, num_sources, 0),
++    DEFINE_PROP_UINT32("num-priorities", RISCVPLICState, num_priorities, 0),
++    DEFINE_PROP_UINT32("priority-base", RISCVPLICState, priority_base, 0),
++    DEFINE_PROP_UINT32("pending-base", RISCVPLICState, pending_base, 0),
++    DEFINE_PROP_UINT32("enable-base", RISCVPLICState, enable_base, 0),
++    DEFINE_PROP_UINT32("enable-stride", RISCVPLICState, enable_stride, 0),
++    DEFINE_PROP_UINT32("context-base", RISCVPLICState, context_base, 0),
++    DEFINE_PROP_UINT32("context-stride", RISCVPLICState, context_stride, 0),
++    DEFINE_PROP_UINT32("aperture-size", RISCVPLICState, aperture_size, 0),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++/*
++ * parse PLIC hart/mode address offset config
++ *
++ * "M"              1 hart with M mode
++ * "MS,MS"          2 harts, 0-1 with M and S mode
++ * "M,MS,MS,MS,MS"  5 harts, 0 with M mode, 1-5 with M and S mode
++ */
++static void parse_hart_config(RISCVPLICState *plic)
++{
++    int addrid, hartid, modes;
++    const char *p;
++    char c;
++
++    /* count and validate hart/mode combinations */
++    addrid = 0, hartid = 0, modes = 0;
++    p = plic->hart_config;
++    while ((c = *p++)) {
++        if (c == ',') {
++            addrid += ctpop8(modes);
++            modes = 0;
++            hartid++;
++        } else {
++            int m = 1 << char_to_mode(c);
++            if (modes == (modes | m)) {
++                error_report("plic: duplicate mode '%c' in config: %s",
++                             c, plic->hart_config);
++                exit(1);
++            }
++            modes |= m;
++        }
++    }
++    if (modes) {
++        addrid += ctpop8(modes);
++    }
++    hartid++;
++
++    plic->num_addrs = addrid;
++    plic->num_harts = hartid;
++
++    /* store hart/mode combinations */
++    plic->addr_config = g_new(PLICAddr, plic->num_addrs);
++    addrid = 0, hartid = plic->hartid_base;
++    p = plic->hart_config;
++    while ((c = *p++)) {
++        if (c == ',') {
++            hartid++;
++        } else {
++            plic->addr_config[addrid].addrid = addrid;
++            plic->addr_config[addrid].hartid = hartid;
++            plic->addr_config[addrid].mode = char_to_mode(c);
++            addrid++;
++        }
++    }
++}
++
++static void riscv_plic_irq_request(void *opaque, int irq, int level)
++{
++    RISCVPLICState *plic = opaque;
++
++    riscv_plic_set_pending(plic, irq, level > 0);
++    plic->riscv_plic_update(plic);
++}
++
++static void riscv_plic_realize(DeviceState *dev, Error **errp)
++{
++    RISCVPLICState *plic = RISCV_PLIC(dev);
++    /* int i; */
++
++    memory_region_init_io(&plic->mmio, OBJECT(dev), &riscv_plic_ops, plic,
++                          TYPE_RISCV_PLIC, plic->aperture_size);
++    parse_hart_config(plic);
++    plic->bitfield_words = (plic->num_sources + 31) >> 5;
++    plic->num_enables = plic->bitfield_words * plic->num_addrs;
++    plic->source_priority = g_new0(uint32_t, plic->num_sources);
++    plic->target_priority = g_new0(uint32_t, plic->num_addrs);
++    plic->pending = g_new0(uint32_t, plic->bitfield_words);
++    plic->claimed = g_new0(uint32_t, plic->bitfield_words);
++    plic->enable = g_new0(uint32_t, plic->num_enables);
++    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &plic->mmio);
++    qdev_init_gpio_in(dev, riscv_plic_irq_request, plic->num_sources);
++
++    /* set default read function */
++    plic->riscv_plic_read_priority = riscv_plic_read_priority;
++    plic->riscv_plic_read_pending = riscv_plic_read_pending;
++    plic->riscv_plic_read_enable = riscv_plic_read_enable;
++    plic->riscv_plic_read_threshold = riscv_plic_read_threshold;
++    plic->riscv_plic_read_claim = riscv_plic_read_claim;
++
++    /* set default write function */
++    plic->riscv_plic_write_priority = riscv_plic_write_priority;
++    plic->riscv_plic_write_pending = riscv_plic_write_pending;
++    plic->riscv_plic_write_enable = riscv_plic_write_enable;
++    plic->riscv_plic_write_threshold = riscv_plic_write_threshold;
++    plic->riscv_plic_write_complete = riscv_plic_write_complete;
++
++    /* set default update function */
++    plic->riscv_plic_update = riscv_plic_update;
++
++    /*
++     * We can't allow the supervisor to control SEIP as this would allow the
++     * supervisor to clear a pending external interrupt which will result in
++     * lost a interrupt in the case a PLIC is attached. The SEIP bit must be
++     * hardware controlled when a PLIC is attached.
++     *
++     * for (i = 0; i < plic->num_harts; i++) {
++     *   RISCVCPU *cpu = RISCV_CPU(qemu_get_cpu(plic->hartid_base + i));
++     *   if (riscv_cpu_claim_interrupts(cpu, MIP_SEIP) < 0) {
++     *       error_report("SEIP already claimed");
++     *       exit(1);
++     *   }
++     * }
++     */
++
++    msi_nonbroken = true;
++}
++
++static const VMStateDescription vmstate_riscv_plic = {
++    .name = "riscv_plic",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (VMStateField[]) {
++            VMSTATE_VARRAY_UINT32(source_priority, RISCVPLICState,
++                                  num_sources, 0,
++                                  vmstate_info_uint32, uint32_t),
++            VMSTATE_VARRAY_UINT32(target_priority, RISCVPLICState,
++                                  num_addrs, 0,
++                                  vmstate_info_uint32, uint32_t),
++            VMSTATE_VARRAY_UINT32(pending, RISCVPLICState, bitfield_words, 0,
++                                  vmstate_info_uint32, uint32_t),
++            VMSTATE_VARRAY_UINT32(claimed, RISCVPLICState, bitfield_words, 0,
++                                  vmstate_info_uint32, uint32_t),
++            VMSTATE_VARRAY_UINT32(enable, RISCVPLICState, num_enables, 0,
++                                  vmstate_info_uint32, uint32_t),
++            VMSTATE_END_OF_LIST()
++        }
++};
++
++static void riscv_plic_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++
++    device_class_set_props(dc, riscv_plic_properties);
++    dc->realize = riscv_plic_realize;
++    dc->vmsd = &vmstate_riscv_plic;
++}
++
++static const TypeInfo riscv_plic_info = {
++    .name          = TYPE_RISCV_PLIC,
++    .parent        = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(RISCVPLICState),
++    .class_init    = riscv_plic_class_init,
++};
++
++static void riscv_plic_register_types(void)
++{
++    type_register_static(&riscv_plic_info);
++}
++
++type_init(riscv_plic_register_types)
++
++/*
++ * Create PLIC device.
++ */
++DeviceState *riscv_plic_create(hwaddr addr, char *hart_config,
++    uint32_t hartid_base, uint32_t num_sources,
++    uint32_t num_priorities, uint32_t priority_base,
++    uint32_t pending_base, uint32_t enable_base,
++    uint32_t enable_stride, uint32_t context_base,
++    uint32_t context_stride, uint32_t aperture_size)
++{
++    DeviceState *dev = qdev_new(TYPE_RISCV_PLIC);
++    assert(enable_stride == (enable_stride & -enable_stride));
++    assert(context_stride == (context_stride & -context_stride));
++    qdev_prop_set_string(dev, "hart-config", hart_config);
++    qdev_prop_set_uint32(dev, "hartid-base", hartid_base);
++    qdev_prop_set_uint32(dev, "num-sources", num_sources);
++    qdev_prop_set_uint32(dev, "num-priorities", num_priorities);
++    qdev_prop_set_uint32(dev, "priority-base", priority_base);
++    qdev_prop_set_uint32(dev, "pending-base", pending_base);
++    qdev_prop_set_uint32(dev, "enable-base", enable_base);
++    qdev_prop_set_uint32(dev, "enable-stride", enable_stride);
++    qdev_prop_set_uint32(dev, "context-base", context_base);
++    qdev_prop_set_uint32(dev, "context-stride", context_stride);
++    qdev_prop_set_uint32(dev, "aperture-size", aperture_size);
++    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
++    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
++    return dev;
++}
+diff --git a/hw/intc/sifive_plic.c b/hw/intc/sifive_plic.c
+index 5522ede2cf..5ffce5db65 100644
+--- a/hw/intc/sifive_plic.c
++++ b/hw/intc/sifive_plic.c
+@@ -37,7 +37,7 @@ static bool addr_between(uint32_t addr, uint32_t base, uint32_t num)
+     return addr >= base && addr - base < num;
+ }
+ 
+-static PLICMode char_to_mode(char c)
++static SifivePLICMode char_to_mode(char c)
+ {
+     switch (c) {
+     case 'U': return PLICMode_U;
+@@ -119,7 +119,7 @@ static void sifive_plic_update(SiFivePLICState *plic)
+     /* raise irq on harts where this irq is enabled */
+     for (addrid = 0; addrid < plic->num_addrs; addrid++) {
+         uint32_t hartid = plic->addr_config[addrid].hartid;
+-        PLICMode mode = plic->addr_config[addrid].mode;
++        SifivePLICMode mode = plic->addr_config[addrid].mode;
+         bool level = !!sifive_plic_claimed(plic, addrid);
+ 
+         switch (mode) {
+@@ -325,7 +325,7 @@ static void parse_hart_config(SiFivePLICState *plic)
+     plic->num_harts = hartid;
+ 
+     /* store hart/mode combinations */
+-    plic->addr_config = g_new(PLICAddr, plic->num_addrs);
++    plic->addr_config = g_new(SifivePLICAddr, plic->num_addrs);
+     addrid = 0, hartid = plic->hartid_base;
+     p = plic->hart_config;
+     while ((c = *p++)) {
+diff --git a/include/hw/intc/andes_plic.h b/include/hw/intc/andes_plic.h
+new file mode 100644
+index 0000000000..377bf54487
+--- /dev/null
++++ b/include/hw/intc/andes_plic.h
+@@ -0,0 +1,112 @@
++/*
++ * Andes PLIC (Platform Level Interrupt Controller) interface
++ *
++ * Copyright (c) 2018 Andes Tech. Corp.
++ *
++ * This provides a RISC-V PLIC device with Andes' extensions.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms and conditions of the GNU General Public License,
++ * version 2 or later, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along with
++ * this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef HW_ANDES_PLIC_H
++#define HW_ANDES_PLIC_H
++
++#include "hw/intc/riscv_plic.h"
++#include "hw/sysbus.h"
++#include "qom/object.h"
++
++#define ANDES_PLIC_NAME             "ANDES_PLIC"
++#define ANDES_PLIC_HART_CONFIG      "MS"
++#define ANDES_PLIC_NUM_SOURCES      128
++#define ANDES_PLIC_NUM_PRIORITIES   32
++#define ANDES_PLIC_PRIORITY_BASE    0x04
++#define ANDES_PLIC_PENDING_BASE     0x1000
++#define ANDES_PLIC_ENABLE_BASE      0x2000
++#define ANDES_PLIC_ENABLE_STRIDE    0x80
++#define ANDES_PLIC_THRESHOLD_BASE   0x200000
++#define ANDES_PLIC_THRESHOLD_STRIDE 0x1000
++
++#define ANDES_PLICSW_NAME           "ANDES_PLICSW"
++#define ANDES_PLICSW_HART_CONFIG    "M"
++#define ANDES_PLICSW_NUM_SOURCES    64
++#define ANDES_PLICSW_NUM_PRIORITIES 8
++#define ANDES_PLICSW_PRIORITY_BASE  0x4
++#define ANDES_PLICSW_PENDING_BASE   0x1000
++#define ANDES_PLICSW_ENABLE_BASE    0x2000
++#define ANDES_PLICSW_ENABLE_STRIDE  0x80
++#define ANDES_PLICSW_THRESHOLD_BASE   0x200000
++#define ANDES_PLICSW_THRESHOLD_STRIDE 0x1000
++
++#define TYPE_ANDES_PLIC "riscv.andes.plic"
++
++typedef struct AndesPLICClass AndesPLICClass;
++/* This is reusing the GICState typedef from TYPE_ARM_GIC_COMMON */
++#define ANDES_PLIC_GET_CLASS(obj) \
++    OBJECT_GET_CLASS(AndesPLICClass, (obj), TYPE_ANDES_PLIC)
++#define ANDES_PLIC_CLASS(klass) \
++    OBJECT_CLASS_CHECK(AndesPLICClass, (klass), TYPE_ANDES_PLIC)
++#define ANDES_PLIC(obj) \
++    OBJECT_CHECK(AndesPLICState, (obj), TYPE_ANDES_PLIC)
++
++typedef struct AndesPLICClass {
++    RISCVPLICClass parent_class;
++
++    DeviceRealize parent_realize;
++    DeviceReset parent_reset;
++} AndesPLICClass;
++
++typedef struct AndesPLICState AndesPLICState;
++
++typedef enum AndesPLICMode {
++    PlicMode_U,
++    PlicMode_S,
++    PlicMode_H,
++    PlicMode_M
++} AndesPLICMode;
++
++typedef struct AndesPLICAddr {
++    uint32_t target_id;
++    uint32_t hart_id;
++    AndesPLICMode mode;
++} AndesPLICAddr;
++
++typedef struct AndesPLICState {
++    /*< private >*/
++    RISCVPLICState parent_obj;
++
++    /*< public >*/
++    MemoryRegion parent_mmio;
++    char *plic_name;
++
++    /* interface */
++    void (*andes_plic_update)(void *plic);
++} AndesPLICState;
++
++void andes_plichw_update(void *plic);
++void andes_plicsw_update(void *plic);
++
++static inline bool addr_between(uint32_t addr, uint32_t base, uint32_t offset)
++{
++    return (addr >= base && addr < base + offset);
++}
++
++DeviceState *
++andes_plic_create(hwaddr addr,
++    const char *plic_name, char *hart_config,
++    uint32_t num_sources, uint32_t num_priorities,
++    uint32_t priority_base, uint32_t pending_base,
++    uint32_t enable_base, uint32_t enable_stride,
++    uint32_t threshold_base, uint32_t threshold_stride,
++    uint32_t aperture_size);
++
++#endif /* HW_ANDES_PLIC_H */
+diff --git a/include/hw/intc/riscv_plic.h b/include/hw/intc/riscv_plic.h
+new file mode 100644
+index 0000000000..d85f311f73
+--- /dev/null
++++ b/include/hw/intc/riscv_plic.h
+@@ -0,0 +1,117 @@
++/*
++ * SiFive PLIC (Platform Level Interrupt Controller) interface
++ *
++ * Copyright (c) 2017 SiFive, Inc.
++ *
++ * This provides a RISC-V PLIC device
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms and conditions of the GNU General Public License,
++ * version 2 or later, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along with
++ * this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef HW_RISCV_PLIC_H
++#define HW_RISCV_PLIC_H
++
++#include "hw/sysbus.h"
++#include "qom/object.h"
++
++typedef struct RISCVPLICClass {
++    /*< private >*/
++    SysBusDeviceClass parent_class;
++    /*< public >*/
++} RISCVPLICClass;
++
++#define TYPE_RISCV_PLIC "riscv.plic"
++
++typedef struct RISCVPLICState RISCVPLICState;
++DECLARE_INSTANCE_CHECKER(RISCVPLICState, RISCV_PLIC,
++                         TYPE_RISCV_PLIC)
++
++typedef enum PLICMode {
++    PLICMode_U,
++    PLICMode_S,
++    PLICMode_H,
++    PLICMode_M
++} PLICMode;
++
++typedef struct PLICAddr {
++    uint32_t addrid;
++    uint32_t hartid;
++    PLICMode mode;
++} PLICAddr;
++
++struct RISCVPLICState {
++    /*< private >*/
++    SysBusDevice parent_obj;
++
++    /*< public >*/
++    MemoryRegion mmio;
++    uint32_t num_addrs;
++    uint32_t num_harts;
++    uint32_t bitfield_words;
++    uint32_t num_enables;
++    PLICAddr *addr_config;
++    uint32_t *source_priority;
++    uint32_t *target_priority;
++    uint32_t *pending;
++    uint32_t *claimed;
++    uint32_t *enable;
++
++    /* config */
++    char *hart_config;
++    uint32_t hartid_base;
++    uint32_t num_sources;
++    uint32_t num_priorities;
++    uint32_t priority_base;
++    uint32_t pending_base;
++    uint32_t enable_base;
++    uint32_t enable_stride;
++    uint32_t context_base;
++    uint32_t context_stride;
++    uint32_t aperture_size;
++
++    /* interface */
++    uint64_t (*riscv_plic_read_priority)(void *opaque,
++        hwaddr addr, unsigned size);
++    uint64_t (*riscv_plic_read_pending)(void *opaque,
++        hwaddr addr, unsigned size);
++    uint64_t (*riscv_plic_read_enable)(void *opaque,
++        hwaddr addr, unsigned size);
++    uint64_t (*riscv_plic_read_threshold)(void *opaque,
++        hwaddr addr, unsigned size);
++    uint64_t (*riscv_plic_read_claim)(void *opaque,
++        hwaddr addr, unsigned size);
++
++    void (*riscv_plic_write_priority)(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size);
++    void (*riscv_plic_write_pending)(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size);
++    void (*riscv_plic_write_enable)(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size);
++    void (*riscv_plic_write_threshold)(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size);
++    void (*riscv_plic_write_complete)(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size);
++
++    void (*riscv_plic_update)(void *opaque);
++};
++
++DeviceState *riscv_plic_create(hwaddr addr, char *hart_config,
++    uint32_t hartid_base, uint32_t num_sources,
++    uint32_t num_priorities, uint32_t priority_base,
++    uint32_t pending_base, uint32_t enable_base,
++    uint32_t enable_stride, uint32_t context_base,
++    uint32_t context_stride, uint32_t aperture_size);
++
++int riscv_plic_irqs_pending(RISCVPLICState *plic, uint32_t addrid);
++
++#endif
+diff --git a/include/hw/intc/sifive_plic.h b/include/hw/intc/sifive_plic.h
+index d3f45ec248..5f3f4385b7 100644
+--- a/include/hw/intc/sifive_plic.h
++++ b/include/hw/intc/sifive_plic.h
+@@ -30,17 +30,17 @@ typedef struct SiFivePLICState SiFivePLICState;
+ DECLARE_INSTANCE_CHECKER(SiFivePLICState, SIFIVE_PLIC,
+                          TYPE_SIFIVE_PLIC)
+ 
+-typedef enum PLICMode {
++typedef enum SifivePLICMode {
+     PLICMode_U,
+     PLICMode_S,
+     PLICMode_M
+-} PLICMode;
++} SifivePLICMode;
+ 
+-typedef struct PLICAddr {
++typedef struct SifivePLICAddr {
+     uint32_t addrid;
+     uint32_t hartid;
+-    PLICMode mode;
+-} PLICAddr;
++    SifivePLICMode mode;
++} SifivePLICAddr;
+ 
+ struct SiFivePLICState {
+     /*< private >*/
+@@ -52,7 +52,7 @@ struct SiFivePLICState {
+     uint32_t num_harts;
+     uint32_t bitfield_words;
+     uint32_t num_enables;
+-    PLICAddr *addr_config;
++    SifivePLICAddr *addr_config;
+     uint32_t *source_priority;
+     uint32_t *target_priority;
+     uint32_t *pending;
+-- 
+2.34.1
+

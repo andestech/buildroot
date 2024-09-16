@@ -1,0 +1,356 @@
+From a710a2e02bbb5218ee4cba05841b4043eda561d5 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Thu, 23 May 2024 09:12:48 +0800
+Subject: [PATCH 239/241] target/riscv: Add more options to andes.cfg. (#145)
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/145
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ docs/config/andes.cfg    |   2 +
+ system/andes-config.c    |   6 ++-
+ target/riscv/csr_andes.c | 105 +++++++++++++++++++++++++++++++++++++--
+ target/riscv/csr_andes.h |  91 +++++++++++++++++++++++++++++++--
+ 4 files changed, 194 insertions(+), 10 deletions(-)
+
+diff --git a/docs/config/andes.cfg b/docs/config/andes.cfg
+index c4493d0b4d..5973f840bb 100644
+--- a/docs/config/andes.cfg
++++ b/docs/config/andes.cfg
+@@ -70,4 +70,6 @@ msc-ext3 = "on"
+ mvec-cfg-misew = "1"
+ #mfsew is 2 bits value
+ mvec-cfg-mfsew = "2"
++marchid = "0x8045"
++mimpid = "0x1b00"
+ 
+diff --git a/system/andes-config.c b/system/andes-config.c
+index a864af948e..315de737b4 100644
+--- a/system/andes-config.c
++++ b/system/andes-config.c
+@@ -68,7 +68,11 @@ bool andes_config_number(const char *id, const char *name, uint64_t *val)
+         return false;
+     }
+     if (andes_config_query(id, name, &value)) {
+-        ret = qemu_strtou64(value, NULL, 0, val);
++        if (value[0] == '0' && (value[1] == 'x' || value[1] == 'X')) {
++            ret = qemu_strtou64(value + 2, NULL, 16, val);
++        } else {
++            ret = qemu_strtou64(value, NULL, 0, val);
++        }
+         if (ret == -ERANGE) {
+             error_setg(&error_warn,
+                 "Value '%s' is too large for parameter '%s'", value, name);
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index f85a80b51f..ee355cc990 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -862,7 +862,36 @@ typedef struct AndesCsrConfigInfo {
+     const char *key;
+ } AndesCsrConfigInfo;
+ 
+-AndesCsrConfigInfo csr_mmsc_cfg_map[] = {
++static AndesCsrConfigInfo csr_misa_map[] = {
++    {CONFIG_BOOL,   RV('A'), "isa-a"},
++    {CONFIG_BOOL,   RV('B'), "isa-b"},
++    {CONFIG_BOOL,   RV('C'), "isa-c"},
++    {CONFIG_BOOL,   RV('D'), "isa-d"},
++    {CONFIG_BOOL,   RV('E'), "isa-e"},
++    {CONFIG_BOOL,   RV('F'), "isa-f"},
++    {CONFIG_BOOL,   RV('G'), "isa-g"},
++    {CONFIG_BOOL,   RV('H'), "isa-h"},
++    {CONFIG_BOOL,   RV('I'), "isa-i"},
++    {CONFIG_BOOL,   RV('J'), "isa-j"},
++    {CONFIG_BOOL,   RV('K'), "isa-k"},
++    {CONFIG_BOOL,   RV('L'), "isa-l"},
++    {CONFIG_BOOL,   RV('M'), "isa-m"},
++    {CONFIG_BOOL,   RV('N'), "isa-n"},
++    {CONFIG_BOOL,   RV('O'), "isa-o"},
++    {CONFIG_BOOL,   RV('P'), "isa-p"},
++    {CONFIG_BOOL,   RV('Q'), "isa-q"},
++    {CONFIG_BOOL,   RV('R'), "isa-r"},
++    {CONFIG_BOOL,   RV('S'), "isa-s"},
++    {CONFIG_BOOL,   RV('T'), "isa-t"},
++    {CONFIG_BOOL,   RV('U'), "isa-u"},
++    {CONFIG_BOOL,   RV('V'), "isa-v"},
++    {CONFIG_BOOL,   RV('W'), "isa-w"},
++    {CONFIG_BOOL,   RV('X'), "isa-x"},
++    {CONFIG_BOOL,   RV('Y'), "isa-y"},
++    {CONFIG_BOOL,   RV('Z'), "isa-z"},
++};
++
++static AndesCsrConfigInfo csr_mmsc_cfg_map[] = {
+     {CONFIG_BOOL,   MASK_MMSC_CFG_ECC, "ecc"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_ECD, "isa-codense"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_PFT, "powerbrake"},
+@@ -884,7 +913,7 @@ AndesCsrConfigInfo csr_mmsc_cfg_map[] = {
+     {CONFIG_BOOL,   MASK_MMSC_CFG_BF16CVT, "isa-bf16cvt"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_ZFH, "isa-zfh"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_VL4, "isa-vl4"},
+-    {CONFIG_BOOL,   MASK_MMSC_CFG_CRASHSAVE, "crash-save"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_CRASHSAVE, "crashsave"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_VECCFG, "veccfg"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_PP16, "isa-pp16"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_VSIH, "isa-vsih"},
+@@ -900,7 +929,7 @@ AndesCsrConfigInfo csr_mmsc_cfg_map[] = {
+     {CONFIG_BOOL,   MASK_MMSC_CFG_MSC_EXT3, "msc-ext3"},
+ #endif
+ };
+-AndesCsrConfigInfo csr_mmsc_cfg2_map[]  = {
++static AndesCsrConfigInfo csr_mmsc_cfg2_map[]  = {
+     {CONFIG_BOOL,   MASK_MMSC_CFG2_BF16CVT, "isa-bf16cvt"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG2_ZFH, "isa-zfh"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG2_VL4, "isa-vl4"},
+@@ -919,12 +948,39 @@ AndesCsrConfigInfo csr_mmsc_cfg2_map[]  = {
+     {CONFIG_BOOL,   MASK_MMSC_CFG2_RVARCH2, "mmsc-cfg-rvarch2"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG2_MSC_EXT3, "msc-ext3"},
+ };
++static AndesCsrConfigInfo csr_mmsc_cfg3_map[]  = {
++    {CONFIG_BOOL,   MASK_MMSC_CFG3_HVMCSR, "mmsc-cfg-hvmcsr"},
++};
++
++static AndesCsrConfigInfo csr_mrvarch_cfg_map[] = {
++#ifdef TARGET_RISCV64
++    /* bits:[32] */
++    {CONFIG_BOOL,   MASK_MRVARCH_CFG_ZVQMAC, "isa-zvqmac"},
++    {CONFIG_BOOL,   MASK_MRVARCH_CFG_ZVLSSEG, "isa-zvlsseg"},
++#endif
++};
++static AndesCsrConfigInfo csr_mrvarch_cfg2_map[]  = {
++    {CONFIG_BOOL,   MASK_MRVARCH_CFG2_ZVQMAC, "isa-zvqmac"},
++    {CONFIG_BOOL,   MASK_MRVARCH_CFG2_ZVLSSEG, "isa-zvlsseg"},
++};
+ 
+-AndesCsrConfigInfo csr_mvec_cfg_map[]  = {
++static AndesCsrConfigInfo csr_mvec_cfg_map[]  = {
++    {CONFIG_NUMBER, MASK_MVEC_CFG_MINOR, "mvec-cfg-minor"},
++    {CONFIG_NUMBER, MASK_MVEC_CFG_MAJOR, "mvec-cfg-major"},
++    {CONFIG_NUMBER, MASK_MVEC_CFG_DW, "mvec-cfg-dw"},
++    {CONFIG_NUMBER, MASK_MVEC_CFG_MW, "mvec-cfg-mw"},
+     {CONFIG_NUMBER, MASK_MVEC_CFG_MISEW, "mvec-cfg-misew"},
+     {CONFIG_NUMBER, MASK_MVEC_CFG_MFSEW, "mvec-cfg-mfsew"},
+ };
+ 
++static AndesCsrConfigInfo csr_marchid_map[]  = {
++    {CONFIG_NUMBER, (target_ulong)-1, "marchid"},
++};
++
++static AndesCsrConfigInfo csr_mimpid_map[]  = {
++    {CONFIG_NUMBER, (target_ulong)-1, "mimpid"},
++};
++
+ static andes_config_func *const andes_config_fns[2] = {
+     andes_config_bool,
+     andes_config_number
+@@ -949,6 +1005,12 @@ static void andes_csr_from_config(AndesCsrConfigInfo *map, uint32_t size,
+ 
+ void andes_csr_configs(CPURISCVState *env)
+ {
++    /* Update misa */
++    target_ulong misa_init_val = env->misa_ext;
++    andes_csr_from_config(csr_misa_map,
++        sizeof(csr_misa_map) / sizeof(AndesCsrConfigInfo), &misa_init_val);
++    env->misa_ext = env->misa_ext_mask = misa_init_val;
++
+     /* Update mmsc_cfg */
+     target_ulong mmsc_init_val = env->andes_csr.csrno[CSR_MMSC_CFG];
+     andes_csr_from_config(csr_mmsc_cfg_map,
+@@ -958,6 +1020,7 @@ void andes_csr_configs(CPURISCVState *env)
+         env->andes_csr.csrno[CSR_MMSC_CFG] = set_field(
+             env->andes_csr.csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_ACE, true);
+     }
++
+     /* Update mmsc_cfg2 for RV32 */
+     if (riscv_cpu_mxl(env) == MXL_RV32) {
+         target_ulong mmsc2_init_val = env->andes_csr.csrno[CSR_MMSC_CFG2];
+@@ -966,11 +1029,45 @@ void andes_csr_configs(CPURISCVState *env)
+             &mmsc2_init_val);
+         env->andes_csr.csrno[CSR_MMSC_CFG2] = mmsc2_init_val;
+     }
++
++    /* Update mmsc_cfg3 if exists*/
++    if (mcfg3(env, CSR_MMSC_CFG3) == RISCV_EXCP_NONE) {
++        target_ulong mmsc3_init_val = env->andes_csr.csrno[CSR_MMSC_CFG3];
++        andes_csr_from_config(csr_mmsc_cfg3_map,
++            sizeof(csr_mmsc_cfg3_map) / sizeof(AndesCsrConfigInfo),
++            &mmsc3_init_val);
++        env->andes_csr.csrno[CSR_MMSC_CFG3] = mmsc3_init_val;
++    }
++
++    /* Update mrvarch_cfg */
++    target_ulong mrvarch_init_val = env->andes_csr.csrno[CSR_MRVARCH_CFG];
++    andes_csr_from_config(csr_mrvarch_cfg_map,
++        sizeof(csr_mrvarch_cfg_map) / sizeof(AndesCsrConfigInfo),
++        &mrvarch_init_val);
++    env->andes_csr.csrno[CSR_MRVARCH_CFG] = mrvarch_init_val;
++
++    /* Update mrvarch_cfg2 for RV32 */
++    if (riscv_cpu_mxl(env) == MXL_RV32) {
++        target_ulong mrvarch2_init_val = env->andes_csr.csrno[CSR_MRVARCH_CFG2];
++        andes_csr_from_config(csr_mrvarch_cfg2_map,
++            sizeof(csr_mrvarch_cfg2_map) / sizeof(AndesCsrConfigInfo),
++            &mrvarch2_init_val);
++        env->andes_csr.csrno[CSR_MRVARCH_CFG2] = mrvarch2_init_val;
++    }
++
+     /* Update mvev_cfg */
+     target_ulong mvec_init_val = env->andes_csr.csrno[CSR_MVEC_CFG];
+     andes_csr_from_config(csr_mvec_cfg_map,
+         sizeof(csr_mvec_cfg_map) / sizeof(AndesCsrConfigInfo), &mvec_init_val);
+     env->andes_csr.csrno[CSR_MVEC_CFG] = mvec_init_val;
++
++    /* Update marchid */
++    andes_csr_from_config(csr_marchid_map, 1,
++                          (target_ulong *)&(riscv_cpu_cfg(env)->marchid));
++
++    /* Update mimpid */
++    andes_csr_from_config(csr_mimpid_map, 1,
++                          (target_ulong *)&(riscv_cpu_cfg(env)->mimpid));
+ }
+ #endif
+ 
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 256c8911b7..b22c856550 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -177,6 +177,7 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define MASK_MMSC_CFG_EDSP                  (0x01 << 29)
+ #define MASK_MMSC_CFG_PPMA                  (0x01 << 30)
+ /* below is only exists in RV32 */
++/* cast to uint64_t for set_field() operation */
+ #define MASK_MMSC_CFG_MSC_EXT               ((uint64_t)0x01 << 31)
+ /* for RV64 mmsc_cfg */
+ #define MASK_MMSC_CFG_BF16CVT               ((uint64_t)0x01 << 32)
+@@ -232,16 +233,28 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define MASK_MMSC_CFG2_I_LMSLVP             (0x01 << 27)
+ #define MASK_MMSC_CFG2_RVARCH2              (0x01 << 28)
+ #define MASK_MMSC_CFG2_BTB_ECC              (0x03 << 29)
++/* cast to uint64_t for set_field() operation */
+ #define MASK_MMSC_CFG2_MSC_EXT3             ((uint64_t)0x01 << 31)
+ 
+ /* mmsc_cfg3 */
+-#define MASK_MMSC_CFG3_BTB_RAM_CMD          (0x01)
+-#define MASK_MMSC_CFG3_NO_CCTL_VA           (0x01 << 1)
+-#define MASK_MMSC_CFG3_NO_CCTL_AL           (0x01 << 2)
+-#define MASK_MMSC_CFG3_NO_CCTL_IX_INVWB     (0x01 << 3)
++#define MASK_MMSC_CFG3_BTB_RAM_CMD          (0x1)
++#define MASK_MMSC_CFG3_NO_CCTL_VA           (0x1 << 1)
++#define MASK_MMSC_CFG3_NO_CCTL_ALL          (0x1 << 2)
++#define MASK_MMSC_CFG3_NO_CCTL_IX_INVWB     (0x1 << 3)
++#define MASK_MMSC_CFG3_HVMCSR               (0x1 << 4)
++#define MASK_MMSC_CFG3_PL2C                 (0x1 << 5)
++#define MASK_MMSC_CFG3_PL2_CMD              (0x1 << 6)
++#define MASK_MMSC_CFG3_CST_CTL              (0x1 << 7)
++#define MASK_MMSC_CFG3_IC_ECC_GRAN          (0x7 << 13)
++#define MASK_MMSC_CFG3_ILM_ECC_GRAN         (0x7 << 16)
++#define MASK_MMSC_CFG3_DC_ECC_GRAN          (0x7 << 19)
++#define MASK_MMSC_CFG3_DLM_ECC_GRAN         (0x7 << 22)
++#define MASK_MMSC_CFG3_TLB_ECC_GRAN         (0x7 << 25)
++#define MASK_MMSC_CFG3_BTB_ECC_GRAN         (0x7 << 28)
+ 
+ /* mcause */
+ #define MASK_MCAUSE_EXCEPTION_CODE_32       (~MASK_MCAUSE_INTERRUPT_32)
++/* cast to uint64_t for set_field() operation */
+ #define MASK_MCAUSE_INTERRUPT_32            ((uint64_t)1 << 31)
+ #define MASK_MCAUSE_EXCEPTION_CODE_64       (~MASK_MCAUSE_INTERRUPT_64)
+ #define MASK_MCAUSE_INTERRUPT_64            ((uint64_t)1 << 63)
+@@ -288,19 +301,83 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define MASK_MRVARCH_CFG_ZCD                (0x1 << 28)
+ #define MASK_MRVARCH_CFG_ZCF                (0x1 << 29)
+ #define MASK_MRVARCH_CFG_ZCMP               (0x1 << 30)
++/* cast to uint64_t for set_field() operation */
+ #define MASK_MRVARCH_CFG_ZCMT               ((uint64_t)0x1 << 31)
++/* for RV64 mrvarch_cfg */
+ #define MASK_MRVARCH_CFG_ZFBFMIN            ((uint64_t)0x1 << 32)
+ #define MASK_MRVARCH_CFG_ZVFBFMIN           ((uint64_t)0x1 << 33)
+ #define MASK_MRVARCH_CFG_ZVFBFWMA           ((uint64_t)0x1 << 34)
+ #define MASK_MRVARCH_CFG_ZVQMAC             ((uint64_t)0x1 << 35)
+ #define MASK_MRVARCH_CFG_ZVLSSEG            ((uint64_t)0x1 << 36)
++#define MASK_MRVARCH_CFG_ZICOND             ((uint64_t)0x1 << 37)
++#define MASK_MRVARCH_CFG_ZIHINTNTL          ((uint64_t)0x1 << 38)
++#define MASK_MRVARCH_CFG_ZFA                ((uint64_t)0x1 << 39)
++#define MASK_MRVARCH_CFG_ZACAS              ((uint64_t)0x1 << 41)
++#define MASK_MRVARCH_CFG_ZABHA              ((uint64_t)0x1 << 42)
++#define MASK_MRVARCH_CFG_ZVFHMIN            ((uint64_t)0x1 << 43)
++#define MASK_MRVARCH_CFG_ZVFH               ((uint64_t)0x1 << 44)
++#define MASK_MRVARCH_CFG_ZVBB               ((uint64_t)0x1 << 47)
++#define MASK_MRVARCH_CFG_ZVBC               ((uint64_t)0x1 << 48)
++#define MASK_MRVARCH_CFG_ZVKB               ((uint64_t)0x1 << 49)
++#define MASK_MRVARCH_CFG_ZVKG               ((uint64_t)0x1 << 50)
++#define MASK_MRVARCH_CFG_ZVKN               ((uint64_t)0x1 << 51)
++#define MASK_MRVARCH_CFG_ZVKNC              ((uint64_t)0x1 << 52)
++#define MASK_MRVARCH_CFG_ZVKNED             ((uint64_t)0x1 << 53)
++#define MASK_MRVARCH_CFG_ZVKNG              ((uint64_t)0x1 << 54)
++#define MASK_MRVARCH_CFG_ZVKNHA             ((uint64_t)0x1 << 55)
++#define MASK_MRVARCH_CFG_ZVKBNHB            ((uint64_t)0x1 << 56)
++#define MASK_MRVARCH_CFG_ZVKS               ((uint64_t)0x1 << 57)
++#define MASK_MRVARCH_CFG_ZVKSC              ((uint64_t)0x1 << 58)
++#define MASK_MRVARCH_CFG_ZVKSED             ((uint64_t)0x1 << 59)
++#define MASK_MRVARCH_CFG_ZVKSG              ((uint64_t)0x1 << 60)
++#define MASK_MRVARCH_CFG_ZVKSH              ((uint64_t)0x1 << 61)
++#define MASK_MRVARCH_CFG_ZVKT               ((uint64_t)0x1 << 62)
++#define MASK_MRVARCH_CFG_MRVARCH_EXT3       ((uint64_t)0x1 << 63)
+ 
+ /* mrvarch_cfg2 */
+ #define MASK_MRVARCH_CFG2_ZFBFMIN           (0x1)
+ #define MASK_MRVARCH_CFG2_ZVFBFMIN          (0x1 << 1)
+ #define MASK_MRVARCH_CFG2_ZVFBFWMA          (0x1 << 2)
+ #define MASK_MRVARCH_CFG2_ZVQMAC            (0x1 << 3)
+-#define MASK_MRVARCH_CFG2_ZVLSSEQ           (0x1 << 4)
++#define MASK_MRVARCH_CFG2_ZVLSSEG           (0x1 << 4)
++#define MASK_MRVARCH_CFG2_ZICOND            (0x1 << 5)
++#define MASK_MRVARCH_CFG2_ZIHINTNTL         (0x1 << 6)
++#define MASK_MRVARCH_CFG2_ZFA               (0x1 << 7)
++#define MASK_MRVARCH_CFG2_ZILSP             (0x1 << 8)
++#define MASK_MRVARCH_CFG2_ZACAS             (0x1 << 9)
++#define MASK_MRVARCH_CFG2_ZABHA             (0x1 << 10)
++#define MASK_MRVARCH_CFG2_ZVFHMIN           (0x1 << 11)
++#define MASK_MRVARCH_CFG2_ZVFH              (0x1 << 12)
++#define MASK_MRVARCH_CFG2_ZVBB              (0x1 << 15)
++#define MASK_MRVARCH_CFG2_ZVBC              (0x1 << 16)
++#define MASK_MRVARCH_CFG2_ZVKB              (0x1 << 17)
++#define MASK_MRVARCH_CFG2_ZVKG              (0x1 << 18)
++#define MASK_MRVARCH_CFG2_ZVKN              (0x1 << 19)
++#define MASK_MRVARCH_CFG2_ZVKNC             (0x1 << 20)
++#define MASK_MRVARCH_CFG2_ZVKNED            (0x1 << 21)
++#define MASK_MRVARCH_CFG2_ZVKNG             (0x1 << 22)
++#define MASK_MRVARCH_CFG2_ZVKNHA            (0x1 << 23)
++#define MASK_MRVARCH_CFG2_ZVKBNHB           (0x1 << 24)
++#define MASK_MRVARCH_CFG2_ZVKS              (0x1 << 25)
++#define MASK_MRVARCH_CFG2_ZVKSC             (0x1 << 26)
++#define MASK_MRVARCH_CFG2_ZVKSED            (0x1 << 27)
++#define MASK_MRVARCH_CFG2_ZVKSG             (0x1 << 28)
++#define MASK_MRVARCH_CFG2_ZVKSH             (0x1 << 29)
++#define MASK_MRVARCH_CFG2_ZVKT              (0x1 << 30)
++/* cast to uint64_t for set_field() operation */
++#define MASK_MRVARCH_CFG2_MRVARCH_EXT3      ((uint64_t)0x1 << 31)
++
++/* mrvarch_cfg3 */
++#define MASK_MRVARCH_CFG3_SMAIA             (0x1)
++#define MASK_MRVARCH_CFG3_SSAIA             (0x1 << 1)
++#define MASK_MRVARCH_CFG3_SPMP              (0x3 << 2)
++#define MASK_MRVARCH_CFG3_SMRNMI            (0x3 << 4)
++#define MASK_MRVARCH_CFG3_SSNPM             (0x1 << 6)
++#define MASK_MRVARCH_CFG3_SMNPM             (0x1 << 7)
++#define MASK_MRVARCH_CFG3_SMPM              (0x1 << 8)
++#define MASK_MRVARCH_CFG3_ZAWRS             (0x1 << 9)
++#define MASK_MRVARCH_CFG3_SMCSRIND          (0x1 << 10)
++#define MASK_MRVARCH_CFG3_SSCSRIND          (0x1 << 11)
+ 
+ /* mhsp_ctl */
+ #define MASK_MHSP_CTL_OVF_EN                (0x1)
+@@ -317,6 +394,10 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define MASK_UMISC_CTL_FP_MODE_BF16         1
+ 
+ /* mvec_cfg */
++#define MASK_MVEC_CFG_MINOR                 (0xF)
++#define MASK_MVEC_CFG_MAJOR                 (0xF << 4)
++#define MASK_MVEC_CFG_DW                    (0x7 << 8)
++#define MASK_MVEC_CFG_MW                    (0x7 << 11)
+ #define MASK_MVEC_CFG_MISEW                 (0x3 << 14)
+ #define MASK_MVEC_CFG_MFSEW                 (0x3 << 16)
+ 
+-- 
+2.34.1
+

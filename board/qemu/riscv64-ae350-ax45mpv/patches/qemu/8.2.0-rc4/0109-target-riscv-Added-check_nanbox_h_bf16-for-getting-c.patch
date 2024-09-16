@@ -1,0 +1,67 @@
+From 42674b3d79d22b484d290d4fdebf70140ff51ec5 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 2 Nov 2023 10:11:04 +0800
+Subject: [PATCH 109/241] target/riscv: Added check_nanbox_h_bf16 for getting
+ correct BF16 qNaN value if input is NaN, and also changed BF16 relative codes
+ for calling check nanbox from check_nanbox_h to check_nanbox_h_bf16
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/andes_helper.c |  2 +-
+ target/riscv/fpu_helper.c   |  2 +-
+ target/riscv/internals.h    | 16 ++++++++++++++++
+ 3 files changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/target/riscv/andes_helper.c b/target/riscv/andes_helper.c
+index ce74164ec1..ff5ffeae60 100644
+--- a/target/riscv/andes_helper.c
++++ b/target/riscv/andes_helper.c
+@@ -145,7 +145,7 @@ uint64_t helper_andes_nfcvt_bf16_s(CPURISCVState *env, uint64_t rs2)
+ 
+ uint64_t helper_andes_nfcvt_s_bf16(CPURISCVState *env, uint64_t rs2)
+ {
+-    float16 frs = check_nanbox_h(env, rs2);
++    float16 frs = check_nanbox_h_bf16(env, rs2);
+     return nanbox_s(env, bfloat16_to_float32(frs, &env->fp_status));
+ }
+ 
+diff --git a/target/riscv/fpu_helper.c b/target/riscv/fpu_helper.c
+index 871a70a316..9384407f98 100644
+--- a/target/riscv/fpu_helper.c
++++ b/target/riscv/fpu_helper.c
+@@ -756,6 +756,6 @@ uint64_t helper_fcvt_bf16_s(CPURISCVState *env, uint64_t rs1)
+ 
+ uint64_t helper_fcvt_s_bf16(CPURISCVState *env, uint64_t rs1)
+ {
+-    float16 frs1 = check_nanbox_h(env, rs1);
++    float16 frs1 = check_nanbox_h_bf16(env, rs1);
+     return nanbox_s(env, bfloat16_to_float32(frs1, &env->fp_status));
+ }
+diff --git a/target/riscv/internals.h b/target/riscv/internals.h
+index 8239ae83cc..1d14abaa41 100644
+--- a/target/riscv/internals.h
++++ b/target/riscv/internals.h
+@@ -136,4 +136,20 @@ static inline float16 check_nanbox_h(CPURISCVState *env, uint64_t f)
+     }
+ }
+ 
++static inline float16 check_nanbox_h_bf16(CPURISCVState *env, uint64_t f)
++{
++    /* Disable nanbox check when enable zfinx */
++    if (RISCV_CPU(env_cpu(env))->cfg.ext_zfinx) {
++        return (uint16_t)f;
++    }
++
++    uint64_t mask = MAKE_64BIT_MASK(16, 48);
++
++    if (likely((f & mask) == mask)) {
++        return (uint16_t)f;
++    } else {
++        return 0x7FC0u; /* default qnan */
++    }
++}
++
+ #endif
+-- 
+2.34.1
+

@@ -1,0 +1,51 @@
+From f2c926b28e043efb0a25111e3333f79464eaf1fc Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 14 Dec 2023 10:03:55 +0800
+Subject: [PATCH 139/241] target/riscv: Fix upgrade to v8.2 issue
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/cpu.c       | 4 ++--
+ target/riscv/translate.c | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 15c78a539a..ea0d45c892 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1097,8 +1097,8 @@ static void rv32_andes_n25_cpu_init(Object *obj)
+     cfg->ext_zfa = false;
+     cfg->ext_sstc = false;
+     cfg->ext_svadu = false;
+-    cfg->ext_icbom = false;
+-    cfg->ext_icboz = false;
++    cfg->ext_zicbom = false;
++    cfg->ext_zicboz = false;
+ }
+ 
+ static void rv32_andes_n45_cpu_init(Object *obj)
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index 6196067041..a1865bf4e3 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -381,7 +381,7 @@ static void gen_set_gpr(DisasContext *ctx, int reg_num, TCGv t)
+ {
+     if (ctx->cfg_ptr->ext_XAndesV5Ops == true) {
+         if (reg_num == xSP) {
+-            gen_helper_andes_v5_hsp_check(cpu_env, t);
++            gen_helper_andes_v5_hsp_check(tcg_env, t);
+         }
+     }
+ 
+@@ -408,7 +408,7 @@ static void gen_set_gpri(DisasContext *ctx, int reg_num, target_long imm)
+ {
+     if (ctx->cfg_ptr->ext_XAndesV5Ops == true) {
+         if (reg_num == xSP) {
+-            gen_helper_andes_v5_hsp_check(cpu_env, tcg_constant_tl(imm));
++            gen_helper_andes_v5_hsp_check(tcg_env, tcg_constant_tl(imm));
+         }
+     }
+ 
+-- 
+2.34.1
+

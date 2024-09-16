@@ -1,0 +1,26 @@
+From 55afd79515a8a38511f0bc4827f348a0d48b9ca0 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 5 Jan 2024 15:19:56 +0800
+Subject: [PATCH 166/241] target/riscv: Sync ace-helper.h with QEMU ACE agent
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/ace-helper.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/target/riscv/ace-helper.h b/target/riscv/ace-helper.h
+index 2bdaf5b3c8..38f9cd9e84 100644
+--- a/target/riscv/ace-helper.h
++++ b/target/riscv/ace-helper.h
+@@ -92,7 +92,7 @@ typedef int32_t (*fp_ace_agent_register_t)(void *, cb_table_t, uint32_t,
+     const char*, uint64_t, int32_t);
+ typedef int32_t (*fp_ace_agent_run_insn_t)(void *, uint32_t, uint64_t);
+ typedef int32_t (*fp_ace_agent_version_t)(void *, uint64_t);
+-typedef char* (*fp_ace_agent_copilot_version_t)(void *);
++typedef char* (*fp_ace_agent_copilot_version_t)(void *, uint64_t);
+ EXPORT_C int32_t ace_agent_register(void *, cb_table_t cb_table,
+     uint32_t cb_table_num, const char *, uint64_t, int32_t);
+ EXPORT_C int32_t ace_agent_run_insn(void *, uint32_t opcode, uint64_t);
+-- 
+2.34.1
+

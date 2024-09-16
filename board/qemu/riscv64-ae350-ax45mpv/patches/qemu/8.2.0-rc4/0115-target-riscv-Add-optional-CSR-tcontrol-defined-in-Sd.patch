@@ -1,0 +1,373 @@
+From de6952191de20f330ea790aebf3b3adf06e3d568 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Mon, 20 Nov 2023 15:17:18 +0800
+Subject: [PATCH 115/241] target/riscv: Add optional CSR tcontrol defined in
+ Sdtrig extension target/riscv: Fix many issues since some change of v8.2
+ (major in cpu_env -> tcg_env) hw/intc: Replace get cpu_env function for v8.2
+ hw/timer: Replace get cpu_env funcrtion for v8.2
+
+Add CSR predicate/read/write operations for tcontrol. Use new CPU
+configuration "ext_sdtrig_tcontrol" to decide whether tcontrol is
+implemented into CPU or not.
+
+When any trap into M-mode is taken, tcontrol.MPTE is set to the value of
+tcontrol.MTE, and tcontrol.MTE is set to 0. When mret is executed, mte
+is set to the value of tcontrol.MPTE field.
+
+Besides, when tcontrol.MTE and tcontrol.MPTE are implemented, medeleg[3]
+should be hard-wired to 0.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ hw/intc/andes_plic.c                          |  4 +-
+ hw/intc/riscv_plic.c                          |  2 +-
+ hw/timer/andes_plmt.c                         |  6 +--
+ target/riscv/cpu.c                            |  6 ++-
+ target/riscv/cpu.h                            |  1 +
+ target/riscv/cpu_bits.h                       |  5 +++
+ target/riscv/cpu_cfg.h                        |  1 +
+ target/riscv/cpu_helper.c                     |  7 +++
+ target/riscv/csr.c                            | 44 ++++++++++++++++---
+ target/riscv/csr_andes.c                      |  1 +
+ target/riscv/insn_trans/trans_xandesace.c.inc |  3 +-
+ target/riscv/op_helper.c                      |  8 ++++
+ target/riscv/tcg/tcg-cpu.c                    | 27 +++++++++---
+ 13 files changed, 95 insertions(+), 20 deletions(-)
+
+diff --git a/hw/intc/andes_plic.c b/hw/intc/andes_plic.c
+index 42dde9b8a3..320b94fc4f 100644
+--- a/hw/intc/andes_plic.c
++++ b/hw/intc/andes_plic.c
+@@ -58,7 +58,7 @@ void andes_plichw_update(void *plic)
+         uint32_t hart_id = riscv_plic->addr_config[target_id].hartid;
+         PLICMode mode = riscv_plic->addr_config[target_id].mode;
+         CPUState *cpu = qemu_get_cpu(hart_id);
+-        CPURISCVState *env = cpu ? cpu->env_ptr : NULL;
++        CPURISCVState *env = cpu_env(cpu);
+         if (!env) {
+             continue;
+         }
+@@ -104,7 +104,7 @@ void andes_plicsw_update(void *plic)
+         uint32_t hart_id = riscv_plic->addr_config[target_id].hartid;
+         PLICMode mode = riscv_plic->addr_config[target_id].mode;
+         CPUState *cpu = qemu_get_cpu(hart_id);
+-        CPURISCVState *env = cpu ? cpu->env_ptr : NULL;
++        CPURISCVState *env = cpu_env(cpu);
+         if (!env) {
+             continue;
+         }
+diff --git a/hw/intc/riscv_plic.c b/hw/intc/riscv_plic.c
+index cca0da885c..381876c2dd 100644
+--- a/hw/intc/riscv_plic.c
++++ b/hw/intc/riscv_plic.c
+@@ -144,7 +144,7 @@ static void riscv_plic_update(void *opaque)
+         uint32_t hartid = plic->addr_config[addrid].hartid;
+         PLICMode mode = plic->addr_config[addrid].mode;
+         CPUState *cpu = qemu_get_cpu(hartid);
+-        CPURISCVState *env = cpu ? cpu->env_ptr : NULL;
++        CPURISCVState *env = cpu_env(cpu);
+         if (!env) {
+             continue;
+         }
+diff --git a/hw/timer/andes_plmt.c b/hw/timer/andes_plmt.c
+index 8293ddd1ee..e1c03f59f6 100644
+--- a/hw/timer/andes_plmt.c
++++ b/hw/timer/andes_plmt.c
+@@ -99,7 +99,7 @@ andes_plmt_read(void *opaque, hwaddr addr, unsigned size)
+         /* %8=0:timecmp_lo, %8=4:timecmp_hi */
+         size_t hartid = (addr - plmt->timecmp_base) >> 3;
+         CPUState *cpu = qemu_get_cpu(hartid);
+-        CPURISCVState *env = cpu ? cpu->env_ptr : NULL;
++        CPURISCVState *env = cpu_env(cpu);
+         if (!env) {
+             error_report("plmt: invalid timecmp hartid: %zu", hartid);
+         } else if ((addr & 0x7) == 0) {
+@@ -134,7 +134,7 @@ andes_plmt_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+         /* %8=0:timecmp_lo, %8=4:timecmp_hi */
+         size_t hartid = (addr - plmt->timecmp_base) >> 3;
+         CPUState *cpu = qemu_get_cpu(hartid);
+-        CPURISCVState *env = cpu ? cpu->env_ptr : NULL;
++        CPURISCVState *env = cpu_env(cpu);
+         if (!env) {
+             error_report("plmt: invalid timecmp hartid: %zu", hartid);
+         } else if ((addr & 0x7) == 0) {
+@@ -239,7 +239,7 @@ andes_plmt_create(hwaddr addr, hwaddr size, uint32_t num_harts,
+     for (i = 0; i < num_harts; i++) {
+         CPUState *cpu = qemu_get_cpu(i);
+         RISCVCPU *rvcpu = RISCV_CPU(cpu);
+-        CPURISCVState *env = cpu ? cpu->env_ptr : NULL;
++        CPURISCVState *env = cpu_env(cpu);
+         if (!env) {
+             continue;
+         }
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 33ad9a1037..2cff2c245c 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -21,6 +21,7 @@
+ #include "qemu/qemu-print.h"
+ #include "qemu/ctype.h"
+ #include "qemu/log.h"
++#include "qemu/main-loop.h"
+ #include "cpu.h"
+ #include "cpu_vendorid.h"
+ #include "internals.h"
+@@ -696,7 +697,6 @@ static void rv64_andes_common_cpu_init(Object *obj,
+     if (!env->misa_ext) {
+         riscv_cpu_set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     }
+-    riscv_cpu_add_user_properties(obj);
+     register_andes_cpu_props(obj);
+     env->priv_ver = PRIV_VERSION_1_12_0;
+ 
+@@ -1001,7 +1001,6 @@ static void rv32_andes_common_cpu_init(Object *obj,
+     if (!env->misa_ext) {
+         riscv_cpu_set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     }
+-    riscv_cpu_add_user_properties(obj);
+     register_andes_cpu_props(obj);
+     env->priv_ver = PRIV_VERSION_1_12_0;
+ 
+@@ -2045,6 +2044,9 @@ const RISCVCPUMultiExtConfig riscv_cpu_extensions[] = {
+     MULTI_EXT_CFG_BOOL("zvksc", ext_zvksc, false),
+     MULTI_EXT_CFG_BOOL("zvksg", ext_zvksg, false),
+ 
++    /* Optional CSR of sdtrig extension */
++    MULTI_EXT_CFG_BOOL("sdtrig_tcontrol", ext_sdtrig_tcontrol, false),
++
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index 3e1da7233a..775093df54 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -355,6 +355,7 @@ struct CPUArchState {
+     QEMUTimer *itrigger_timer[RV_MAX_TRIGGERS];
+     int64_t last_icount;
+     bool itrigger_enabled;
++    target_ulong tcontrol;
+ 
+     /* machine specific rdtime callback */
+     uint64_t (*rdtime_fn)(void *);
+diff --git a/target/riscv/cpu_bits.h b/target/riscv/cpu_bits.h
+index ebd7917d49..1dcba1625c 100644
+--- a/target/riscv/cpu_bits.h
++++ b/target/riscv/cpu_bits.h
+@@ -361,6 +361,7 @@
+ #define CSR_TDATA2          0x7a2
+ #define CSR_TDATA3          0x7a3
+ #define CSR_TINFO           0x7a4
++#define CSR_TCONTROL        0x7a5
+ 
+ /* Debug Mode Registers */
+ #define CSR_DCSR            0x7b0
+@@ -905,4 +906,8 @@ typedef enum RISCVException {
+ /* JVT CSR bits */
+ #define JVT_MODE                           0x3F
+ #define JVT_BASE                           (~0x3F)
++
++/* Sdtrig CSR masks */
++#define TCONTROL_MTE                       BIT(3)
++#define TCONTROL_MPTE                      BIT(7)
+ #endif
+diff --git a/target/riscv/cpu_cfg.h b/target/riscv/cpu_cfg.h
+index b6ea246e20..1f862e95fb 100644
+--- a/target/riscv/cpu_cfg.h
++++ b/target/riscv/cpu_cfg.h
+@@ -153,6 +153,7 @@ struct RISCVCPUConfig {
+     bool pmp;
+     bool debug;
+     bool misa_w;
++    bool ext_sdtrig_tcontrol;
+ 
+     bool short_isa_string;
+ 
+diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
+index 620644c23b..c7b9e0bc0e 100644
+--- a/target/riscv/cpu_helper.c
++++ b/target/riscv/cpu_helper.c
+@@ -1788,6 +1788,13 @@ void riscv_cpu_do_interrupt(CPUState *cs)
+             env->hstatus = set_field(env->hstatus, HSTATUS_GVA, write_gva);
+         }
+ 
++        if (riscv_cpu_cfg(env)->ext_sdtrig_tcontrol) {
++            s = env->tcontrol;
++            s = set_field(s, TCONTROL_MPTE, get_field(s, TCONTROL_MTE));
++            s = set_field(s, TCONTROL_MTE, 0);
++            env->tcontrol = s;
++        }
++
+         s = env->mstatus;
+         s = set_field(s, MSTATUS_SPIE, get_field(s, MSTATUS_SIE));
+         s = set_field(s, MSTATUS_SPP, env->priv);
+diff --git a/target/riscv/csr.c b/target/riscv/csr.c
+index fde7ce1a53..51f4d7228e 100644
+--- a/target/riscv/csr.c
++++ b/target/riscv/csr.c
+@@ -549,6 +549,15 @@ static RISCVException debug(CPURISCVState *env, int csrno)
+ 
+     return RISCV_EXCP_ILLEGAL_INST;
+ }
++
++static RISCVException sdtrig_tcontrol(CPURISCVState *env, int csrno)
++{
++    if (riscv_cpu_cfg(env)->debug && riscv_cpu_cfg(env)->ext_sdtrig_tcontrol) {
++        return RISCV_EXCP_NONE;
++    }
++
++    return RISCV_EXCP_ILLEGAL_INST;
++}
+ #endif
+ 
+ static RISCVException seed(CPURISCVState *env, int csrno)
+@@ -1482,6 +1491,15 @@ static RISCVException write_medeleg(CPURISCVState *env, int csrno,
+                                     target_ulong val)
+ {
+     env->medeleg = (env->medeleg & ~DELEGABLE_EXCPS) | (val & DELEGABLE_EXCPS);
++
++    if (riscv_cpu_cfg(env)->ext_sdtrig_tcontrol) {
++        /*
++         * From debug specification section 5.4:
++         * If tcontrol is implemented, medeleg[3] is hard-wired to 0.
++         */
++        env->medeleg &= ~(1ULL << RISCV_EXCP_BREAKPOINT);
++    }
++
+     return RISCV_EXCP_NONE;
+ }
+ 
+@@ -3900,6 +3918,20 @@ static RISCVException read_tinfo(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException read_tcontrol(CPURISCVState *env, int csrno,
++                                    target_ulong *val)
++{
++    *val = env->tcontrol;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_tcontrol(CPURISCVState *env, int csrno,
++                                     target_ulong val)
++{
++    env->tcontrol = val & (TCONTROL_MPTE | TCONTROL_MTE);
++    return RISCV_EXCP_NONE;
++}
++
+ /*
+  * Functions to access Pointer Masking feature registers
+  * We have to check if current priv lvl could modify
+@@ -4794,11 +4826,13 @@ riscv_csr_operations csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_PMPADDR15] =  { "pmpaddr15", pmp, read_pmpaddr, write_pmpaddr },
+ 
+     /* Debug CSRs */
+-    [CSR_TSELECT]   =  { "tselect", debug, read_tselect, write_tselect },
+-    [CSR_TDATA1]    =  { "tdata1",  debug, read_tdata,   write_tdata   },
+-    [CSR_TDATA2]    =  { "tdata2",  debug, read_tdata,   write_tdata   },
+-    [CSR_TDATA3]    =  { "tdata3",  debug, read_tdata,   write_tdata   },
+-    [CSR_TINFO]     =  { "tinfo",   debug, read_tinfo,   write_ignore  },
++	[CSR_TSELECT]   =  { "tselect",  debug, read_tselect,  write_tselect },
++    [CSR_TDATA1]    =  { "tdata1",   debug, read_tdata,    write_tdata   },
++    [CSR_TDATA2]    =  { "tdata2",   debug, read_tdata,    write_tdata   },
++    [CSR_TDATA3]    =  { "tdata3",   debug, read_tdata,    write_tdata   },
++    [CSR_TINFO]     =  { "tinfo",    debug, read_tinfo,    write_ignore  },
++    [CSR_TCONTROL]  =  { "tcontrol", sdtrig_tcontrol,      read_tcontrol,
++                         write_tcontrol                                  },
+ 
+     /* User Pointer Masking */
+     [CSR_UMTE]    =    { "umte",    pointer_masking, read_umte,  write_umte },
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 326828ba6a..9ff712503e 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -9,6 +9,7 @@
+ #include "qemu/log.h"
+ #include "qemu/main-loop.h"
+ #include "exec/exec-all.h"
++#include "exec/cpu_ldst.h"
+ #include "andes_cpu_bits.h"
+ #include "csr_andes.h"
+ #include "exec/address-spaces.h"
+diff --git a/target/riscv/insn_trans/trans_xandesace.c.inc b/target/riscv/insn_trans/trans_xandesace.c.inc
+index b0688f5d81..54a6681181 100644
+--- a/target/riscv/insn_trans/trans_xandesace.c.inc
++++ b/target/riscv/insn_trans/trans_xandesace.c.inc
+@@ -11,10 +11,9 @@
+ #include "andes_ace_helper.c.inc"
+ static bool trans_andes_ace(DisasContext *ctx, arg_andes_ace *a)
+ {
+-    CPURISCVState *env = cpu_env(ctx->cs);
+     if (!ctx->cfg_ptr->ext_XAndesAce) {
+         qemu_printf("XAndesAce not set\n");
+-        riscv_raise_exception(env, RISCV_EXCP_ILLEGAL_INST, GETPC());
++        riscv_raise_exception(cpu_env(ctx->cs), RISCV_EXCP_ILLEGAL_INST, GETPC());
+     }
+     REQUIRE_ACES;
+     TCGv opc = tcg_constant_tl(ctx->opcode);
+diff --git a/target/riscv/op_helper.c b/target/riscv/op_helper.c
+index 5355225d56..e3fda3af69 100644
+--- a/target/riscv/op_helper.c
++++ b/target/riscv/op_helper.c
+@@ -322,6 +322,14 @@ target_ulong helper_mret(CPURISCVState *env)
+         riscv_raise_exception(env, RISCV_EXCP_ILLEGAL_INST, GETPC());
+     }
+ 
++    if (riscv_cpu_cfg(env)->ext_sdtrig_tcontrol) {
++        uint64_t tcontrol = env->tcontrol;
++
++        tcontrol = set_field(tcontrol, TCONTROL_MTE,
++                             get_field(tcontrol, TCONTROL_MPTE));
++        env->tcontrol = tcontrol;
++    }
++
+     target_ulong retpc = env->mepc;
+     if (!riscv_has_ext(env, RVC) && (retpc & 0x3)) {
+         riscv_raise_exception(env, RISCV_EXCP_INST_ADDR_MIS, GETPC());
+diff --git a/target/riscv/tcg/tcg-cpu.c b/target/riscv/tcg/tcg-cpu.c
+index 611fbfd37f..d7a7269ce7 100644
+--- a/target/riscv/tcg/tcg-cpu.c
++++ b/target/riscv/tcg/tcg-cpu.c
+@@ -627,16 +627,33 @@ static void riscv_cpu_validate_andes_ace(RISCVCPU *cpu, Error **errp)
+     CPURISCVState *env = &cpu->env;
+ 
+     if (cpu->cfg.ext_XAndesAce && cpu->cfg.XAndesAceLib == NULL) {
+-        error_setg(errp, "Invalid configuration: AndesACE requires XAndesAceLib setting");
++        error_setg(errp, "Invalid configuration: Andes ACE requires"
++                   " XAndesAceLib setting");
+         return;
+     }
+ 
+-    if (cpu->cfg.ext_XAndesAce) { /* cfg.ext_XAndesAce is true, cfg.XAndesAceLib cannot be NULL since above check already */
+-        if (load_qemu_ace_wrapper(cpu->cfg.XAndesAceLib) != 0) {
+-            error_setg(errp, "xandesacelib '%s' cannot be loaded", cpu->cfg.XAndesAceLib);
++    /* cfg.ext_XAndesAce is true, cfg.XAndesAceLib cannot
++     * be NULL since above check already
++     */
++    if (cpu->cfg.ext_XAndesAce) {
++        target_ulong hartid;
++#ifndef CONFIG_USER_ONLY
++        hartid = env->mhartid;
++#else
++        hartid = 0;
++#endif
++        if (qemu_ace_load_wrapper(cpu->cfg.XAndesAceLib, hartid)) {
++            error_setg(errp, "xandesacelib '%s' cannot be loaded",
++                       cpu->cfg.XAndesAceLib);
+             return;
+         } else {
+-            qemu_ace_agent_register(env);
++            /* Loaded ACE wrapper library, register callback function */
++            if (qemu_ace_agent_register(env, cpu->cfg.XAndesAceExtLibPath,
++                                    hartid, cpu->cfg.ext_XAndesAceMulti)) {
++                error_setg(errp, "xandesacelib '%s' register failed",
++                           cpu->cfg.XAndesAceLib);
++                return;
++            }
+         }
+     }
+ }
+-- 
+2.34.1
+

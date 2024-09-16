@@ -1,0 +1,117 @@
+From c2b0c021ed8bf67718e8cf90f347713610c9f482 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 2 Aug 2023 17:32:55 +0800
+Subject: [PATCH 028/241] target/riscv: Add support of following CSRs:
+ mpft_ctl, mhsp_ctl,               msp_bound, msp_base.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c | 39 +++++++++++++++++++++++++++++++--------
+ target/riscv/csr_andes.h |  6 ++++--
+ 2 files changed, 35 insertions(+), 10 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 51192c8617..55e2908a62 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -51,16 +51,34 @@ static RISCVException write_csr(CPURISCVState *env,
+ static RISCVException write_mecc_code(CPURISCVState *env, int csrno,
+                                       target_ulong val)
+ {
+-    // we only need to take care of CODE field, other fields are always zero.
+-    env->andes_csr.csrno[CSR_MECC_CODE] = val & MASK_CSR_MECC_CODE_CODE;
++    env->andes_csr.csrno[CSR_MECC_CODE] = val & WRITE_MASK_CSR_MECC_CODE;
+     return RISCV_EXCP_NONE;
+ }
+ 
+ static RISCVException write_uitb(CPURISCVState *env, int csrno,
+                                  target_ulong val)
+ {
+-    // we only need to take care of ADDR field
+-    env->andes_csr.csrno[CSR_UITB] = val & MASK_CSR_UITB_ADDR;
++    env->andes_csr.csrno[CSR_UITB] = val & WRITE_MASK_CSR_UITB;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_mpft_ctl(CPURISCVState *env, int csrno,
++                                     target_ulong val)
++{
++    env->andes_csr.csrno[CSR_MPFT_CTL] = val & WRITE_MASK_CSR_MPFT_CTL;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_mhsp_ctl(CPURISCVState *env, int csrno,
++                                     target_ulong val)
++{
++    env->andes_csr.csrno[CSR_MHSP_CTL] = val & WRITE_MASK_CSR_MHSP_CTL;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_all_ignore(CPURISCVState *env, int csrno,
++                                       target_ulong val)
++{
+     return RISCV_EXCP_NONE;
+ }
+ 
+@@ -83,6 +101,8 @@ void andes_csr_init(AndesCsr *andes_csr)
+                                         (1UL << V5_MMISC_CTL_MSA_OR_UNA);
+     andes_csr->csrno[CSR_MCACHE_CTL] =  (1UL << V5_MCACHE_CTL_IC_FIRST_WORD) |
+                                         (1UL << V5_MCACHE_CTL_DC_FIRST_WORD);
++    andes_csr->csrno[CSR_MSP_BOUND] =   ~((target_long)0);  // all-one reset value
++    andes_csr->csrno[CSR_MSP_BASE] =    ~((target_long)0);
+ }
+ 
+ void andes_vec_init(AndesVec *andes_vec)
+@@ -139,9 +159,10 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_csr},
+     [CSR_MECC_CODE]      = { "mecc_code",         any, read_csr,
+                                                        write_mecc_code    },
+-    [CSR_MNVEC]          = { "mnvec",             any, read_csr, write_csr},
++    [CSR_MNVEC]          = { "mnvec",             any, read_csr,
++                                                       write_all_ignore   },
+     [CSR_MCACHE_CTL]     = { "mcache_ctl",        any, read_csr,
+-                                                  write_mcache_ctl        },
++                                                       write_mcache_ctl   },
+     [CSR_MCCTLBEGINADDR] = { "mcctlbeginaddr",    any, read_csr, write_csr},
+     [CSR_MCCTLCOMMAND]   = { "mcctlcommand",      any, read_csr, write_csr},
+     [CSR_MCCTLDATA]      = { "mcctldata",         any, read_csr, write_csr},
+@@ -149,7 +170,8 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_MFIOB]          = { "mfiob",             any, read_csr, write_csr},
+ 
+     /* Hardware Stack Protection & Recording */
+-    [CSR_MHSP_CTL]     = { "mhsp_ctl",            any, read_csr, write_csr},
++    [CSR_MHSP_CTL]     = { "mhsp_ctl",            any, read_csr,
++                                                       write_mhsp_ctl     },
+     [CSR_MSP_BOUND]    = { "msp_bound",           any, read_csr, write_csr},
+     [CSR_MSP_BASE]     = { "msp_base",            any, read_csr, write_csr},
+     [CSR_MXSTATUS]     = { "mxstatus",            any, read_csr, write_csr},
+@@ -164,7 +186,8 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_MSAVEDCAUSE2] = { "msavedcause2",        any, read_csr, write_csr},
+ 
+     /* Control CSRs */
+-    [CSR_MPFT_CTL]  = { "mpft_ctl",               any, read_csr, write_csr},
++    [CSR_MPFT_CTL]  = { "mpft_ctl",               any, read_csr,
++                                                       write_mpft_ctl     },
+     [CSR_MMISC_CTL] = { "mmisc_ctl",              any, read_csr, write_csr},
+     [CSR_MCLK_CTL]  = { "mclk_ctl",               any, read_csr, write_csr},
+ 
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 399f8b50d5..3954aa2146 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -33,8 +33,10 @@ typedef struct AndesVec {
+ #define V5_MCACHE_CTL_DC_COHEN              19
+ #define V5_MCACHE_CTL_DC_COHSTA             20
+ 
+-#define MASK_CSR_MECC_CODE_CODE             0xFF
+-#define MASK_CSR_UITB_ADDR                  0xFFFFFFFC
++#define WRITE_MASK_CSR_MECC_CODE            0xFF
++#define WRITE_MASK_CSR_UITB                 0xFFFFFFFC
++#define WRITE_MASK_CSR_MPFT_CTL             0x1F0
++#define WRITE_MASK_CSR_MHSP_CTL             0x1F
+ 
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+-- 
+2.34.1
+

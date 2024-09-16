@@ -1,0 +1,44 @@
+From 02e98788f2cc2534be9aa8310cdacd67057217d3 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 17 Nov 2023 09:50:13 +0800
+Subject: [PATCH 113/241] target/riscv: Check CSR mmisc_ctl.ACES status for
+ translate ACE instruction
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/insn_trans/trans_xandesace.c.inc | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/insn_trans/trans_xandesace.c.inc b/target/riscv/insn_trans/trans_xandesace.c.inc
+index 092ee4a187..b0688f5d81 100644
+--- a/target/riscv/insn_trans/trans_xandesace.c.inc
++++ b/target/riscv/insn_trans/trans_xandesace.c.inc
+@@ -1,4 +1,13 @@
+-/*** ACE instructions ***/
++/*
++ * RISC-V translation routines for Andes ACE instructions
++ *
++ * Copyright (c) 2023 Andes Technology Corp.
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#define REQUIRE_ACES do { \
++    REQUIRE_CFG(CSR_MMISC_CTL, MASK_MMISC_CTL_ACES) \
++} while (0)
++
+ #include "andes_ace_helper.c.inc"
+ static bool trans_andes_ace(DisasContext *ctx, arg_andes_ace *a)
+ {
+@@ -7,9 +16,7 @@ static bool trans_andes_ace(DisasContext *ctx, arg_andes_ace *a)
+         qemu_printf("XAndesAce not set\n");
+         riscv_raise_exception(env, RISCV_EXCP_ILLEGAL_INST, GETPC());
+     }
+-    /* We should check ACE whether is enabled by checking 
+-     * mmisc_ctl.ACES or mstatus.XS 
+-     */
++    REQUIRE_ACES;
+     TCGv opc = tcg_constant_tl(ctx->opcode);
+     gen_helper_andes_v5_ace(opc, tcg_env, opc);
+     gen_update_pc(ctx, ctx->cur_insn_len);
+-- 
+2.34.1
+

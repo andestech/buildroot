@@ -1,0 +1,30 @@
+From 86c180c4eb374a9a23e7321659e8f987d7cf146f Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Wed, 10 Jan 2024 13:28:36 +0800
+Subject: [PATCH 169/241] andes_ae350: Remove WDT unimplemented device
+
+Since atcwdt200 was implemented, remove the dummy device.
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/andes_ae350.c | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 28e3a543b7..88bdc1ce51 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -413,10 +413,6 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     create_unimplemented_device("riscv.andes.ae350.spi",
+         memmap[ANDES_AE350_SPI].base, memmap[ANDES_AE350_SPI].size);
+ 
+-    /* WDT */
+-    create_unimplemented_device("riscv.andes.ae350.wdt",
+-        memmap[ANDES_AE350_WDT].base, memmap[ANDES_AE350_WDT].size);
+-
+     /* RTC */
+     atcrtc100_create(memmap[ANDES_AE350_RTC].base,
+                      qdev_get_gpio_in(DEVICE(s->plic),
+-- 
+2.34.1
+

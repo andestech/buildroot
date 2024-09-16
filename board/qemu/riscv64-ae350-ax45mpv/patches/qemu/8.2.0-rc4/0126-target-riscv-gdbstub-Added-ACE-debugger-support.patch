@@ -1,0 +1,888 @@
+From 68b962f8321b1148561f01db47a571882cece1c1 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Mon, 14 Aug 2023 17:02:39 +0800
+Subject: [PATCH 126/241] target/riscv: gdbstub: Added ACE debugger support
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ gdbstub/andes_ace_gdb.c.inc | 169 +++++++++++++++++++
+ gdbstub/andes_ace_gdb.h     |  52 ++++++
+ gdbstub/gdbstub.c           | 174 ++++++++++++++++++++
+ gdbstub/system.c            |   5 +
+ gdbstub/user-target.c       |   1 +
+ target/riscv/cpu.c          |   7 +-
+ target/riscv/cpu.h          |   1 +
+ target/riscv/cpu_cfg.h      |   1 +
+ target/riscv/gdbstub.c      | 319 ++++++++++++++++++++++++++++++++++++
+ 9 files changed, 727 insertions(+), 2 deletions(-)
+ create mode 100644 gdbstub/andes_ace_gdb.c.inc
+ create mode 100644 gdbstub/andes_ace_gdb.h
+
+diff --git a/gdbstub/andes_ace_gdb.c.inc b/gdbstub/andes_ace_gdb.c.inc
+new file mode 100644
+index 0000000000..4d8ec9ebec
+--- /dev/null
++++ b/gdbstub/andes_ace_gdb.c.inc
+@@ -0,0 +1,169 @@
++/*
++ * Andes ACE GDB stub
++ *
++ * Copyright (c) 2023 Andes Technology Corp.
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#ifndef _ANDES_ACE_GDB_
++#define _ANDES_ACE_GDB_
++#include <dlfcn.h>
++#include <sys/utsname.h>
++#include "gdbstub/andes_ace_gdb.h"
++#include "qemu/qemu-print.h"
++
++unsigned *global_acr_reg_count_v5;
++unsigned *global_acr_type_count_v5;
++unsigned *global_ace_lib_for_gdb_len_v5;
++const char *global_ace_lib_for_gdb_v5;
++ACR_INFO_T_V5 *global_acr_info_list_v5;
++INSN_CODE_T_V5* (*gen_get_value_code) (char *name, unsigned index);
++INSN_CODE_T_V5* (*gen_set_value_code) (char *name, unsigned index);
++
++#define LE(msg) do {        \
++    err_str = dlerror();    \
++    if (err_str != NULL) {  \
++        qemu_printf("%s\n", msg);  \
++        return -1;          \
++    }                       \
++} while (0)
++
++int32_t gdb_ace_load_lib(const char *so_name)
++{
++    char *err_str = NULL;
++    void *handle;
++
++    /*
++     * Check whether already load ACE debugger library,
++     * we don't support multi-ace and/or multi-ace-dbg
++     */
++    if (global_ace_lib_for_gdb_v5 != NULL) {
++        return 0;
++    }
++
++    /* dlopen a shared object named 'so_name' */
++    handle = dlopen(so_name, RTLD_NOW | RTLD_LOCAL);
++    LE("unable to dlopen the acelibdbg library");
++
++    assert(handle != NULL);
++
++    global_ace_lib_for_gdb_v5 =
++        (const char *) dlsym(handle, "ace_lib_for_gdb");
++    LE("unable to load symbol ace_lib_for_gdb");
++
++    global_ace_lib_for_gdb_len_v5 =
++        (unsigned *) dlsym(handle, "ace_lib_for_gdb_len");
++    LE("unable to load symbol ace_lib_for_gdb_len");
++
++    global_acr_reg_count_v5 = (unsigned *) dlsym(handle, "acr_reg_count");
++    LE("unable to load symbol acr_reg_count");
++
++    global_acr_type_count_v5 = (unsigned *) dlsym(handle, "acr_type_count");
++    LE("unable to load symbol acr_type_count");
++
++    gen_get_value_code = dlsym(handle, "gen_get_value_code");
++    LE("unable to load symbol gen_get_value_code");
++
++    gen_set_value_code = dlsym(handle, "gen_set_value_code");
++    LE("unable to load symbol gen_set_value_code");
++
++    if (*global_acr_type_count_v5 != 0) {
++        global_acr_info_list_v5 = (ACR_INFO_T_V5 *) dlsym(handle, "acr_list");
++    }
++
++    return 0;
++}
++
++int32_t gdb_ace_get_file_name_for_gdb(unsigned char *platform, char *soname)
++{
++    int32_t ret = 0;
++
++    if (global_ace_lib_for_gdb_v5) {
++        struct utsname os;
++        if (uname(&os) == 0) {
++            const char *str;
++
++            if (g_strcmp0((const char *)platform, os.sysname) == 0) {
++                /* Return binary share library.  */
++                str = global_ace_lib_for_gdb_v5;
++            } else
++                return -1;
++
++            /* use size as filename to do fopen */
++            sprintf(soname, "%u", *global_ace_lib_for_gdb_len_v5);
++
++            FILE *fd = fopen(soname, "w");
++            if (fd == NULL) {
++                ret = -2;
++            } else {
++                if (fwrite(str, sizeof(char),
++                    *global_ace_lib_for_gdb_len_v5, fd) !=
++                    *global_ace_lib_for_gdb_len_v5) {
++                    ret = -3;
++                }
++                fclose(fd);
++            }
++        }
++    } else {
++        return -4;
++    }
++
++    return ret;
++}
++
++#define NDS_QUERY_TARGET    "SID"
++#define NDS_QUERY_ENDIAN    "LE"
++#define NDS_QUERY_CPUID     "0"
++#define NDS_QUERY_TARGET_CMD    "nds query target"
++#define NDS_QUERY_ENDIAN_CMD    "nds query endian"
++#define NDS_QUERY_CPUID_CMD     "nds query cpuid"
++#define NDS_ACE_CMD             "nds ace "
++
++int gdb_handle_query_rcmd_nds_query(GArray *params, void *user_ctx)
++{
++    char reply[16];
++    /* nds query target only can be 'SID' or 'OCD' */
++    if (!g_strcmp0((const char *)gdbserver_state.mem_buf->data,
++        NDS_QUERY_TARGET_CMD)) {
++        gdb_memtohex(gdbserver_state.str_buf,
++                     (guint8 *)NDS_QUERY_TARGET, strlen(NDS_QUERY_TARGET));
++        gdb_put_strbuf();
++        return 0;
++    }
++    /* nds query endian only can be '[target]: [LE|BE]' */
++    if (!g_strcmp0((const char *)gdbserver_state.mem_buf->data,
++        NDS_QUERY_ENDIAN_CMD)) {
++        snprintf(reply, sizeof(reply), "%s: %s",
++                 NDS_QUERY_TARGET, NDS_QUERY_ENDIAN);
++        gdb_memtohex(gdbserver_state.str_buf, (guint8 *)reply, strlen(reply));
++        gdb_put_strbuf();
++        return 0;
++    }
++    /* Should return 0 or hartid */
++    if (!g_strcmp0((const char *)gdbserver_state.mem_buf->data,
++        NDS_QUERY_CPUID_CMD)) {
++        gdb_memtohex(gdbserver_state.str_buf,
++                     (guint8 *)NDS_QUERY_CPUID, strlen(NDS_QUERY_CPUID));
++        gdb_put_strbuf();
++        return 0;
++    }
++    /* gdb client may send 'nds ace os.name', os.name may 'Linux' */
++    if (!strncmp((const char *)gdbserver_state.mem_buf->data,
++        NDS_ACE_CMD, strlen(NDS_ACE_CMD))) {
++        /*
++         * Should put libacetool.so file length as
++         * filename since ICEman did it
++         */
++        char filename[64];
++        if (gdb_ace_get_file_name_for_gdb(gdbserver_state.mem_buf->data +
++            strlen(NDS_ACE_CMD), filename)) {
++            gdb_put_packet("E04");
++            return 0;
++        }
++        gdb_memtohex(gdbserver_state.str_buf,
++                     (guint8 *)filename, strlen(filename));
++        gdb_put_strbuf();
++        return 0;
++    }
++    return -1;
++}
++#endif
+diff --git a/gdbstub/andes_ace_gdb.h b/gdbstub/andes_ace_gdb.h
+new file mode 100644
+index 0000000000..36f7ecd3b4
+--- /dev/null
++++ b/gdbstub/andes_ace_gdb.h
+@@ -0,0 +1,52 @@
++/*
++ * Andes ACE GDB stub
++ *
++ * Copyright (c) 2023 Andes Technology Corp.
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#ifndef _ANDES_ACE_GDB_H_
++#define _ANDES_ACE_GDB_H_
++
++/* ACR_info records essential information of ACR and SRAM-type ACM */
++typedef struct ACR_info_v5 {
++    char name[1024];
++    unsigned width;
++    unsigned num;
++} ACR_INFO_T_V5;
++
++/*
++ * INSN_TYPE_V5 represents what kind of utility instruction
++ * acr_io1 : ACR utility instruction and exists one GPR for din/dout
++ * acr_io2 : ACR utility instruction and exists two GPRs for din/dout
++ *           (din_high, din_low/dout_high, din_low)
++ * acm_io1 : ACM utility instruction and exists one GPR for din/dout
++ * acm_io2 : ACM utility instruction and exists two GPRs for din/dout
++ *           (din_high, din_low/dout_high, din_low)
++ */
++typedef enum {
++  acr_io1 = 0, acr_io2 = 1,
++  acm_io1 = 2, acm_io2 = 3
++} INSN_TYPE_V5;
++
++typedef struct Util_Insn {
++  INSN_TYPE_V5 version;
++  unsigned insn;
++} UTIL_INSN_T_V5;
++
++typedef struct Insn_Code {
++  unsigned num;
++  UTIL_INSN_T_V5 *code;
++} INSN_CODE_T_V5;
++
++extern unsigned *global_acr_reg_count_v5;
++extern unsigned *global_acr_type_count_v5;
++extern unsigned *global_ace_lib_for_gdb_len_v5;
++extern const char *global_ace_lib_for_gdb_v5;
++extern ACR_INFO_T_V5 *global_acr_info_list_v5;
++extern INSN_CODE_T_V5* (*gen_get_value_code) (char *name, unsigned index);
++extern INSN_CODE_T_V5* (*gen_set_value_code) (char *name, unsigned index);
++
++int32_t gdb_ace_load_lib(const char *);
++int32_t gdb_ace_get_file_name_for_gdb(unsigned char *, char *);
++int gdb_handle_query_rcmd_nds_query(GArray *, void *);
++#endif
+diff --git a/gdbstub/gdbstub.c b/gdbstub/gdbstub.c
+index 46d752bbc2..bcf74f78f2 100644
+--- a/gdbstub/gdbstub.c
++++ b/gdbstub/gdbstub.c
+@@ -1411,6 +1411,173 @@ static void handle_v_kill(GArray *params, void *user_ctx)
+     gdb_qemu_exit(0);
+ }
+ 
++#ifndef CONFIG_USER_ONLY
++static int gdb_vfile_packet(char const *packet, int packet_size)
++{
++    char const *parse;
++    int fd;
++    int ret;
++    int offset;
++    char *pathname;
++    int pathname_len;
++    char reply[16];
++
++    if (strncmp(packet, "open:", 5) == 0) {
++        int flags;
++        mode_t mode;
++        char *separator;
++        parse = packet + 5;
++
++        if (*parse == '\0') {
++            return -1;
++        }
++
++        separator = strchr(parse, ',');
++
++        if (separator == NULL) {
++            return -1;
++        }
++
++        pathname_len = (separator - parse) / 2;
++        gdb_hextomem(gdbserver_state.mem_buf, parse, pathname_len);
++        pathname = (char *)gdbserver_state.mem_buf->data;
++        pathname[pathname_len] = 0;
++
++        parse = separator + 1;
++        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&flags);
++        if (ret < 0) {
++            return -1;
++        }
++        if (*(parse++) != ',') {
++            return -1;
++        }
++        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&mode);
++        if (ret < 0) {
++            return -1;
++        }
++
++        ret = open(pathname, flags, mode);
++
++        if (ret == -1) {
++            snprintf(reply, sizeof(reply), "F-1,%x", errno);
++        } else {
++            snprintf(reply, sizeof(reply), "F%x", ret);
++        }
++
++        gdb_put_packet(reply);
++
++        return 0;
++
++    } else if (strncmp(packet, "close:", 6) == 0) {
++        parse = packet + 6;
++        if (*parse == '\0') {
++            return -1;
++        }
++
++        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&fd);
++        if (ret < 0) {
++            return -1;
++        }
++
++        ret = close(fd);
++
++        if (ret == -1) {
++            snprintf(reply, sizeof(reply), "F-1,%x", errno);
++        } else {
++            snprintf(reply, sizeof(reply), "F%x", ret);
++        }
++
++        gdb_put_packet(reply);
++
++        return 0;
++
++    } else if (strncmp(packet, "setfs:", 6) == 0) {
++        parse = packet + 6;
++        if (*parse == '\0') {
++            return -1;
++        }
++
++        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&fd);
++        if (ret < 0) {
++            return -1;
++        }
++
++        snprintf(reply, sizeof(reply), "F%x", 0);
++
++        gdb_put_packet(reply);
++
++        return 0;
++
++    } else if (strncmp(packet, "pread:", 6) == 0) {
++        int count;
++        char *read_buffer;
++        parse = packet + 6;
++
++        if (*parse == '\0') {
++            return -1;
++        }
++
++        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&fd);
++        if (ret < 0) {
++            return -1;
++        }
++        if (*(parse++) != ',') {
++            return -1;
++        }
++
++        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&count);
++        if (ret < 0) {
++            return -1;
++        }
++        if (*(parse++) != ',') {
++            return -1;
++        }
++
++        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&offset);
++        if (ret < 0) {
++            return -1;
++        }
++
++        read_buffer = malloc(count);
++        ret = pread(fd, read_buffer, count, offset);
++
++        char *reply2 = malloc(16 + ret * 2); /* payload and escape characters */
++        if (ret == -1) {
++            snprintf(reply2, 16, "F-1,%x", errno);
++            gdb_put_packet(reply2);
++        } else {
++            snprintf(reply2, 16, "F%x;", ret);
++            g_string_assign(gdbserver_state.str_buf, reply2);
++            if (ret > 0) {
++                gdb_memtox(gdbserver_state.str_buf, read_buffer, ret);
++                gdb_put_packet_binary(gdbserver_state.str_buf->str,
++                                      gdbserver_state.str_buf->len, false);
++            } else {
++                gdb_put_packet(reply2);
++            }
++        }
++
++        free(read_buffer);
++        free(reply2);
++
++        return 0;
++
++    }
++
++    return 0;
++}
++
++static void handle_v_file(GArray *params, void *user_ctx)
++{
++  char reply[16];
++  if (gdb_vfile_packet(get_param(params, 0)->data,
++                       strlen(get_param(params, 0)->data)) == -1) {
++    snprintf(reply, 16, "F-1,%x", EPERM);
++    gdb_put_packet(reply);
++  }
++}
++#endif
++
+ static const GdbCmdParseEntry gdb_v_commands_table[] = {
+     /* Order is important if has same prefix */
+     {
+@@ -1466,6 +1633,13 @@ static const GdbCmdParseEntry gdb_v_commands_table[] = {
+         .cmd_startswith = 1,
+         .schema = "s0"
+     },
++#else /* System emulatin use original codes for ACE/gdb */
++    {
++        .handler = handle_v_file,
++        .cmd = "File:",
++        .cmd_startswith = 1,
++        .schema = "s0"
++    },
+ #endif
+ };
+ 
+diff --git a/gdbstub/system.c b/gdbstub/system.c
+index 01ca5ca0db..3d4a3809c8 100644
+--- a/gdbstub/system.c
++++ b/gdbstub/system.c
+@@ -29,6 +29,7 @@
+ #include "monitor/monitor.h"
+ #include "trace.h"
+ #include "internals.h"
++#include "gdbstub/andes_ace_gdb.c.inc"
+ 
+ /* System emulation specific state */
+ typedef struct {
+@@ -534,6 +535,10 @@ void gdb_handle_query_rcmd(GArray *params, void *user_ctx)
+     len = len / 2;
+     gdb_hextomem(gdbserver_state.mem_buf, get_param(params, 0)->data, len);
+     g_byte_array_append(gdbserver_state.mem_buf, &zero, 1);
++    /* process 'nds query' commands */
++    if (gdb_handle_query_rcmd_nds_query(params, user_ctx) == 0) {
++        return;
++    }
+     qemu_chr_be_write(gdbserver_system_state.mon_chr,
+                       gdbserver_state.mem_buf->data,
+                       gdbserver_state.mem_buf->len);
+diff --git a/gdbstub/user-target.c b/gdbstub/user-target.c
+index c4bba4c72c..820bf4e591 100644
+--- a/gdbstub/user-target.c
++++ b/gdbstub/user-target.c
+@@ -14,6 +14,7 @@
+ #ifdef CONFIG_LINUX
+ #include "linux-user/loader.h"
+ #include "linux-user/qemu.h"
++#include "gdbstub/andes_ace_gdb.c.inc"
+ #endif
+ 
+ /*
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index c8e111e4d7..2026bfed2a 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1484,7 +1484,7 @@ static void riscv_cpu_reset_hold(Object *obj)
+         }
+     }
+     env->mcause = 0;
+-    for (int i = 0; i < 32; i++) {
++    for (i = 0; i < 32; i++) {
+         env->gpr[i] = 0;
+         env->fpr[i] = 0;
+     }
+@@ -1497,7 +1497,7 @@ static void riscv_cpu_reset_hold(Object *obj)
+     env->frm = 0;
+     env->scause = 0;
+     env->satp = 0;
+-    for (int i = 0; i < MAX_RISCV_PMPS; i++) {
++    for (i = 0; i < MAX_RISCV_PMPS; i++) {
+         env->pmp_state.pmp[i].addr_reg = 0;
+         env->pmp_state.pmp[i].cfg_reg = 0;
+         env->pmp_state.addr[i].sa = 0;
+@@ -2200,6 +2200,7 @@ static Property andes_cpu_property[] = {
+     DEFINE_PROP_STRING("xandesacelib", RISCVCPU, cfg.XAndesAceLib),
+     DEFINE_PROP_STRING("xandesaceextlibpath", RISCVCPU,
+                        cfg.XAndesAceExtLibPath),
++    DEFINE_PROP_STRING("xandesacelibdbg", RISCVCPU, cfg.XAndesAceLibDbg),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+@@ -2236,6 +2237,8 @@ static const char *riscv_gdb_get_dynamic_xml(CPUState *cs, const char *xmlname)
+         return cpu->dyn_csr_xml;
+     } else if (strcmp(xmlname, "riscv-vector.xml") == 0) {
+         return cpu->dyn_vreg_xml;
++    } else if (strcmp(xmlname, "riscv-ace.xml") == 0) {
++        return cpu->dyn_ace_xml;
+     }
+ 
+     return NULL;
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index 0727f5be50..a9a90b2118 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -457,6 +457,7 @@ struct ArchCPU {
+ 
+     char *dyn_csr_xml;
+     char *dyn_vreg_xml;
++    char *dyn_ace_xml;
+ 
+     /* Configuration Settings */
+     RISCVCPUConfig cfg;
+diff --git a/target/riscv/cpu_cfg.h b/target/riscv/cpu_cfg.h
+index 2c033484d6..d5f8600a78 100644
+--- a/target/riscv/cpu_cfg.h
++++ b/target/riscv/cpu_cfg.h
+@@ -145,6 +145,7 @@ struct RISCVCPUConfig {
+     char *vext_spec;
+     char *XAndesAceLib;
+     char *XAndesAceExtLibPath;
++    char *XAndesAceLibDbg;
+     uint16_t vlen;
+     uint16_t elen;
+     uint16_t cbom_blocksize;
+diff --git a/target/riscv/gdbstub.c b/target/riscv/gdbstub.c
+index 58b3ace0fe..aee7672694 100644
+--- a/target/riscv/gdbstub.c
++++ b/target/riscv/gdbstub.c
+@@ -17,6 +17,7 @@
+  */
+ 
+ #include "qemu/osdep.h"
++#include "qemu/qemu-print.h"
+ #include "exec/gdbstub.h"
+ #include "gdbstub/helpers.h"
+ #include "cpu.h"
+@@ -261,6 +262,318 @@ static int riscv_gen_dynamic_csr_xml(CPUState *cs, int base_reg)
+     return CSR_TABLE_SIZE;
+ }
+ 
++#include "gdbstub/andes_ace_gdb.h"
++unsigned char *acr_value;
++int qemu_ace_agent_run_insn(CPURISCVState *, unsigned);
++
++static int nds_ace_get_reg(CPURISCVState *env, int reg_n)
++{
++    bool is_rv64 = (MXL_RV32 == env->misa_mxl_max) ? false : true;
++    uint32_t reg_bytes = is_rv64 ? 8ul : 4ul;
++    unsigned int ByteSize = 0;
++    unsigned int reg_idx = 0;
++    char *type_name = NULL;
++    uint32_t curr_reg_no = 0;
++    ACR_INFO_T_V5 *acr_info_list_v5 = global_acr_info_list_v5;
++
++    /*
++     * Backup temp register (x5, x6, x7)
++     * x5: high part
++     * x6: low part
++     * x7: ACM's address
++     */
++    target_ulong s0, s1, s2;
++    s0 = env->gpr[5];
++    s1 = env->gpr[6];
++    s2 = env->gpr[7];
++
++    /* Allocate acr value array and get acr info by ACR register number */
++    for (unsigned int i = 0; i < *global_acr_type_count_v5; i++) {
++        if ((acr_info_list_v5->num + curr_reg_no) >= reg_n + 1) {
++            reg_idx = reg_n - curr_reg_no;
++            type_name = acr_info_list_v5->name;
++            unsigned int acr_width = acr_info_list_v5->width;
++            ByteSize =
++                (acr_width % 8 == 0) ? acr_width / 8 : (acr_width / 8) + 1;
++            if (acr_value != NULL) {
++                free(acr_value);
++            }
++            acr_value = malloc(ByteSize);
++            break;
++        }
++        curr_reg_no += acr_info_list_v5->num;
++        acr_info_list_v5++;
++    }
++    if (acr_value == NULL) {
++        qemu_printf("Cannot allocate acr value memory '%s'\n", type_name);
++        return -1;
++    }
++    unsigned char *value = acr_value;
++
++    /* Generate code to read value from ACR/ACM */
++    INSN_CODE_T_V5 *insn_code = gen_get_value_code(type_name, reg_idx);
++
++    bool init_acm_addr = false;
++    /* Execute the code generated by gen_get_value_code() iteratively */
++    for (unsigned i = 0; i < insn_code->num; i++) {
++
++        /*
++         * For ACM utility instruction,
++         * write memory address to GDB_REGNO_XPR0 + 7
++         */
++        if (init_acm_addr == false &&
++                ((insn_code->code + i)->version == acm_io1 ||
++                 (insn_code->code + i)->version == acm_io2)) {
++            env->gpr[7] = reg_idx;
++            init_acm_addr = true;
++        }
++
++        unsigned insn = (insn_code->code + i)->insn;
++
++        /*
++         * determine the number of GPRs used to read/write data from/to ACR/ACM
++         */
++        bool isTwoGPR = false;
++        if ((insn_code->code + i)->version == acr_io2 ||
++                (insn_code->code + i)->version == acm_io2) {
++            isTwoGPR = true;
++        }
++
++        /* execute the code */
++        int exec_out = qemu_ace_agent_run_insn(env, insn);
++        if (exec_out != 0) {
++            qemu_printf("Unable to execute ACE utility program\n");
++
++            /* Restore temp register */
++            env->gpr[5] = s0;
++            env->gpr[6] = s1;
++            env->gpr[7] = s2;
++            return -1;
++        }
++
++        /* read value from program buffer */
++        if (isTwoGPR == false) {
++            target_ulong reg_value;
++            reg_value = env->gpr[5];
++            memcpy(value, &reg_value, reg_bytes);
++            value += reg_bytes;
++        } else {
++            target_ulong high = 0, low = 0;
++            high = env->gpr[5];
++            low = env->gpr[6];
++            memcpy(value, &low, reg_bytes);
++            value += reg_bytes;
++            memcpy(value, &high, reg_bytes);
++            value += reg_bytes;
++        }
++    }
++
++    /* Restore temp register */
++    env->gpr[5] = s0;
++    env->gpr[6] = s1;
++    env->gpr[7] = s2;
++
++    return ByteSize;
++}
++
++static int nds_ace_set_reg(CPURISCVState *env, unsigned char *val, int reg_n)
++{
++    bool is_rv64 = (MXL_RV32 == env->misa_mxl_max) ? false : true;
++    uint32_t reg_bytes = is_rv64 ? 8ul : 4ul;
++    unsigned int ByteSize = 0;
++    unsigned int reg_idx = 0;
++    char *type_name = NULL;
++    uint32_t curr_reg_no = 0;
++    ACR_INFO_T_V5 *acr_info_list_v5 = global_acr_info_list_v5;
++
++    /*
++     * Backup temp register (x5, x6, x7)
++     * x5: high part
++     * x6: low part
++     * x7: ACM's address
++     */
++    target_ulong s0, s1, s2;
++    s0 = env->gpr[5];
++    s1 = env->gpr[6];
++    s2 = env->gpr[7];
++
++    /* Allocate acr value array and get acr info by ACR register number */
++    for (unsigned int i = 0; i < *global_acr_type_count_v5; i++) {
++        if ((acr_info_list_v5->num + curr_reg_no) >= reg_n + 1) {
++            reg_idx = reg_n - curr_reg_no;
++            type_name = acr_info_list_v5->name;
++            unsigned int acr_width = acr_info_list_v5->width;
++            ByteSize =
++                (acr_width % 8 == 0) ? acr_width / 8 : (acr_width / 8) + 1;
++            break;
++        }
++        curr_reg_no += acr_info_list_v5->num;
++        acr_info_list_v5++;
++    }
++    if (type_name == NULL) {
++        qemu_printf("Cannot find acr reg no %d\n", reg_n);
++        return -1;
++    }
++
++    /* Allocate buffer which is the multiple of register size */
++    unsigned int rounds = (ByteSize % reg_bytes) ?
++                           ByteSize / reg_bytes + 1 : ByteSize / reg_bytes;
++    char *buffer = (char *)alloca(rounds * reg_bytes);
++    memset(buffer, 0, rounds * reg_bytes);
++    memcpy(buffer, val, ByteSize);
++    /* this pointer will be increased when extracting value partially */
++    char *value = buffer;
++
++    /* Generate code to write value to ACR/ACM */
++    INSN_CODE_T_V5 *insn_code = gen_set_value_code(type_name, reg_idx);
++
++    bool init_acm_addr = false;
++    /* Execute the code generated by gen_get_value_code() iteratively */
++    for (unsigned i = 0; i < insn_code->num; i++) {
++        /*
++         * determine the number of GPRs used to read/write data from/to ACR/ACM
++         */
++        bool isTwoGPR = false;
++        if ((insn_code->code + i)->version == acr_io2 ||
++                (insn_code->code + i)->version == acm_io2) {
++            isTwoGPR = true;
++        }
++
++        /*
++         * For ACM utility instruction,
++         * write memory address to GDB_REGNO_XPR0 + 7
++         */
++        if (init_acm_addr == false &&
++                ((insn_code->code + i)->version == acm_io1 ||
++                 (insn_code->code + i)->version == acm_io2)) {
++            env->gpr[7] = reg_idx;
++            init_acm_addr = true;
++        }
++
++        /* write given value string to S0/1 */
++        if (isTwoGPR == false) {
++            /* Extract part of value from given value string */
++            target_ulong reg_value = 0;
++            memcpy(&reg_value, value, reg_bytes);
++            value += reg_bytes;
++            env->gpr[5] = reg_value;
++        } else {
++            /*
++             * Extract part of value from given value string
++             * [NOTE] the order of val is from low bit order
++             *        e.g., for value of 0x111222333444555666777888999
++             *        the traversing order is from 999 --> 888 --> ...
++             */
++            target_ulong high = 0, low = 0;
++            memcpy(&low, value, reg_bytes);
++            value += reg_bytes;
++            memcpy(&high, value, reg_bytes);
++            value += reg_bytes;
++            env->gpr[5] = high;
++            env->gpr[6] = low;
++        }
++
++        unsigned insn = (insn_code->code + i)->insn;
++
++        /* execute the code */
++        int exec_out = qemu_ace_agent_run_insn(env, insn);
++        if (exec_out != 0) {
++            qemu_printf("Unable to execute program\n");
++            /* Restore temp register */
++            env->gpr[5] = s0;
++            env->gpr[6] = s1;
++            env->gpr[7] = s2;
++            return -1;
++        }
++
++    }
++
++    /* Restore temp register */
++    env->gpr[5] = s0;
++    env->gpr[6] = s1;
++    env->gpr[7] = s2;
++
++    return ByteSize;
++}
++
++static int riscv_gdb_get_ace(CPURISCVState *env, GByteArray *buf, int n)
++{
++    unsigned total_bytes = nds_ace_get_reg(env, n);
++    if (total_bytes != -1) {
++        g_byte_array_append(buf, acr_value, total_bytes);
++        return total_bytes;
++    }
++    return 0;
++}
++
++static int riscv_gdb_set_ace(CPURISCVState *env, uint8_t *mem_buf, int n)
++{
++    unsigned total_bytes = nds_ace_set_reg(env, mem_buf, n);
++    if (total_bytes != -1) {
++        return total_bytes;
++    }
++    return 0;
++}
++
++static int riscv_gen_dynamic_ace_xml(CPUState *cs, int base_reg)
++{
++    RISCVCPU *cpu = RISCV_CPU(cs);
++#if !defined(CONFIG_USER_ONLY)
++    CPURISCVState *env = &cpu->env;
++#endif
++    GString *s = g_string_new(NULL);
++    int num_regs = 0;
++    ACR_INFO_T_V5 *acr_info_list_v5 = global_acr_info_list_v5;
++
++    if (global_acr_info_list_v5 == NULL) {
++        return 0;
++    }
++
++#if !defined(CONFIG_USER_ONLY)
++    env->debugger = true;
++#endif
++
++    g_string_printf(s, "<?xml version=\"1.0\"?>");
++    g_string_append_printf(s, "<!DOCTYPE feature SYSTEM \"gdb-target.dtd\">");
++    g_string_append_printf(s, "<feature name=\"org.gnu.gdb.riscv.ace\">");
++
++    for (unsigned int i = 0; i < *global_acr_type_count_v5; i++) {
++        unsigned int acr_number = acr_info_list_v5->num;
++        unsigned int acr_width = acr_info_list_v5->width;
++        char *acr_name = acr_info_list_v5->name;
++        unsigned int ByteSize =
++            (acr_width % 8 == 0) ? acr_width / 8 : (acr_width / 8) + 1;
++
++        g_string_append_printf(s,
++            "<vector id=\"acr_%d_t\" type=\"uint8\" count=\"%d\"/>",
++            ByteSize * 8, ByteSize);
++
++
++        for (unsigned int idx = 0; idx < acr_number; idx++) {
++            char acr_reg_name[2048];
++            snprintf(acr_reg_name, sizeof(acr_reg_name),
++                     "%s_%u", acr_name, idx);
++            g_string_append_printf(s, "<reg name=\"%s\"", acr_reg_name);
++            g_string_append_printf(s, " bitsize=\"%d\"", acr_width);
++            g_string_append_printf(s, " type=\"acr_%d_t\"", ByteSize * 8);
++            g_string_append_printf(s, " regnum=\"%d\" group=\"ace\"/>",
++                                   base_reg++);
++            num_regs++;
++        }
++        acr_info_list_v5++;
++    }
++
++    g_string_append_printf(s, "</feature>");
++
++    cpu->dyn_ace_xml = g_string_free(s, false);
++
++#if !defined(CONFIG_USER_ONLY)
++    env->debugger = false;
++#endif
++
++    return num_regs;
++}
++
+ static int ricsv_gen_dynamic_vector_xml(CPUState *cs, int base_reg)
+ {
+     RISCVCPU *cpu = RISCV_CPU(cs);
+@@ -348,4 +661,10 @@ void riscv_cpu_register_gdb_regs_for_features(CPUState *cs)
+                                  riscv_gen_dynamic_csr_xml(cs, base_reg),
+                                  "riscv-csr.xml", 0);
+     }
++    int ace_regs = riscv_gen_dynamic_ace_xml(cs, cs->gdb_num_regs);
++    if (ace_regs != 0) {
++        gdb_register_coprocessor(cs, riscv_gdb_get_ace, riscv_gdb_set_ace,
++            riscv_gen_dynamic_ace_xml(cs, cs->gdb_num_regs),
++            "riscv-ace.xml", 0);
++    }
+ }
+-- 
+2.34.1
+

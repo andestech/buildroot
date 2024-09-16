@@ -1,0 +1,29 @@
+From 6f129fca98ba854a49df203805fd2d45023dc8df Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Tue, 30 Apr 2024 16:58:12 +0800
+Subject: [PATCH 232/241] target/riscv: Adjust behavior of debug spec for Andes
+ cores.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/csr.c b/target/riscv/csr.c
+index 97925af45c..d501d32963 100644
+--- a/target/riscv/csr.c
++++ b/target/riscv/csr.c
+@@ -1544,7 +1544,9 @@ static RISCVException write_medeleg(CPURISCVState *env, int csrno,
+          * From debug specification section 5.4:
+          * If tcontrol is implemented, medeleg[3] is hard-wired to 0.
+          */
+-        env->medeleg &= ~(1ULL << RISCV_EXCP_BREAKPOINT);
++        if (!env_archcpu(env)->cfg.ext_XAndesV5Ops) {
++            env->medeleg &= ~(1ULL << RISCV_EXCP_BREAKPOINT);
++        }
+     }
+ 
+     return RISCV_EXCP_NONE;
+-- 
+2.34.1
+

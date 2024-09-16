@@ -1,0 +1,47 @@
+From 8524ddd1a4cc6e2419fdf318a1032a9dcd0397d9 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Tue, 30 Apr 2024 15:31:08 +0800
+Subject: [PATCH 229/241] target/riscv: Add support of "mmsc-cfg-rvarch2"
+ property to andes.cfg.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ docs/config/andes.cfg    | 1 +
+ target/riscv/csr_andes.c | 2 ++
+ 2 files changed, 3 insertions(+)
+
+diff --git a/docs/config/andes.cfg b/docs/config/andes.cfg
+index 2bebd21c53..c4493d0b4d 100644
+--- a/docs/config/andes.cfg
++++ b/docs/config/andes.cfg
+@@ -63,6 +63,7 @@ isa-vdot = "on"
+ isa-vpfh = "on"
+ stack-protection-only = "on"
+ mmsc-cfg-rvarch = "on"
++mmsc-cfg-rvarch2 = "on"
+ alt-fp-fmt = "on"
+ msc-ext3 = "on"
+ #misew is 2 bits value
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 9ff9fdab85..92df834613 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -896,6 +896,7 @@ AndesCsrConfigInfo csr_mmsc_cfg_map[] = {
+     {CONFIG_BOOL,   MASK_MMSC_CFG_HSPO, "stack-protection-only"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_RVARCH, "mmsc-cfg-rvarch"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_ALT_FP_FMT, "alt-fp-fmt"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_RVARCH2, "mmsc-cfg-rvarch2"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_MSC_EXT3, "msc-ext3"},
+ #endif
+ };
+@@ -915,6 +916,7 @@ AndesCsrConfigInfo csr_mmsc_cfg2_map[]  = {
+     {CONFIG_BOOL,   MASK_MMSC_CFG2_HSPO, "stack-protection-only"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG2_RVARCH, "mmsc-cfg-rvarch"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG2_ALT_FP_FMT, "alt-fp-fmt"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_RVARCH2, "mmsc-cfg-rvarch2"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG2_MSC_EXT3, "msc-ext3"},
+ };
+ 
+-- 
+2.34.1
+

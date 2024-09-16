@@ -1,0 +1,723 @@
+From d0e3c6bcd8ed13101d77bd3415d439039e33c4dc Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Thu, 21 Dec 2023 16:03:25 +0800
+Subject: [PATCH 178/241] target/riscv: Add support of PMOVI interrupt of
+ PMNDS.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/110
+Reviewed-by: Alvin Che-Chia Chang <alvinga@andestech.com>
+---
+ docs/config/andes.cfg      |   1 +
+ target/riscv/cpu.h         |   5 +
+ target/riscv/cpu_bits.h    |   4 +
+ target/riscv/cpu_helper.c  | 120 +++++++++++++++++---
+ target/riscv/csr_andes.c   |  77 +++++++++++++
+ target/riscv/csr_andes.h   |  16 +++
+ target/riscv/pmu.c         | 219 +++++++++++++++++++++++++++----------
+ target/riscv/tcg/tcg-cpu.c |   5 +-
+ 8 files changed, 376 insertions(+), 71 deletions(-)
+
+diff --git a/docs/config/andes.cfg b/docs/config/andes.cfg
+index 48c2b7d141..b8845c8a44 100644
+--- a/docs/config/andes.cfg
++++ b/docs/config/andes.cfg
+@@ -23,6 +23,7 @@
+ 
+ #current andes cpus config setting, we use "cpu" as ID now
+ [andes-config "cpu"]
++freq = "60000000"
+ isa-codense = "on"
+ powerbrake = "on"
+ stack-protection = "on"
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index a86d3ed431..06bcc9cdba 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -783,6 +783,11 @@ enum riscv_pmu_event_idx {
+     RISCV_PMU_EVENT_CACHE_DTLB_READ_MISS = 0x10019,
+     RISCV_PMU_EVENT_CACHE_DTLB_WRITE_MISS = 0x1001B,
+     RISCV_PMU_EVENT_CACHE_ITLB_PREFETCH_MISS = 0x10021,
++    /* Andes pmnds event */
++    RISCV_PMU_EVENT_ANDES_CPU_CYCLES = 0x10,
++    RISCV_PMU_EVENT_ANDES_INSTRUCTIONS = 0x20,
++    RISCV_PMU_EVENT_ANDES_DTLB_MISS = 0x141,
++    RISCV_PMU_EVENT_ANDES_ITLB_MISS = 0x121,
+ };
+ 
+ /* used by tcg/tcg-cpu.c*/
+diff --git a/target/riscv/cpu_bits.h b/target/riscv/cpu_bits.h
+index 1f1f9ed262..83c97915b8 100644
+--- a/target/riscv/cpu_bits.h
++++ b/target/riscv/cpu_bits.h
+@@ -727,6 +727,8 @@ typedef enum RISCVException {
+ #define IRQ_S_GEXT                         12
+ #define IRQ_PMU_OVF                        13
+ #define IRQ_LOCAL_MAX                      16
++#define IRQ_ANDES_PMOVI_M                  18
++#define IRQ_ANDES_PMOVI_S                  (0x100 + IRQ_ANDES_PMOVI_M)
+ #define IRQ_LOCAL_GUEST_MAX                (TARGET_LONG_BITS - 1)
+ 
+ /* mip masks */
+@@ -744,6 +746,7 @@ typedef enum RISCVException {
+ #define MIP_MEIP                           (1 << IRQ_M_EXT)
+ #define MIP_SGEIP                          (1 << IRQ_S_GEXT)
+ #define MIP_LCOFIP                         (1 << IRQ_PMU_OVF)
++#define MIP_ANDES_PMOVI                    (1 << IRQ_ANDES_PMOVI_M)
+ 
+ /* sip masks */
+ #define SIP_SSIP                           MIP_SSIP
+@@ -758,6 +761,7 @@ typedef enum RISCVException {
+ #define MIE_UTIE                           (1 << IRQ_U_TIMER)
+ #define MIE_SSIE                           (1 << IRQ_S_SOFT)
+ #define MIE_USIE                           (1 << IRQ_U_SOFT)
++#define MIE_ANDES_PMOVI                    (1 << IRQ_ANDES_PMOVI_M)
+ 
+ /* Machine constants */
+ #define M_MODE_INTERRUPTS  ((uint64_t)(MIP_MSIP | MIP_MTIP | MIP_MEIP))
+diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
+index 65ba643493..9fcd6807fc 100644
+--- a/target/riscv/cpu_helper.c
++++ b/target/riscv/cpu_helper.c
+@@ -425,6 +425,46 @@ int riscv_cpu_vsirq_pending(CPURISCVState *env)
+                                     (irqs | irqs_f_vs), env->hviprio);
+ }
+ 
++static int riscv_cpu_andes_m_mode_irq(CPURISCVState *env)
++{
++    if ((env->mie & MIE_ANDES_PMOVI) == 0) {
++        return 0;
++    }
++
++    target_ulong mmsc_cfg = env->andes_csr.csrno[CSR_MMSC_CFG];
++    if ((mmsc_cfg & MASK_MMSC_CFG_PMNDS) == 0) {
++        return 0;
++    }
++
++    if (env->mip & MIP_ANDES_PMOVI) {
++        env->mip &= ~MIP_ANDES_PMOVI;
++        return IRQ_ANDES_PMOVI_M;
++    }
++
++    return 0;
++}
++
++static int riscv_cpu_andes_s_mode_irq(CPURISCVState *env)
++{
++    target_ulong slie = env->andes_csr.csrno[CSR_SLIE];
++    if ((slie & MIE_ANDES_PMOVI) == 0) {
++        return 0;
++    }
++
++    target_ulong mmsc_cfg = env->andes_csr.csrno[CSR_MMSC_CFG];
++    if ((mmsc_cfg & MASK_MMSC_CFG_PMNDS) == 0) {
++        return 0;
++    }
++
++    target_ulong slip = env->andes_csr.csrno[CSR_SLIP];
++    if (slip & MIP_ANDES_PMOVI) {
++        env->andes_csr.csrno[CSR_SLIP] &= ~MIP_ANDES_PMOVI;
++        return IRQ_ANDES_PMOVI_S;
++    }
++
++    return 0;
++}
++
+ static int riscv_cpu_local_irq_pending(CPURISCVState *env)
+ {
+     uint64_t irqs, pending, mie, hsie, vsie, irqs_f, irqs_f_vs;
+@@ -445,6 +485,18 @@ static int riscv_cpu_local_irq_pending(CPURISCVState *env)
+         vsie = 0;
+     }
+ 
++    /*
++     * Check Andes M-mode interrupts, priority higher than MEI
++     * We don't use default_iprio here because we want to seperate
++     * pmnds support from sscofpmf as much as possible.
++     */
++    if (mie && env_archcpu(env)->cfg.ext_XAndesV5Ops) {
++        int airq = riscv_cpu_andes_m_mode_irq(env);
++        if (airq) {
++            return airq;
++        }
++    }
++
+     /* Determine all pending interrupts */
+     pending = riscv_cpu_all_pending(env);
+ 
+@@ -455,6 +507,18 @@ static int riscv_cpu_local_irq_pending(CPURISCVState *env)
+                                         irqs, env->miprio);
+     }
+ 
++    /*
++     * Check Andes S-mode interrupts, priority higher than SEI
++     * We don't use default_iprio here because we want to seperate
++     * pmnds support from sscofpmf as much as possible.
++     */
++    if (hsie && env_archcpu(env)->cfg.ext_XAndesV5Ops) {
++        int airq = riscv_cpu_andes_s_mode_irq(env);
++        if (airq) {
++            return airq;
++        }
++    }
++
+     /* Check for virtual S-mode interrupts. */
+     irqs_f = env->mvip & (env->mvien & ~env->mideleg) & env->sie;
+ 
+@@ -1287,18 +1351,32 @@ static void pmu_tlb_fill_incr_ctr(RISCVCPU *cpu, MMUAccessType access_type)
+ {
+     enum riscv_pmu_event_idx pmu_event_type;
+ 
+-    switch (access_type) {
+-    case MMU_INST_FETCH:
+-        pmu_event_type = RISCV_PMU_EVENT_CACHE_ITLB_PREFETCH_MISS;
+-        break;
+-    case MMU_DATA_LOAD:
+-        pmu_event_type = RISCV_PMU_EVENT_CACHE_DTLB_READ_MISS;
+-        break;
+-    case MMU_DATA_STORE:
+-        pmu_event_type = RISCV_PMU_EVENT_CACHE_DTLB_WRITE_MISS;
+-        break;
+-    default:
+-        return;
++    if (cpu->cfg.ext_XAndesV5Ops && !cpu->cfg.ext_sscofpmf) {
++        switch (access_type) {
++        case MMU_INST_FETCH:
++            pmu_event_type = RISCV_PMU_EVENT_ANDES_ITLB_MISS;
++            break;
++        case MMU_DATA_LOAD:
++        case MMU_DATA_STORE:
++            pmu_event_type = RISCV_PMU_EVENT_ANDES_DTLB_MISS;
++            break;
++        default:
++            return;
++        }
++    } else {
++        switch (access_type) {
++        case MMU_INST_FETCH:
++            pmu_event_type = RISCV_PMU_EVENT_CACHE_ITLB_PREFETCH_MISS;
++            break;
++        case MMU_DATA_LOAD:
++            pmu_event_type = RISCV_PMU_EVENT_CACHE_DTLB_READ_MISS;
++            break;
++        case MMU_DATA_STORE:
++            pmu_event_type = RISCV_PMU_EVENT_CACHE_DTLB_WRITE_MISS;
++            break;
++        default:
++            return;
++        }
+     }
+ 
+     riscv_pmu_incr_ctr(cpu, pmu_event_type);
+@@ -1637,6 +1715,21 @@ static target_ulong riscv_transformed_insn(CPURISCVState *env,
+ 
+     return xinsn;
+ }
++
++static bool riscv_cpu_andes_check_lideleg(RISCVCPU *cpu)
++{
++    CPURISCVState *env = &cpu->env;
++
++    target_ulong slip = env->andes_csr.csrno[CSR_SLIP];
++    if (slip & MIP_ANDES_PMOVI) {
++        target_ulong mslideleg = env->andes_csr.csrno[CSR_MSLIDELEG];
++        if (mslideleg & MIP_ANDES_PMOVI) {
++            return true;
++        }
++    }
++
++    return false;
++}
+ #endif /* !CONFIG_USER_ONLY */
+ 
+ /*
+@@ -1665,6 +1758,7 @@ void riscv_cpu_do_interrupt(CPUState *cs)
+         !(env->mip & (1 << cause));
+     bool vs_injected = env->hvip & (1 << cause) & env->hvien &&
+         !(env->mip & (1 << cause));
++    bool andes_lideleg = riscv_cpu_andes_check_lideleg(cpu);
+     target_ulong tval = 0;
+     target_ulong tinst = 0;
+     target_ulong htval = 0;
+@@ -1754,7 +1848,7 @@ void riscv_cpu_do_interrupt(CPUState *cs)
+                   riscv_cpu_get_trap_name(cause, async));
+ 
+     if (env->priv <= PRV_S && cause < 64 &&
+-        (((deleg >> cause) & 1) || s_injected || vs_injected)) {
++        (((deleg >> cause) & 1) || s_injected || vs_injected || andes_lideleg)) {
+         /* handle the trap in S-mode */
+         if (riscv_has_ext(env, RVH)) {
+             uint64_t hdeleg = async ? env->hideleg : env->hedeleg;
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 39cfb5b082..25ef71e2d1 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -685,6 +685,67 @@ static RISCVException write_slip(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException write_pmnds(CPURISCVState *env, int csrno,
++                                  target_ulong val)
++{
++    if (csr_ops[CSR_MCOUNTERWEN].predicate(env, csrno) != RISCV_EXCP_NONE) {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++
++    target_ulong wen = env->andes_csr.csrno[CSR_MCOUNTERWEN];
++    if (wen == 0) {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++
++    switch (csrno) {
++    case CSR_CYCLE:
++    case CSR_CYCLEH:
++        if (wen & MASK_COUNTER_CY) {
++            csr_ops[csrno].write(env, csrno, val);
++            return RISCV_EXCP_NONE;
++        }
++        break;
++    case CSR_INSTRET:
++    case CSR_INSTRETH:
++        if (wen & MASK_COUNTER_IR) {
++            csr_ops[csrno].write(env, csrno, val);
++            return RISCV_EXCP_NONE;
++        }
++        break;
++    case CSR_HPMCOUNTER3:
++    case CSR_HPMCOUNTER3H:
++        if (wen & MASK_COUNTER_HPM3) {
++            csr_ops[csrno].write(env, csrno, val);
++            return RISCV_EXCP_NONE;
++        }
++        break;
++    case CSR_HPMCOUNTER4:
++    case CSR_HPMCOUNTER4H:
++        if (wen & MASK_COUNTER_HPM4) {
++            csr_ops[csrno].write(env, csrno, val);
++            return RISCV_EXCP_NONE;
++        }
++        break;
++    case CSR_HPMCOUNTER5:
++    case CSR_HPMCOUNTER5H:
++        if (wen & MASK_COUNTER_HPM5) {
++            csr_ops[csrno].write(env, csrno, val);
++            return RISCV_EXCP_NONE;
++        }
++        break;
++    case CSR_HPMCOUNTER6:
++    case CSR_HPMCOUNTER6H:
++        if (wen & MASK_COUNTER_HPM6) {
++            csr_ops[csrno].write(env, csrno, val);
++            return RISCV_EXCP_NONE;
++        }
++        break;
++    default:
++        break;
++    }
++    return RISCV_EXCP_ILLEGAL_INST;
++}
++
+ static RISCVException write_all_ignore(CPURISCVState *env, int csrno,
+                                        target_ulong val)
+ {
+@@ -857,6 +918,22 @@ void andes_csr_init(AndesCsr *andes_csr)
+             riscv_set_csr_ops(i, &andes_csr_ops[i]);
+         }
+     }
++
++    /* PMNDS write enable */
++    if (get_field(andes_csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_PMNDS) == 1) {
++        csr_ops[CSR_CYCLE].write = write_pmnds;
++        csr_ops[CSR_CYCLEH].write = write_pmnds;
++        csr_ops[CSR_INSTRET].write = write_pmnds;
++        csr_ops[CSR_INSTRETH].write = write_pmnds;
++        csr_ops[CSR_HPMCOUNTER3].write = write_pmnds;
++        csr_ops[CSR_HPMCOUNTER3H].write = write_pmnds;
++        csr_ops[CSR_HPMCOUNTER4].write = write_pmnds;
++        csr_ops[CSR_HPMCOUNTER4H].write = write_pmnds;
++        csr_ops[CSR_HPMCOUNTER5].write = write_pmnds;
++        csr_ops[CSR_HPMCOUNTER5H].write = write_pmnds;
++        csr_ops[CSR_HPMCOUNTER6].write = write_pmnds;
++        csr_ops[CSR_HPMCOUNTER6H].write = write_pmnds;
++    }
+ }
+ 
+ void andes_vec_init(AndesVec *andes_vec)
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 95e8652f24..3eee5fc0d5 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -240,6 +240,22 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define MASK_MVEC_CFG_MISEW                 (0x3 << 14)
+ #define MASK_MVEC_CFG_MFSEW                 (0x3 << 16)
+ 
++/* counters */
++#define MASK_COUNTER_CY                     (0x1)
++#define MASK_COUNTER_TM                     (0x1 << 1)
++#define MASK_COUNTER_IR                     (0x1 << 2)
++#define MASK_COUNTER_HPM3                   (0x1 << 3)
++#define MASK_COUNTER_HPM4                   (0x1 << 4)
++#define MASK_COUNTER_HPM5                   (0x1 << 5)
++#define MASK_COUNTER_HPM6                   (0x1 << 6)
++
++/* local irqs */
++#define MASK_LOCAL_IRQ_IMECCI               (0x1 << 16)
++#define MASK_LOCAL_IRQ_BWEI                 (0x1 << 17)
++#define MASK_LOCAL_IRQ_PMOVI                (0x1 << 18)
++#define MASK_LOCAL_IRQ_IMECCDMR             (0x1 << 19)
++#define MASK_LOCAL_IRQ_ACCERR               (0x1 << 24)
++
+ /* write masks */
+ #define WRITE_MASK_CSR_MECC_CODE_32         0x7F
+ #define WRITE_MASK_CSR_MECC_CODE_64         0xFF
+diff --git a/target/riscv/pmu.c b/target/riscv/pmu.c
+index 0e7d58b8a5..6f0973ec64 100644
+--- a/target/riscv/pmu.c
++++ b/target/riscv/pmu.c
+@@ -23,8 +23,9 @@
+ #include "pmu.h"
+ #include "sysemu/cpu-timers.h"
+ #include "sysemu/device_tree.h"
++#include "qemu/andes-config.h"
+ 
+-#define RISCV_TIMEBASE_FREQ 1000000000 /* 1Ghz */
++static uint64_t riscv_timebase_freq = 1000000000; /* 1Ghz */
+ 
+ /*
+  * To keep it simple, any event can be mapped to any programmable counters in
+@@ -100,6 +101,55 @@ static bool riscv_pmu_counter_enabled(RISCVCPU *cpu, uint32_t ctr_idx)
+     }
+ }
+ 
++static bool riscv_pmu_has_andes_pmnds(RISCVCPU *cpu)
++{
++    if (cpu->cfg.ext_XAndesV5Ops == false) {
++        return false;
++    }
++
++    target_ulong mmsc_cfg = cpu->env.andes_csr.csrno[CSR_MMSC_CFG];
++
++    if (mmsc_cfg & MASK_MMSC_CFG_PMNDS) {
++        return true;
++    } else {
++        return false;
++    }
++}
++
++static void riscv_pmu_handle_andes_pmovi_interrupt(CPURISCVState *env,
++                                                   uint32_t ctr_idx)
++{
++    /* HPM7~HPM31 are not implemented */
++    if (ctr_idx > 6) {
++        return;
++    }
++
++    uint32_t ctr_mask = 1 << ctr_idx;
++    /* only need to set mcounterovf because scounterovf is an alias of it */
++    env->andes_csr.csrno[CSR_MCOUNTEROVF] |= ctr_mask;
++
++    if (riscv_has_ext(env, RVU) && riscv_has_ext(env, RVS)) {
++        uint32_t mcountermask_m = env->andes_csr.csrno[CSR_MCOUNTERMASK_M];
++        if (mcountermask_m & ctr_mask) {
++            /* invoke s-mode interrupt if enabled*/
++            uint32_t scounterinten = env->andes_csr.csrno[CSR_SCOUNTERINTEN];
++            if (scounterinten & ctr_mask) {
++                env->andes_csr.csrno[CSR_SLIP] |= MASK_LOCAL_IRQ_PMOVI;
++                env->andes_csr.csrno[CSR_SDCAUSE] = 0;
++                cpu_interrupt(env_cpu(env), CPU_INTERRUPT_HARD);
++            }
++            return;
++        }
++    }
++
++    /* invoke m-mode interrupt if enabled */
++    uint32_t mcounterinten = env->andes_csr.csrno[CSR_MCOUNTERINTEN];
++    if (mcounterinten & ctr_mask) {
++        env->andes_csr.csrno[CSR_MDCAUSE] = 0;
++        riscv_cpu_update_mip(env, MIP_ANDES_PMOVI, BOOL_TO_MASK(1));
++    }
++}
++
+ static int riscv_pmu_incr_ctr_rv32(RISCVCPU *cpu, uint32_t ctr_idx)
+ {
+     CPURISCVState *env = &cpu->env;
+@@ -107,18 +157,20 @@ static int riscv_pmu_incr_ctr_rv32(RISCVCPU *cpu, uint32_t ctr_idx)
+     PMUCTRState *counter = &env->pmu_ctrs[ctr_idx];
+     bool virt_on = env->virt_enabled;
+ 
+-    /* Privilege mode filtering */
+-    if ((env->priv == PRV_M &&
+-        (env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_MINH)) ||
+-        (env->priv == PRV_S && virt_on &&
+-        (env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_VSINH)) ||
+-        (env->priv == PRV_U && virt_on &&
+-        (env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_VUINH)) ||
+-        (env->priv == PRV_S && !virt_on &&
+-        (env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_SINH)) ||
+-        (env->priv == PRV_U && !virt_on &&
+-        (env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_UINH))) {
+-        return 0;
++    if (!riscv_pmu_has_andes_pmnds(cpu)) {
++        /* Privilege mode filtering */
++        if ((env->priv == PRV_M &&
++            (env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_MINH)) ||
++            (env->priv == PRV_S && virt_on &&
++            (env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_VSINH)) ||
++            (env->priv == PRV_U && virt_on &&
++            (env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_VUINH)) ||
++            (env->priv == PRV_S && !virt_on &&
++            (env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_SINH)) ||
++            (env->priv == PRV_U && !virt_on &&
++            (env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_UINH))) {
++            return 0;
++        }
+     }
+ 
+     /* Handle the overflow scenario */
+@@ -126,10 +178,15 @@ static int riscv_pmu_incr_ctr_rv32(RISCVCPU *cpu, uint32_t ctr_idx)
+         if (counter->mhpmcounterh_val == max_val) {
+             counter->mhpmcounter_val = 0;
+             counter->mhpmcounterh_val = 0;
+-            /* Generate interrupt only if OF bit is clear */
+-            if (!(env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_OF)) {
+-                env->mhpmeventh_val[ctr_idx] |= MHPMEVENTH_BIT_OF;
+-                riscv_cpu_update_mip(env, MIP_LCOFIP, BOOL_TO_MASK(1));
++
++            if (riscv_pmu_has_andes_pmnds(cpu)) {
++                riscv_pmu_handle_andes_pmovi_interrupt(env, ctr_idx);
++            } else {
++                /* Generate interrupt only if OF bit is clear */
++                if (!(env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_OF)) {
++                    env->mhpmeventh_val[ctr_idx] |= MHPMEVENTH_BIT_OF;
++                    riscv_cpu_update_mip(env, MIP_LCOFIP, BOOL_TO_MASK(1));
++                }
+             }
+         } else {
+             counter->mhpmcounterh_val++;
+@@ -148,27 +205,34 @@ static int riscv_pmu_incr_ctr_rv64(RISCVCPU *cpu, uint32_t ctr_idx)
+     uint64_t max_val = UINT64_MAX;
+     bool virt_on = env->virt_enabled;
+ 
+-    /* Privilege mode filtering */
+-    if ((env->priv == PRV_M &&
+-        (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_MINH)) ||
+-        (env->priv == PRV_S && virt_on &&
+-        (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_VSINH)) ||
+-        (env->priv == PRV_U && virt_on &&
+-        (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_VUINH)) ||
+-        (env->priv == PRV_S && !virt_on &&
+-        (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_SINH)) ||
+-        (env->priv == PRV_U && !virt_on &&
+-        (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_UINH))) {
+-        return 0;
++    if (!riscv_pmu_has_andes_pmnds(cpu)) {
++        /* Privilege mode filtering */
++        if ((env->priv == PRV_M &&
++            (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_MINH)) ||
++            (env->priv == PRV_S && virt_on &&
++            (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_VSINH)) ||
++            (env->priv == PRV_U && virt_on &&
++            (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_VUINH)) ||
++            (env->priv == PRV_S && !virt_on &&
++            (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_SINH)) ||
++            (env->priv == PRV_U && !virt_on &&
++            (env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_UINH))) {
++            return 0;
++        }
+     }
+ 
+     /* Handle the overflow scenario */
+     if (counter->mhpmcounter_val == max_val) {
+         counter->mhpmcounter_val = 0;
+-        /* Generate interrupt only if OF bit is clear */
+-        if (!(env->mhpmevent_val[ctr_idx] & MHPMEVENT_BIT_OF)) {
+-            env->mhpmevent_val[ctr_idx] |= MHPMEVENT_BIT_OF;
+-            riscv_cpu_update_mip(env, MIP_LCOFIP, BOOL_TO_MASK(1));
++
++        if (riscv_pmu_has_andes_pmnds(cpu)) {
++            riscv_pmu_handle_andes_pmovi_interrupt(env, ctr_idx);
++        } else {
++            /* Generate interrupt only if OF bit is clear */
++            if (!(env->mhpmeventh_val[ctr_idx] & MHPMEVENTH_BIT_OF)) {
++                env->mhpmeventh_val[ctr_idx] |= MHPMEVENTH_BIT_OF;
++                riscv_cpu_update_mip(env, MIP_LCOFIP, BOOL_TO_MASK(1));
++            }
+         }
+     } else {
+         counter->mhpmcounter_val++;
+@@ -224,7 +288,11 @@ bool riscv_pmu_ctr_monitor_instructions(CPURISCVState *env,
+         return false;
+     }
+ 
+-    event_idx = RISCV_PMU_EVENT_HW_INSTRUCTIONS;
++    if (riscv_pmu_has_andes_pmnds(cpu)) {
++        event_idx = RISCV_PMU_EVENT_ANDES_INSTRUCTIONS;
++    } else {
++        event_idx = RISCV_PMU_EVENT_HW_INSTRUCTIONS;
++    }
+     ctr_idx = GPOINTER_TO_UINT(g_hash_table_lookup(cpu->pmu_event_ctr_map,
+                                GUINT_TO_POINTER(event_idx)));
+     if (!ctr_idx) {
+@@ -250,7 +318,11 @@ bool riscv_pmu_ctr_monitor_cycles(CPURISCVState *env, uint32_t target_ctr)
+         return false;
+     }
+ 
+-    event_idx = RISCV_PMU_EVENT_HW_CPU_CYCLES;
++    if (riscv_pmu_has_andes_pmnds(cpu)) {
++        event_idx = RISCV_PMU_EVENT_ANDES_CPU_CYCLES;
++    } else {
++        event_idx = RISCV_PMU_EVENT_HW_CPU_CYCLES;
++    }
+     ctr_idx = GPOINTER_TO_UINT(g_hash_table_lookup(cpu->pmu_event_ctr_map,
+                                GUINT_TO_POINTER(event_idx)));
+ 
+@@ -275,7 +347,7 @@ static int64_t pmu_icount_ticks_to_ns(int64_t value)
+     if (icount_enabled()) {
+         ret = icount_to_ns(value);
+     } else {
+-        ret = (NANOSECONDS_PER_SECOND / RISCV_TIMEBASE_FREQ) * value;
++        ret = (NANOSECONDS_PER_SECOND / riscv_timebase_freq) * value;
+     }
+ 
+     return ret;
+@@ -308,16 +380,29 @@ int riscv_pmu_update_event_map(CPURISCVState *env, uint64_t value,
+         return 0;
+     }
+ 
+-    switch (event_idx) {
+-    case RISCV_PMU_EVENT_HW_CPU_CYCLES:
+-    case RISCV_PMU_EVENT_HW_INSTRUCTIONS:
+-    case RISCV_PMU_EVENT_CACHE_DTLB_READ_MISS:
+-    case RISCV_PMU_EVENT_CACHE_DTLB_WRITE_MISS:
+-    case RISCV_PMU_EVENT_CACHE_ITLB_PREFETCH_MISS:
+-        break;
+-    default:
+-        /* We don't support any raw events right now */
+-        return -1;
++    if (riscv_pmu_has_andes_pmnds(cpu)) {
++        switch (event_idx) {
++        case RISCV_PMU_EVENT_ANDES_CPU_CYCLES:
++        case RISCV_PMU_EVENT_ANDES_INSTRUCTIONS:
++        case RISCV_PMU_EVENT_ANDES_DTLB_MISS:
++        case RISCV_PMU_EVENT_ANDES_ITLB_MISS:
++            break;
++        default:
++            /* We don't support any raw events right now */
++            return -1;
++        }
++    } else {
++        switch (event_idx) {
++        case RISCV_PMU_EVENT_HW_CPU_CYCLES:
++        case RISCV_PMU_EVENT_HW_INSTRUCTIONS:
++        case RISCV_PMU_EVENT_CACHE_DTLB_READ_MISS:
++        case RISCV_PMU_EVENT_CACHE_DTLB_WRITE_MISS:
++        case RISCV_PMU_EVENT_CACHE_ITLB_PREFETCH_MISS:
++            break;
++        default:
++            /* We don't support any raw events right now */
++            return -1;
++        }
+     }
+     g_hash_table_insert(cpu->pmu_event_ctr_map, GUINT_TO_POINTER(event_idx),
+                         GUINT_TO_POINTER(ctr_idx));
+@@ -335,9 +420,16 @@ static void pmu_timer_trigger_irq(RISCVCPU *cpu,
+     uint64_t of_bit_mask;
+     int64_t irq_trigger_at;
+ 
+-    if (evt_idx != RISCV_PMU_EVENT_HW_CPU_CYCLES &&
+-        evt_idx != RISCV_PMU_EVENT_HW_INSTRUCTIONS) {
+-        return;
++    if (riscv_pmu_has_andes_pmnds(cpu)) {
++        if (evt_idx != RISCV_PMU_EVENT_ANDES_CPU_CYCLES &&
++            evt_idx != RISCV_PMU_EVENT_ANDES_INSTRUCTIONS) {
++            return;
++        }
++    } else {
++        if (evt_idx != RISCV_PMU_EVENT_HW_CPU_CYCLES &&
++            evt_idx != RISCV_PMU_EVENT_HW_INSTRUCTIONS) {
++            return;
++        }
+     }
+ 
+     ctr_idx = GPOINTER_TO_UINT(g_hash_table_lookup(cpu->pmu_event_ctr_map,
+@@ -364,10 +456,14 @@ static void pmu_timer_trigger_irq(RISCVCPU *cpu,
+     }
+ 
+     if (cpu->pmu_avail_ctrs & BIT(ctr_idx)) {
+-        /* Generate interrupt only if OF bit is clear */
+-        if (!(*mhpmevent_val & of_bit_mask)) {
+-            *mhpmevent_val |= of_bit_mask;
+-            riscv_cpu_update_mip(env, MIP_LCOFIP, BOOL_TO_MASK(1));
++        if (riscv_pmu_has_andes_pmnds(cpu)) {
++            riscv_pmu_handle_andes_pmovi_interrupt(env, ctr_idx);
++        } else {
++            /* Generate interrupt only if OF bit is clear */
++            if (!(*mhpmevent_val & of_bit_mask)) {
++                *mhpmevent_val |= of_bit_mask;
++                riscv_cpu_update_mip(env, MIP_LCOFIP, BOOL_TO_MASK(1));
++            }
+         }
+     }
+ }
+@@ -378,8 +474,13 @@ void riscv_pmu_timer_cb(void *priv)
+     RISCVCPU *cpu = priv;
+ 
+     /* Timer event was triggered only for these events */
+-    pmu_timer_trigger_irq(cpu, RISCV_PMU_EVENT_HW_CPU_CYCLES);
+-    pmu_timer_trigger_irq(cpu, RISCV_PMU_EVENT_HW_INSTRUCTIONS);
++    if (riscv_pmu_has_andes_pmnds(cpu)) {
++        pmu_timer_trigger_irq(cpu, RISCV_PMU_EVENT_ANDES_CPU_CYCLES);
++        pmu_timer_trigger_irq(cpu, RISCV_PMU_EVENT_ANDES_INSTRUCTIONS);
++    } else {
++        pmu_timer_trigger_irq(cpu, RISCV_PMU_EVENT_HW_CPU_CYCLES);
++        pmu_timer_trigger_irq(cpu, RISCV_PMU_EVENT_HW_INSTRUCTIONS);
++    }
+ }
+ 
+ int riscv_pmu_setup_timer(CPURISCVState *env, uint64_t value, uint32_t ctr_idx)
+@@ -389,7 +490,8 @@ int riscv_pmu_setup_timer(CPURISCVState *env, uint64_t value, uint32_t ctr_idx)
+     RISCVCPU *cpu = env_archcpu(env);
+     PMUCTRState *counter = &env->pmu_ctrs[ctr_idx];
+ 
+-    if (!riscv_pmu_counter_valid(cpu, ctr_idx) || !cpu->cfg.ext_sscofpmf) {
++    if (!riscv_pmu_counter_valid(cpu, ctr_idx) ||
++            !(cpu->cfg.ext_sscofpmf || riscv_pmu_has_andes_pmnds(cpu))) {
+         return -1;
+     }
+ 
+@@ -448,4 +550,9 @@ void riscv_pmu_init(RISCVCPU *cpu, Error **errp)
+     }
+ 
+     cpu->pmu_avail_ctrs = cpu->cfg.pmu_mask;
++
++    uint64_t val;
++    if (andes_config_number(ANDES_CONFIG_ID_CPU, "freq", &val)) {
++        riscv_timebase_freq = val;
++    }
+ }
+diff --git a/target/riscv/tcg/tcg-cpu.c b/target/riscv/tcg/tcg-cpu.c
+index 20a9498756..30fd6d2543 100644
+--- a/target/riscv/tcg/tcg-cpu.c
++++ b/target/riscv/tcg/tcg-cpu.c
+@@ -632,7 +632,8 @@ static void riscv_cpu_validate_andes_ace(RISCVCPU *cpu, Error **errp)
+         return;
+     }
+ 
+-    /* cfg.ext_XAndesAce is true, cfg.XAndesAceLib cannot
++    /*
++     * cfg.ext_XAndesAce is true, cfg.XAndesAceLib cannot
+      * be NULL since above check already
+      */
+     if (cpu->cfg.ext_XAndesAce) {
+@@ -749,7 +750,7 @@ static bool tcg_cpu_realize(CPUState *cs, Error **errp)
+             return false;
+         }
+ 
+-        if (cpu->cfg.ext_sscofpmf) {
++        if (cpu->cfg.ext_sscofpmf || cpu->cfg.ext_XAndesV5Ops) {
+             cpu->pmu_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                           riscv_pmu_timer_cb, cpu);
+         }
+-- 
+2.34.1
+

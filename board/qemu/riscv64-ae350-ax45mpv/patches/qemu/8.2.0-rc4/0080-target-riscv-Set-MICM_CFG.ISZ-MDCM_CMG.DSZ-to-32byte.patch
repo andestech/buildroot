@@ -1,0 +1,67 @@
+From 9c6e58387bc91f5f158fc1d0171e9f17063ef682 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Fri, 8 Sep 2023 16:14:35 +0800
+Subject: [PATCH 080/241] target/riscv: Set MICM_CFG.ISZ , MDCM_CMG.DSZ to
+ 32bytes
+
+To make mcache_ctl valid, ISZ or DSZ != 0
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ target/riscv/cpu.c       | 4 ++--
+ target/riscv/csr_andes.c | 2 ++
+ target/riscv/csr_andes.h | 2 ++
+ 3 files changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index eb0f457ec3..ddcaf70592 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -544,9 +544,9 @@ static void andes_cpu_lm_realize(DeviceState *dev)
+     int dlmsz = 31 - __builtin_clz(env->dlm_size) - 9;
+ 
+     /* initial local memory csr */
+-    env->andes_csr.csrno[CSR_MICM_CFG] = (1UL << V5_MICM_CFG_ILMB) |
++    env->andes_csr.csrno[CSR_MICM_CFG] |= (1UL << V5_MICM_CFG_ILMB) |
+                                      (ilmsz << V5_MICM_CFG_ILMSZ);
+-    env->andes_csr.csrno[CSR_MDCM_CFG] = (1UL << V5_MDCM_CFG_DLMB) |
++    env->andes_csr.csrno[CSR_MDCM_CFG] |= (1UL << V5_MDCM_CFG_DLMB) |
+                                      (dlmsz << V5_MDCM_CFG_DLMSZ);
+ 
+     env->andes_csr.csrno[CSR_MILMB] = env->ilm_base | env->ilm_default_enable;
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index eefea5def5..3c3c4df1f9 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -703,6 +703,8 @@ void andes_csr_init(AndesCsr *andes_csr)
+                                         (1UL << V5_MCACHE_CTL_DC_FIRST_WORD);
+     andes_csr->csrno[CSR_MSP_BOUND] =   ~((target_ulong)0);  // all-one reset value
+     andes_csr->csrno[CSR_MSP_BASE] =    ~((target_ulong)0);
++    andes_csr->csrno[CSR_MICM_CFG] = (3 << V5_MICM_CFG_ISZ);
++    andes_csr->csrno[CSR_MDCM_CFG] = (3 << V5_MDCM_CFG_DSZ);
+ }
+ 
+ void andes_vec_init(AndesVec *andes_vec)
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index a736b3394f..1bb02a5870 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -35,6 +35,7 @@ typedef struct AndesVec {
+ #define V5_MCACHE_CTL_DC_COHSTA             20
+ 
+ /* micm_cfg */
++#define V5_MICM_CFG_ISZ                     6
+ #define V5_MICM_CFG_ILMB                    12
+ #define V5_MICM_CFG_ILMSZ                   15
+ #define MASK_MICM_CFG_ISET                  (0x07)
+@@ -51,6 +52,7 @@ typedef struct AndesVec {
+ #define MASK_MICM_CFG_IC_REPL               (0x03 << 25)
+ 
+ /* mdcm_cfg */
++#define V5_MDCM_CFG_DSZ                     6
+ #define V5_MDCM_CFG_DLMB                    12
+ #define V5_MDCM_CFG_DLMSZ                   15
+ #define MASK_MDCM_CFG_DSET                  (0x07)
+-- 
+2.34.1
+

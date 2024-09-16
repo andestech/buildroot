@@ -1,0 +1,43 @@
+From bbad4cbfa4296cda33fd472612cd92975d0bb79d Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 24 Nov 2023 17:03:55 +0800
+Subject: [PATCH 123/241] target/riscv: Just changed copyright description of
+ XAndesAce.decode file
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/XAndesAce.decode | 18 ++++--------------
+ 1 file changed, 4 insertions(+), 14 deletions(-)
+
+diff --git a/target/riscv/XAndesAce.decode b/target/riscv/XAndesAce.decode
+index bfadd80177..c347653071 100644
+--- a/target/riscv/XAndesAce.decode
++++ b/target/riscv/XAndesAce.decode
+@@ -1,20 +1,10 @@
+ #
+-# RISC-V translation routines for the RVXI Base Integer Instruction Set.
++# RISC-V translation routines for Andes ACE
+ #
+-# Copyright (c) 2018 Peer Adelt, peer.adelt@hni.uni-paderborn.de
+-#                    Bastian Koppelmann, kbastian@mail.uni-paderborn.de
++# Copyright (c) 2023 Andes Technology Corp.
++# SPDX-License-Identifier: GPL-2.0-or-later
+ #
+-# This program is free software; you can redistribute it and/or modify it
+-# under the terms and conditions of the GNU General Public License,
+-# version 2 or later, as published by the Free Software Foundation.
+-#
+-# This program is distributed in the hope it will be useful, but WITHOUT
+-# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+-# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+-# more details.
+-#
+-# You should have received a copy of the GNU General Public License along with
+-# this program.  If not, see <http://www.gnu.org/licenses/>.
++
+ 
+ # Fields:
+ %f_ace 7:25
+-- 
+2.34.1
+

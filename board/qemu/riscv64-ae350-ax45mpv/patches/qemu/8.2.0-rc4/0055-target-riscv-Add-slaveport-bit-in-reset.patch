@@ -1,0 +1,25 @@
+From 62036fe3330eff6b8d0bdcca4b5f8cdd74366d6c Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Mon, 4 Sep 2023 13:20:26 +0800
+Subject: [PATCH 055/241] target/riscv: Add slaveport bit in reset
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ target/riscv/cpu.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index f90a2f9bdb..e26fdff441 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1303,6 +1303,7 @@ static void andes_csr_reset_common(CPURISCVState *env)
+ 
+     env->andes_csr.csrno[CSR_UITB] = 0;
+     env->andes_csr.csrno[CSR_MMSC_CFG] = (1UL << V5_MMSC_CFG_ECD) |
++                                         (1UL << V5_MMSC_CFG_LMSLVP)|
+                                          (1UL << V5_MMSC_CFG_PPMA);
+     env->andes_csr.csrno[CSR_MMISC_CTL] = (1UL << V5_MMISC_CTL_BRPE) |
+                                           (1UL << V5_MMISC_CTL_MSA_OR_UNA);
+-- 
+2.34.1
+

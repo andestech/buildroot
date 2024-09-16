@@ -1,0 +1,271 @@
+From b59514552bfed42eef0cc92524ebb82d68603d34 Mon Sep 17 00:00:00 2001
+From: Dylan Jhong <dylan@andestech.com>
+Date: Fri, 10 Dec 2021 16:55:23 +0800
+Subject: [PATCH 008/241] atcsmu: Support ATCSMU on AE350
+
+We need the ATCSMU to help us with QEMU power management.
+In this patch, we support poweroff command with legacy register SMUCR.
+
+This should be modified to PCS_CTL in the future.
+
+ref:
+    91cc7a1998 atcsmu: Support ATCSMU on AE350
+    6b7f11d9ee atcsmu: Support atcsmu with reboot feature.
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+Reviewed-by: Locus Wei-Han Chen <locus84@andestech.com>
+Reviewed-by: Leo Yu-Chi Liang <ycliang@andestech.com>
+---
+ hw/riscv/Kconfig                |   4 ++
+ hw/riscv/andes_ae350.c          |   5 +-
+ hw/riscv/andes_atcsmu.c         | 124 ++++++++++++++++++++++++++++++++
+ hw/riscv/meson.build            |   1 +
+ include/hw/riscv/andes_atcsmu.h |  49 +++++++++++++
+ 5 files changed, 181 insertions(+), 2 deletions(-)
+ create mode 100644 hw/riscv/andes_atcsmu.c
+ create mode 100644 include/hw/riscv/andes_atcsmu.h
+
+diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
+index 615fa03785..1ccb60c694 100644
+--- a/hw/riscv/Kconfig
++++ b/hw/riscv/Kconfig
+@@ -5,12 +5,16 @@ config IBEX
+     bool
+ 
+ # RISC-V machines in alphabetical order
++config ATCSMU
++    bool
++
+ config ANDES_AE350
+     bool
+     select ANDES_PLIC
+     select ANDES_PLMT
+     select ATCDMAC300
+     select ATCPIT100
++    select ATCSMU
+     select ATFMAC100
+     select ATFSDC010
+     select SERIAL
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index fe5b952df0..3512e91c26 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -47,6 +47,7 @@
+ #include "hw/timer/andes_plmt.h"
+ #include "hw/timer/atcpit100.h"
+ #include "hw/riscv/andes_ae350.h"
++#include "hw/riscv/andes_atcsmu.h"
+ #include "hw/sd/atfsdc010.h"
+ 
+ #define BIOS_FILENAME ""
+@@ -356,8 +357,8 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     }
+ 
+     /* SMU */
+-    create_unimplemented_device("riscv.andes.ae350.smu",
+-        memmap[ANDES_AE350_SMU].base, memmap[ANDES_AE350_SMU].size);
++    andes_atcsmu_create(memmap[ANDES_AE350_SMU].base,
++                        memmap[ANDES_AE350_SMU].size);
+ 
+     /* SMC */
+     create_unimplemented_device("riscv.andes.ae350.smc",
+diff --git a/hw/riscv/andes_atcsmu.c b/hw/riscv/andes_atcsmu.c
+new file mode 100644
+index 0000000000..5ae1ebcbf2
+--- /dev/null
++++ b/hw/riscv/andes_atcsmu.c
+@@ -0,0 +1,124 @@
++/*
++ * Andes ATCSMU (System Management Unit)
++ *
++ * Copyright (c) 2021 Andes Tech. Corp.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms and conditions of the GNU General Public License,
++ * version 2 or later, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along with
++ * this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include "qemu/osdep.h"
++#include "qapi/error.h"
++#include "qemu/log.h"
++#include "hw/sysbus.h"
++#include "sysemu/runstate.h"
++#include "hw/qdev-properties.h"
++#include "hw/riscv/andes_atcsmu.h"
++
++/* #define DEBUG_ATCSMU */
++/* #define MORE_HOOK */
++
++#define xLOG(x...)
++#define yLOG(x...) qemu_log(x)
++#define zLOG(x...) printf(x)
++
++#define LOG(x...) xLOG(x)
++#define LOGGE(x...) qemu_log_mask(LOG_GUEST_ERROR, x)
++
++#ifdef DEBUG_ATCPIT100
++#undef LOG
++#define LOG(x...) yLOG(x)
++#endif
++
++static uint64_t
++andes_atcsmu_read(void *opaque, hwaddr addr, unsigned size)
++{
++    return 0;
++}
++
++static void
++andes_atcsmu_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
++{
++    switch (addr) {
++    case ATCSMU_SMUCR:
++        switch (value) {
++        case SMUCMD_RESET:
++            qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
++            break;
++        case SMUCMD_POWEROFF:
++            qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
++            break;
++        }
++        break;
++    default:
++        LOGGE("%s: Bad addr %x (value %x)\n", __func__, (int)addr, (int)value);
++    }
++}
++
++static const MemoryRegionOps andes_atcsmu_ops = {
++    .read = andes_atcsmu_read,
++    .write = andes_atcsmu_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = {
++        .min_access_size = 1,
++        .max_access_size = 4
++    }
++};
++
++static Property andes_atcsmu_properties[] = {
++    DEFINE_PROP_UINT32("smu-base-addr", AndesATCSMUState, smu_base_addr, 0),
++    DEFINE_PROP_UINT32("smu-base-size", AndesATCSMUState, smu_base_size, 0),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++static void andes_atcsmu_realize(DeviceState *dev, Error **errp)
++{
++    AndesATCSMUState *smu = ANDES_ATCSMU(dev);
++    memory_region_init_io(&smu->mmio, OBJECT(dev), &andes_atcsmu_ops, smu,
++        TYPE_ANDES_ATCSMU, smu->smu_base_size);
++    sysbus_init_mmio(SYS_BUS_DEVICE(dev), &smu->mmio);
++}
++
++static void andes_atcsmu_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *dc = DEVICE_CLASS(klass);
++    dc->realize = andes_atcsmu_realize;
++    device_class_set_props(dc, andes_atcsmu_properties);
++}
++
++static const TypeInfo andes_atcsmu_info = {
++    .name = TYPE_ANDES_ATCSMU,
++    .parent = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(AndesATCSMUState),
++    .class_init = andes_atcsmu_class_init,
++};
++
++static void andes_atcsmu_register_types(void)
++{
++    type_register_static(&andes_atcsmu_info);
++}
++
++type_init(andes_atcsmu_register_types)
++
++/*
++ * Create ATCSMU device.
++ */
++DeviceState*
++andes_atcsmu_create(hwaddr addr, hwaddr size)
++{
++    DeviceState *dev = qdev_new(TYPE_ANDES_ATCSMU);
++    qdev_prop_set_uint32(dev, "smu-base-addr", addr);
++    qdev_prop_set_uint32(dev, "smu-base-size", size);
++    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
++    sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
++    return dev;
++}
+diff --git a/hw/riscv/meson.build b/hw/riscv/meson.build
+index e86409c16b..bac871b083 100644
+--- a/hw/riscv/meson.build
++++ b/hw/riscv/meson.build
+@@ -2,6 +2,7 @@ riscv_ss = ss.source_set()
+ riscv_ss.add(files('boot.c'), fdt)
+ riscv_ss.add(when: 'CONFIG_RISCV_NUMA', if_true: files('numa.c'))
+ riscv_ss.add(files('riscv_hart.c'))
++riscv_ss.add(when: 'CONFIG_ATCSMU', if_true: files('andes_atcsmu.c'))
+ riscv_ss.add(when: 'CONFIG_ANDES_AE350', if_true: files('andes_ae350.c'))
+ riscv_ss.add(when: 'CONFIG_OPENTITAN', if_true: files('opentitan.c'))
+ riscv_ss.add(when: 'CONFIG_RISCV_VIRT', if_true: files('virt.c'))
+diff --git a/include/hw/riscv/andes_atcsmu.h b/include/hw/riscv/andes_atcsmu.h
+new file mode 100644
+index 0000000000..42d916bf98
+--- /dev/null
++++ b/include/hw/riscv/andes_atcsmu.h
+@@ -0,0 +1,49 @@
++/*
++ * Andes ATCSMU (System Management Unit)
++ *
++ * Copyright (c) 2021 Andes Tech. Corp.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms and conditions of the GNU General Public License,
++ * version 2 or later, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along with
++ * this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef HW_ANDES_ATCSMU_H
++#define HW_ANDES_ATCSMU_H
++
++#define TYPE_ANDES_ATCSMU "riscv.andes.ae350.atcsmu"
++
++#define ANDES_ATCSMU(obj) \
++    OBJECT_CHECK(AndesATCSMUState, (obj), TYPE_ANDES_ATCSMU)
++
++typedef struct AndesATCSMUState {
++    /*< private >*/
++    SysBusDevice parent_obj;
++
++    /*< public >*/
++    MemoryRegion mmio;
++
++    /* config */
++    uint32_t smu_base_addr;
++    uint32_t smu_base_size;
++} AndesATCSMUState;
++
++#define ATCSMU_SMUCR        0x14
++
++/* SMUCR */
++#define SMUCMD_RESET        0x3c
++#define SMUCMD_POWEROFF     0x5a
++#define SMUCMD_STANDBY      0x55
++
++DeviceState *
++andes_atcsmu_create(hwaddr addr, hwaddr size);
++
++#endif
+-- 
+2.34.1
+

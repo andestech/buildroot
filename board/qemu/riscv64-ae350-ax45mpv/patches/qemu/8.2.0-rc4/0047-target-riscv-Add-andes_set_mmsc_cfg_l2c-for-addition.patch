@@ -1,0 +1,95 @@
+From 1b0fff69dc769089ecca2388f6a6c89056d927e6 Mon Sep 17 00:00:00 2001
+From: Yu Chien Peter Lin <peterlin@andestech.com>
+Date: Wed, 16 Aug 2023 16:37:52 +0800
+Subject: [PATCH 047/241] target/riscv: Add andes_set_mmsc_cfg_l2c() for
+ additional CSR setting
+
+Factor out the common $mmsc_cfg.L2C setting for a45/ax45/ax65
+and the upcoming ax45mpv.
+
+Note that you may find the bit is $mmsc_cfg.CCACHE (cluster cache)
+in some newer datasheets or SPA.
+They are indicated by the same bit for the presence of L2-cache
+on the bitmaps listed above.
+
+Signed-off-by: Yu Chien Peter Lin <peterlin@andestech.com>
+---
+ target/riscv/cpu.c | 31 ++++++++++++++++++-------------
+ 1 file changed, 18 insertions(+), 13 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 30d0565703..c0f77f057d 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -416,6 +416,21 @@ static void riscv_max_cpu_init(Object *obj)
+ #endif
+ }
+ 
++static void andes_set_mmsc_cfg_l2c(AndesCsr *andes_csr)
++{
++    /*
++     * AST530 OpenSBI will double check the bit of $mmsc_cfg
++     * ($mmsc_cfg2 for RV32) on 45/65 and newer CPUs.
++     * If the bit is NOT set when the L2C entry exists in
++     * device-tree, OpenSBI will warn the user.
++     */
++#if defined(TARGET_RISCV32)
++    andes_csr->csrno[CSR_MMSC_CFG2] |= (1UL << V5_MMSC_CFG2_L2C);
++#elif defined(TARGET_RISCV64)
++    andes_csr->csrno[CSR_MMSC_CFG] |= (1UL << V5_MMSC_CFG_L2C);
++#endif
++}
++
+ #if defined(TARGET_RISCV64)
+ static void rv64_base_cpu_init(Object *obj)
+ {
+@@ -610,27 +625,21 @@ static void rv64_andes_ax27_cpu_init(Object *obj)
+ static void rv64_andes_ax45_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+-    AndesCsr *andes_csr = &RISCV_CPU(obj)->env.andes_csr;
+ 
+-    rv64_andes_common_cpu_init(obj, NULL);
++    rv64_andes_common_cpu_init(obj, andes_set_mmsc_cfg_l2c);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x8a45;
+-    /* Set $mmsc_cfg.L2C */
+-    andes_csr->csrno[CSR_MMSC_CFG] |= (1UL << V5_MMSC_CFG_L2C);
+ }
+ 
+ static void rv64_andes_ax65_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+-    AndesCsr *andes_csr = &RISCV_CPU(obj)->env.andes_csr;
+ 
+-    rv64_andes_common_cpu_init(obj, NULL);
++    rv64_andes_common_cpu_init(obj, andes_set_mmsc_cfg_l2c);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x8a65;
+-    /* Set $mmsc_cfg.L2C */
+-    andes_csr->csrno[CSR_MMSC_CFG] |= (1UL << V5_MMSC_CFG_L2C);
+ 
+     /* Bitmanip */
+     cfg->ext_zba = true;
+@@ -878,15 +887,11 @@ static void rv32_andes_a27_cpu_init(Object *obj)
+ static void rv32_andes_a45_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+-    AndesCsr *andes_csr = &RISCV_CPU(obj)->env.andes_csr;
+ 
+-    rv32_andes_common_cpu_init(obj, NULL);
++    rv32_andes_common_cpu_init(obj, andes_set_mmsc_cfg_l2c);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0a45;
+-
+-    /* Set $mmsc_cfg2.L2C */
+-    andes_csr->csrno[CSR_MMSC_CFG2] |= (1UL << V5_MMSC_CFG2_L2C);
+ }
+ 
+ static void rv32_andes_n25_cpu_init(Object *obj)
+-- 
+2.34.1
+

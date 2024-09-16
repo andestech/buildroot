@@ -1,0 +1,65 @@
+From 1baa87a8770e190d4e0167b0067563a35c0b2565 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 20 Sep 2023 17:32:20 +0800
+Subject: [PATCH 091/241] target/riscv: Fix a bug of CSR write masks of
+ slie/slip.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c | 17 ++++++++++++-----
+ target/riscv/csr_andes.h |  3 ++-
+ 2 files changed, 14 insertions(+), 6 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index ecc67c03d7..7af3c6fb78 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -618,10 +618,17 @@ static RISCVException write_shpmevent(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
+-static RISCVException write_sliep(CPURISCVState *env, int csrno,
+-                                  target_ulong val)
++static RISCVException write_slie(CPURISCVState *env, int csrno,
++                                 target_ulong val)
++{
++    env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_SLIE;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_slip(CPURISCVState *env, int csrno,
++                                 target_ulong val)
+ {
+-    env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_SLIEP;
++    env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_SLIP;
+     return RISCV_EXCP_NONE;
+ }
+ 
+@@ -831,8 +838,8 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+ 
+     /* ================ AndeStar V5 supervisor mode CSRs ================ */
+     /* Supervisor trap registers */
+-    [CSR_SLIE]    = { "slie",                     smode, read_csr, write_sliep},
+-    [CSR_SLIP]    = { "slip",                     smode, read_csr, write_sliep},
++    [CSR_SLIE]    = { "slie",                     smode, read_csr, write_slie},
++    [CSR_SLIP]    = { "slip",                     smode, read_csr, write_slip},
+     [CSR_SDCAUSE] = { "sdcause",                  smode, read_csr,
+                                                          write_smdcause       },
+ 
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 89b815b393..e2606ed826 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -204,7 +204,8 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define WRITE_MASK_CSR_MHSP_CTL             0x3F
+ #define WRITE_MASK_CSR_COUNTER              0x7D
+ #define WRITE_MASK_CSR_HPMEVENT             0x1FF
+-#define WRITE_MASK_CSR_SLIEP                0x10F0000
++#define WRITE_MASK_CSR_SLIE                 0x10F0000
++#define WRITE_MASK_CSR_SLIP                 0xF0000
+ #define WRITE_MASK_CSR_MPPIB_32             0xFFFFFC3F
+ #define WRITE_MASK_CSR_MPPIB_64             0xFFFFFFFFFFFFFC3F
+ #define WRITE_MASK_CSR_MFIOB_32             0xFFFFFC3F
+-- 
+2.34.1
+

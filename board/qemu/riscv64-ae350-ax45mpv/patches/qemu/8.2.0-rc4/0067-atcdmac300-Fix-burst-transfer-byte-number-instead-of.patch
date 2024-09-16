@@ -1,0 +1,27 @@
+From 3f263df1991c2eb7803ce7d1bcabec8b6c8748f8 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Mon, 28 Aug 2023 18:38:34 +0800
+Subject: [PATCH 067/241] atcdmac300: Fix burst transfer "byte" number instead
+ of burst transfer number should be aligned to the destination transfer width
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/dma/atcdmac300.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hw/dma/atcdmac300.c b/hw/dma/atcdmac300.c
+index bb236405b9..fbb5683f4f 100644
+--- a/hw/dma/atcdmac300.c
++++ b/hw/dma/atcdmac300.c
+@@ -138,7 +138,7 @@ static void atcdmac300_write(void *opaque, hwaddr offset, uint64_t value,
+                 (src_addr & (src_width - 1)) == 0 &&
+                 (dst_addr & (dst_width - 1)) == 0 &&
+                 (remain_size & (dst_width - 1)) == 0 &&
+-                (burst_size & (dst_width - 1)) == 0) {
++                (burst_size * src_width & (dst_width - 1)) == 0) {
+ 
+                 while (remain_size > 0) {
+                     int i;
+-- 
+2.34.1
+

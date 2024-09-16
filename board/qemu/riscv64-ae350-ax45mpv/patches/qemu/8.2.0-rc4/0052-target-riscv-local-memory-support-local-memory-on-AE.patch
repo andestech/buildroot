@@ -1,0 +1,714 @@
+From 2e7fe598d237ab6b2f2237c174cffda1d1376da9 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Mon, 4 Sep 2023 17:40:07 +0800
+Subject: [PATCH 052/241] target/riscv: local memory: support local memory on
+ AE350
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/andes_ae350.c         | 125 ++++++++++++++++++++-
+ hw/riscv/riscv_hart.c          |  43 ++++++++
+ include/hw/riscv/andes_ae350.h |  17 +++
+ include/hw/riscv/riscv_hart.h  |   7 ++
+ target/riscv/cpu.c             | 194 +++++++++++++++++++++++++++++++++
+ target/riscv/cpu.h             |  11 ++
+ target/riscv/csr_andes.c       |  40 ++++++-
+ target/riscv/csr_andes.h       |   8 ++
+ 8 files changed, 442 insertions(+), 3 deletions(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index d8cd9e4473..20330857da 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -58,6 +58,16 @@ static const struct MemmapEntry {
+ } andes_ae350_memmap[] = {
+     [ANDES_AE350_DRAM]      = { 0x00000000, 0x80000000 },
+     [ANDES_AE350_MROM]      = { 0x80000000,  0x8000000 },
++    [ANDES_AE350_ILM]       = { 0x00000000,   0x200000 },
++    [ADNES_AE350_DLM]       = { 0x00200000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT0_ILM] = { 0xa0000000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT0_DLM] = { 0xa0200000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT1_ILM] = { 0xa0400000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT1_DLM] = { 0xa0600000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT2_ILM] = { 0xa0800000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT2_DLM] = { 0xa0a00000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT3_ILM] = { 0xa0c00000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT3_DLM] = { 0xa0e00000,   0x200000 },
+     [ANDES_AE350_NOR]       = { 0x88000000,  0x4000000 },
+     [ANDES_AE350_MAC]       = { 0xe0100000,   0x100000 },
+     [ANDES_AE350_LCD]       = { 0xe0200000,   0x100000 },
+@@ -305,7 +315,21 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     char *plic_hart_config, *plicsw_hart_config;
+     NICInfo *nd = &nd_table[0];
+ 
++    qdev_prop_set_bit(DEVICE(&s->cpus), "ilm_default_enable",
++                        s->ilm_default_enable);
++    qdev_prop_set_bit(DEVICE(&s->cpus), "dlm_default_enable",
++                        s->dlm_default_enable);
++    qdev_prop_set_uint64(DEVICE(&s->cpus), "ilm_base",
++                        s->ilm_base);
++    qdev_prop_set_uint64(DEVICE(&s->cpus), "dlm_base",
++                        s->dlm_base);
++    qdev_prop_set_uint64(DEVICE(&s->cpus), "ilm_size",
++                        s->ilm_size);
++    qdev_prop_set_uint64(DEVICE(&s->cpus), "dlm_size",
++                        s->dlm_size);
++
+     sysbus_realize(SYS_BUS_DEVICE(&s->cpus), &error_abort);
++
+     plicsw_hart_config =
+         init_hart_config(ANDES_PLICSW_HART_CONFIG, machine->smp.cpus);
+ 
+@@ -489,6 +513,83 @@ static int andes_load_elf(MachineState *machine,
+     return 0;
+ }
+ 
++typedef struct Slaveport_status {
++    int hart_id;
++    bool dlm;
++} Slaveport_status;
++static uint64_t slaveport_read(void *opaque, hwaddr addr, unsigned size)
++{
++    uint64_t ret = 0;
++    Slaveport_status *s = (Slaveport_status *)opaque;
++    CPUState *cs = qemu_get_cpu(s->hart_id);
++    if (!cs) {
++        return ret;
++    }
++    CPURISCVState *env = &RISCV_CPU(cs)->env;
++    if (s->dlm) {
++        memory_region_dispatch_read(env->mask_dlm, addr, &ret,
++            size_memop(size) | MO_LE, (MemTxAttrs) { .memory = 1 });
++    } else {
++        memory_region_dispatch_read(env->mask_ilm, addr, &ret,
++            size_memop(size) | MO_LE, (MemTxAttrs) { .memory = 1 });
++    }
++    return ret;
++}
++
++static void slaveport_write(void *opaque, hwaddr addr, uint64_t value,
++                            unsigned size)
++{
++    Slaveport_status *s = (Slaveport_status *)opaque;
++    CPUState *cs = qemu_get_cpu(s->hart_id);
++    if (!cs) {
++        return;
++    }
++    CPURISCVState *env = &RISCV_CPU(cs)->env;
++    if (s->dlm) {
++        memory_region_dispatch_write(env->mask_dlm, addr, value,
++            size_memop(size) | MO_LE, (MemTxAttrs) { .memory = 1 });
++    } else {
++        memory_region_dispatch_write(env->mask_ilm, addr, value,
++            size_memop(size) | MO_LE, (MemTxAttrs) { .memory = 1 });
++    }
++}
++
++static const MemoryRegionOps slaveport_ops = {
++    .read = slaveport_read,
++    .write = slaveport_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = {
++        .min_access_size = 1,
++        .max_access_size = 8,
++        .unaligned = true,
++    },
++    .impl = {
++        .min_access_size = 1,
++        .max_access_size = 8,
++        .unaligned = true,
++    },
++};
++
++static void slaveport_create(int hart_id, bool dlm, hwaddr base, hwaddr size)
++{
++    Slaveport_status *s = g_new(Slaveport_status, 1);
++    s->hart_id = hart_id;
++    s->dlm = dlm;
++    MemoryRegion *slaveport_mr = g_new(MemoryRegion, 1);
++    MemoryRegion *system_memory = get_system_memory();
++    char *name;
++    if (dlm) {
++        name = g_strdup_printf("%s%d_%s", "riscv.andes.ae350.slaveport",
++                               hart_id, "dlm");
++    } else {
++        name = g_strdup_printf("%s%d_%s", "riscv.andes.ae350.slaveport",
++                               hart_id, "ilm");
++    }
++    memory_region_init_io(slaveport_mr, NULL, &slaveport_ops, s,
++                          name, size);
++    memory_region_add_subregion(system_memory, base, slaveport_mr);
++}
++
+ static void andes_ae350_machine_init(MachineState *machine)
+ {
+     const struct MemmapEntry *memmap = andes_ae350_memmap;
+@@ -534,6 +635,14 @@ static void andes_ae350_machine_init(MachineState *machine)
+     memory_region_set_readonly(mask_l2c, false);
+     memory_region_add_subregion(system_memory, memmap[ANDES_AE350_L2C].base,
+                                 mask_l2c);
++    for (int i = 0 ; i < 4; i++) {
++        struct MemmapEntry silm_map =
++            memmap[ANDES_AE350_SLAVEPORT0_ILM + i * 2];
++        struct MemmapEntry sdlm_map =
++             memmap[ANDES_AE350_SLAVEPORT0_ILM + i * 2 + 1];
++        slaveport_create(i, 0, silm_map.base, silm_map.size);
++        slaveport_create(i, 1, sdlm_map.base, sdlm_map.size);
++    }
+ 
+     /* load/create device tree */
+     if (machine->dtb) {
+@@ -618,10 +727,24 @@ static void andes_ae350_machine_init_register_types(void)
+ 
+ type_init(andes_ae350_machine_init_register_types)
+ 
++
++static Property andes_ae350_soc_property[] = {
++    /* Defaults for standard extensions */
++    DEFINE_PROP_UINT64("ilm_base", AndesAe350SocState, ilm_base, 0),
++    DEFINE_PROP_UINT64("dlm_base", AndesAe350SocState, dlm_base, 0x200000),
++    DEFINE_PROP_UINT32("ilm_size", AndesAe350SocState, ilm_size, 0x200000),
++    DEFINE_PROP_UINT32("dlm_size", AndesAe350SocState, dlm_size, 0x200000),
++    DEFINE_PROP_BOOL("ilm_default_enable", AndesAe350SocState,
++                     ilm_default_enable, false),
++    DEFINE_PROP_BOOL("dlm_default_enable", AndesAe350SocState,
++                     dlm_default_enable, false),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
+ static void andes_ae350_soc_class_init(ObjectClass *oc, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(oc);
+-
++    device_class_set_props(dc, andes_ae350_soc_property);
+     dc->realize = andes_ae350_soc_realize;
+     dc->user_creatable = false;
+ }
+diff --git a/hw/riscv/riscv_hart.c b/hw/riscv/riscv_hart.c
+index 613ea2aaa0..ab07401bd4 100644
+--- a/hw/riscv/riscv_hart.c
++++ b/hw/riscv/riscv_hart.c
+@@ -26,6 +26,8 @@
+ #include "target/riscv/cpu.h"
+ #include "hw/qdev-properties.h"
+ #include "hw/riscv/riscv_hart.h"
++#include "exec/address-spaces.h"
++#include "exec/ramblock.h"
+ 
+ static Property riscv_harts_props[] = {
+     DEFINE_PROP_UINT32("num-harts", RISCVHartArrayState, num_harts, 1),
+@@ -36,17 +38,43 @@ static Property riscv_harts_props[] = {
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
++static Property andes_riscv_harts_props[] = {
++    DEFINE_PROP_UINT64("ilm_base", RISCVHartArrayState, ilm_base, 0),
++    DEFINE_PROP_UINT64("dlm_base", RISCVHartArrayState, dlm_base, 0x200000),
++    DEFINE_PROP_UINT32("ilm_size", RISCVHartArrayState, ilm_size, 0x200000),
++    DEFINE_PROP_UINT32("dlm_size", RISCVHartArrayState, dlm_size, 0x200000),
++    DEFINE_PROP_BOOL("ilm_default_enable", RISCVHartArrayState,
++                     ilm_default_enable, false),
++    DEFINE_PROP_BOOL("dlm_default_enable", RISCVHartArrayState,
++                     dlm_default_enable, false),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
+ static void riscv_harts_cpu_reset(void *opaque)
+ {
+     RISCVCPU *cpu = opaque;
+     cpu_reset(CPU(cpu));
+ }
+ 
++static void andes_hart_prop_set(RISCVHartArrayState *s, int idx)
++{
++    qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "ilm_base", s->ilm_base);
++    qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "dlm_base", s->dlm_base);
++    qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "ilm_size", s->ilm_size);
++    qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "dlm_size", s->dlm_size);
++    qdev_prop_set_bit(DEVICE(&s->harts[idx]), "ilm_default_enable",
++                      s->ilm_default_enable);
++    qdev_prop_set_bit(DEVICE(&s->harts[idx]), "dlm_default_enable",
++                      s->dlm_default_enable);
++}
++
++
+ static bool riscv_hart_realize(RISCVHartArrayState *s, int idx,
+                                char *cpu_type, Error **errp)
+ {
+     object_initialize_child(OBJECT(s), "harts[*]", &s->harts[idx], cpu_type);
+     qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "resetvec", s->resetvec);
++    andes_hart_prop_set(s, idx);
+     s->harts[idx].env.mhartid = s->hartid_base + idx;
+     qemu_register_reset(riscv_harts_cpu_reset, &s->harts[idx]);
+     return qdev_realize(DEVICE(&s->harts[idx]), NULL, errp);
+@@ -74,10 +102,25 @@ static void riscv_harts_class_init(ObjectClass *klass, void *data)
+     dc->realize = riscv_harts_realize;
+ }
+ 
++static void register_andes_harts_props(DeviceState *dev)
++{
++    Property *prop;
++    for (prop = andes_riscv_harts_props; prop && prop->name; prop++) {
++        qdev_property_add_static(dev, prop);
++    }
++}
++
++static void riscv_harts_init(Object *obj)
++{
++    DeviceState *dev = DEVICE(obj);
++    register_andes_harts_props(dev);
++}
++
+ static const TypeInfo riscv_harts_info = {
+     .name          = TYPE_RISCV_HART_ARRAY,
+     .parent        = TYPE_SYS_BUS_DEVICE,
+     .instance_size = sizeof(RISCVHartArrayState),
++    .instance_init = riscv_harts_init,
+     .class_init    = riscv_harts_class_init,
+ };
+ 
+diff --git a/include/hw/riscv/andes_ae350.h b/include/hw/riscv/andes_ae350.h
+index 23aae2f0ab..50c124da88 100644
+--- a/include/hw/riscv/andes_ae350.h
++++ b/include/hw/riscv/andes_ae350.h
+@@ -45,6 +45,13 @@ typedef struct AndesAe350SocState {
+ 
+     ATCDMAC300State dma;
+     ATFMAC100State atfmac100;
++
++    uint64_t ilm_base;
++    uint64_t dlm_base;
++    uint32_t ilm_size;
++    uint32_t dlm_size;
++    bool ilm_default_enable;
++    bool dlm_default_enable;
+ } AndesAe350SocState;
+ 
+ #define TYPE_ANDES_AE350_MACHINE MACHINE_TYPE_NAME("andes_ae350")
+@@ -63,6 +70,16 @@ typedef struct AndesAe350BoardState {
+ enum {
+     ANDES_AE350_DRAM,
+     ANDES_AE350_MROM,
++    ANDES_AE350_ILM,
++    ADNES_AE350_DLM,
++    ANDES_AE350_SLAVEPORT0_ILM,
++    ANDES_AE350_SLAVEPORT0_DLM,
++    ANDES_AE350_SLAVEPORT1_ILM,
++    ANDES_AE350_SLAVEPORT1_DLM,
++    ANDES_AE350_SLAVEPORT2_ILM,
++    ANDES_AE350_SLAVEPORT2_DLM,
++    ANDES_AE350_SLAVEPORT3_ILM,
++    ANDES_AE350_SLAVEPORT3_DLM,
+     ANDES_AE350_NOR,
+     ANDES_AE350_MAC,
+     ANDES_AE350_LCD,
+diff --git a/include/hw/riscv/riscv_hart.h b/include/hw/riscv/riscv_hart.h
+index 912b4a2682..c2c890e10b 100644
+--- a/include/hw/riscv/riscv_hart.h
++++ b/include/hw/riscv/riscv_hart.h
+@@ -39,6 +39,13 @@ struct RISCVHartArrayState {
+     char *cpu_type;
+     uint64_t resetvec;
+     RISCVCPU *harts;
++
++    uint64_t ilm_base;
++    uint64_t dlm_base;
++    uint32_t ilm_size;
++    uint32_t dlm_size;
++    bool ilm_default_enable;
++    bool dlm_default_enable;
+ };
+ 
+ #endif
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 986530bd9f..f90a2f9bdb 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -36,6 +36,8 @@
+ #include "kvm/kvm_riscv.h"
+ #include "tcg/tcg-cpu.h"
+ #include "tcg/tcg.h"
++#include "exec/address-spaces.h"
++#include "exec/ramblock.h"
+ 
+ /* RISC-V CPU definitions */
+ static const char riscv_single_letter_exts[] = "IEMAFDQCPVH";
+@@ -263,6 +265,9 @@ static const char * const riscv_intr_names[] = {
+     "reserved"
+ };
+ 
++static void riscv_cpu_add_user_properties(Object *obj);
++static void register_andes_cpu_props(Object *obj);
++
+ const char *riscv_cpu_get_trap_name(target_ulong cause, bool async)
+ {
+     if (async) {
+@@ -431,6 +436,133 @@ static void andes_set_mmsc_cfg_l2c(AndesCsr *andes_csr)
+ #endif
+ }
+ 
++static uint64_t memory_region_local_mem_read(void *opaque,
++                                              hwaddr addr, unsigned size)
++{
++    MemoryRegion *mr = opaque;
++    uint64_t data = (uint64_t)~0;
++
++    switch (size) {
++    case 1:
++        data = *(uint8_t *)(mr->ram_block->host + addr);
++        break;
++    case 2:
++        data = *(uint16_t *)(mr->ram_block->host + addr);
++        break;
++    case 4:
++        data = *(uint32_t *)(mr->ram_block->host + addr);
++        break;
++    case 8:
++        data = *(uint64_t *)(mr->ram_block->host + addr);
++        break;
++    }
++
++    return data;
++}
++
++static void memory_region_local_mem_write(void *opaque, hwaddr addr,
++                                           uint64_t data, unsigned size)
++{
++    MemoryRegion *mr = opaque;
++
++    switch (size) {
++    case 1:
++        *(uint8_t *)(mr->ram_block->host + addr) = (uint8_t)data;
++        break;
++    case 2:
++        *(uint16_t *)(mr->ram_block->host + addr) = (uint16_t)data;
++        break;
++    case 4:
++        *(uint32_t *)(mr->ram_block->host + addr) = (uint32_t)data;
++        break;
++    case 8:
++        *(uint64_t *)(mr->ram_block->host + addr) = data;
++        break;
++    }
++}
++
++static const MemoryRegionOps local_mem_ops = {
++    .read = memory_region_local_mem_read,
++    .write = memory_region_local_mem_write,
++    .endianness = DEVICE_LITTLE_ENDIAN,
++    .valid = {
++        .min_access_size = 1,
++        .max_access_size = 8,
++        .unaligned = true,
++        .accepts = NULL,
++    },
++    .impl = {
++        .min_access_size = 1,
++        .max_access_size = 8,
++        .unaligned = true,
++    },
++};
++
++static void andes_cpu_lm_init(Object *obj)
++{
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
++    CPUState *cs = CPU(obj);
++    env->cpu_as_root = g_new(MemoryRegion, 1);
++    env->cpu_as_mem = g_new(MemoryRegion, 1);
++    /* Outer container... */
++    memory_region_init(env->cpu_as_root, OBJECT(obj), "cpu-as-root", ~0ull);
++    memory_region_set_enabled(env->cpu_as_root, true);
++
++    memory_region_init_alias(env->cpu_as_mem, OBJECT(obj), "cpu-as-mem",
++                             get_system_memory(), 0, ~0ull);
++    memory_region_add_subregion_overlap(env->cpu_as_root, 0,
++                                        env->cpu_as_mem, 0);
++    memory_region_set_enabled(env->cpu_as_mem, true);
++
++    cs->num_ases = 1;
++    cpu_address_space_init(cs, 0, "cpu-memory", env->cpu_as_root);
++    env->mask_ilm = g_new(MemoryRegion, 1);
++    env->mask_dlm = g_new(MemoryRegion, 1);
++}
++
++static void andes_cpu_lm_realize(DeviceState *dev)
++{
++    CPURISCVState *env = &RISCV_CPU(dev)->env;
++    int lm_num = env->mhartid;
++    g_autofree char *ilm_name =
++        g_strdup_printf("%s%d", "riscv.andes.ae350.ilm", lm_num);
++    g_autofree char *dlm_name =
++        g_strdup_printf("%s%d", "riscv.andes.ae350.dlm", lm_num);
++
++    memory_region_init_ram(env->mask_ilm, OBJECT(dev), ilm_name,
++                            env->ilm_size, &error_fatal);
++    memory_region_init_ram(env->mask_dlm, OBJECT(dev), dlm_name,
++                            env->dlm_size, &error_fatal);
++    /* local memory operation */
++    env->mask_ilm->ops = &local_mem_ops;
++    env->mask_ilm->opaque = env->mask_ilm;
++    env->mask_dlm->ops = &local_mem_ops;
++    env->mask_dlm->opaque = env->mask_dlm;
++
++    /* round down to valid value */
++    int ilmsz = 31 - __builtin_clz(env->ilm_size) - 9;
++    int dlmsz = 31 - __builtin_clz(env->dlm_size) - 9;
++    env->ilm_size = 1 << (ilmsz + 9);
++    env->dlm_size = 1 << (dlmsz + 9);
++
++    /* initial local memory csr */
++    env->andes_csr.csrno[CSR_MICM_CFG] = (1UL << V5_MICM_CFG_ILMB) |
++                                     (ilmsz << V5_MICM_CFG_ILMSZ);
++    env->andes_csr.csrno[CSR_MDCM_CFG] = (1UL << V5_MDCM_CFG_DLMB) |
++                                     (dlmsz << V5_MICM_CFG_DLMSZ);
++
++    env->andes_csr.csrno[CSR_MILMB] = env->ilm_base | env->ilm_default_enable;
++    env->andes_csr.csrno[CSR_MDLMB] = env->dlm_base | env->dlm_default_enable;
++    if (env->ilm_default_enable) {
++        memory_region_add_subregion_overlap(env->cpu_as_root, env->ilm_base,
++                                    env->mask_ilm, 1);
++    }
++    if (env->dlm_default_enable) {
++        memory_region_add_subregion_overlap(env->cpu_as_root, env->dlm_base,
++                                    env->mask_dlm, 1);
++    }
++}
++
+ #if defined(TARGET_RISCV64)
+ static void rv64_base_cpu_init(Object *obj)
+ {
+@@ -579,6 +711,7 @@ static void rv64_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+         set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     }
+     riscv_cpu_add_user_properties(obj);
++    register_andes_cpu_props(obj);
+     set_priv_version(env, PRIV_VERSION_1_12_0);
+ 
+ #ifndef CONFIG_USER_ONLY
+@@ -591,6 +724,8 @@ static void rv64_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+         spec_csr_init(&env->andes_csr);
+     }
+     andes_vec_init(&env->andes_vec);
++    /* Setup local memory */
++    andes_cpu_lm_init(obj);
+ 
+     env->do_interrupt_post = andes_cpu_do_interrupt_post;
+ 
+@@ -866,6 +1001,7 @@ static void rv32_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+         set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     }
+     riscv_cpu_add_user_properties(obj);
++    register_andes_cpu_props(obj);
+     set_priv_version(env, PRIV_VERSION_1_12_0);
+ 
+ #ifndef CONFIG_USER_ONLY
+@@ -878,6 +1014,8 @@ static void rv32_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+         spec_csr_init(&env->andes_csr);
+     }
+     andes_vec_init(&env->andes_vec);
++    /* Setup local memory */
++    andes_cpu_lm_init(obj);
+ 
+     env->do_interrupt_post = andes_cpu_do_interrupt_post;
+ 
+@@ -1236,6 +1374,35 @@ static void riscv_cpu_reset_hold(Object *obj)
+     }
+     env->pmp_state.num_rules = 0;
+ 
++    env->andes_csr.csrno[CSR_MILMB] = env->ilm_base | env->ilm_default_enable;
++    env->andes_csr.csrno[CSR_MDLMB] = env->dlm_base | env->dlm_default_enable;
++
++    bool locked = false;
++    if (!qemu_mutex_iothread_locked()) {
++        locked = true;
++        qemu_mutex_lock_iothread();
++    }
++    if (env->ilm_default_enable) {
++        if (!memory_region_is_mapped(env->mask_ilm)) {
++            memory_region_add_subregion_overlap(env->cpu_as_root,
++                                env->ilm_base, env->mask_ilm, 1);
++        }
++    } else if (memory_region_is_mapped(env->mask_ilm)) {
++        memory_region_del_subregion(env->cpu_as_root, env->mask_ilm);
++    }
++    if (env->dlm_default_enable) {
++        if (!memory_region_is_mapped(env->mask_dlm)) {
++            memory_region_add_subregion_overlap(env->cpu_as_root,
++                                env->dlm_base, env->mask_dlm, 1);
++        }
++    } else if (memory_region_is_mapped(env->mask_dlm)) {
++        memory_region_del_subregion(env->cpu_as_root, env->mask_dlm);
++    }
++    tlb_flush(env_cpu(env));
++    if (locked) {
++        qemu_mutex_unlock_iothread();
++    }
++
+     env->miclaim = MIP_SGEIP;
+     env->pc = env->resetvec;
+     env->bins = 0;
+@@ -1446,6 +1613,7 @@ static void riscv_cpu_realize(DeviceState *dev, Error **errp)
+ #endif
+ 
+     qemu_init_vcpu(cs);
++    andes_cpu_lm_realize(dev);
+     cpu_reset(cs);
+ 
+     mcc->parent_realize(dev, errp);
+@@ -1875,7 +2043,33 @@ static Property riscv_cpu_properties[] = {
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
++<<<<<<< HEAD
+ static const gchar *riscv_gdb_arch_name(CPUState *cs)
++=======
++static Property andes_cpu_property[] = {
++    /* Defaults for standard extensions */
++    DEFINE_PROP_UINT64("ilm_base", RISCVCPU, env.ilm_base, 0),
++    DEFINE_PROP_UINT64("dlm_base", RISCVCPU, env.dlm_base, 0x200000),
++    DEFINE_PROP_UINT32("ilm_size", RISCVCPU, env.ilm_size, 0x200000),
++    DEFINE_PROP_UINT32("dlm_size", RISCVCPU, env.dlm_size, 0x200000),
++    DEFINE_PROP_BOOL("ilm_default_enable", RISCVCPU, env.ilm_default_enable,
++                     false),
++    DEFINE_PROP_BOOL("dlm_default_enable", RISCVCPU, env.dlm_default_enable,
++                     false),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++static void register_andes_cpu_props(Object *obj)
++{
++    DeviceState *dev = DEVICE(obj);
++    Property *prop;
++    for (prop = andes_cpu_property; prop && prop->name; prop++) {
++        qdev_property_add_static(dev, prop);
++    }
++}
++
++static gchar *riscv_gdb_arch_name(CPUState *cs)
++>>>>>>> 5fab65d54b (target/riscv: local memory: support local memory on AE350)
+ {
+     RISCVCPU *cpu = RISCV_CPU(cs);
+     CPURISCVState *env = &cpu->env;
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index 277bef4a71..d4a44d7ddd 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -424,6 +424,17 @@ struct CPUArchState {
+     /* Andes vectored-plic */
+     AndesVec andes_vec;
+     void (*do_interrupt_post)(CPUState *cpu);
++
++    MemoryRegion *cpu_as_root;
++    MemoryRegion *cpu_as_mem;
++    MemoryRegion *mask_ilm;
++    MemoryRegion *mask_dlm;
++    uint64_t ilm_base;
++    uint64_t dlm_base;
++    uint32_t ilm_size;
++    uint32_t dlm_size;
++    bool ilm_default_enable;
++    bool dlm_default_enable;
+ };
+ 
+ /*
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 9f3b5aed58..c89c4a2327 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -11,6 +11,7 @@
+ #include "exec/exec-all.h"
+ #include "andes_cpu_bits.h"
+ #include "csr_andes.h"
++#include "exec/address-spaces.h"
+ 
+ static RISCVException any(CPURISCVState *env,
+                           int csrno)
+@@ -527,6 +528,40 @@ static RISCVException write_all_ignore(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException write_lmb(CPURISCVState *env,
++                                int csrno,
++                                target_ulong val)
++{
++    uint64_t enable = val & 0x1;
++    bool locked = false;
++    if (!qemu_mutex_iothread_locked()) {
++        locked = true;
++        qemu_mutex_lock_iothread();
++    }
++    if (csrno == CSR_MILMB) {
++        if (enable) {
++            memory_region_add_subregion_overlap(env->cpu_as_root,
++                                env->ilm_base, env->mask_ilm, 1);
++        } else if (memory_region_is_mapped(env->mask_ilm)) {
++            memory_region_del_subregion(env->cpu_as_root, env->mask_ilm);
++        }
++    }
++    if (csrno == CSR_MDLMB) {
++        if (enable) {
++            memory_region_add_subregion_overlap(env->cpu_as_root,
++                                env->dlm_base, env->mask_dlm, 1);
++        } else if (memory_region_is_mapped(env->mask_dlm)) {
++            memory_region_del_subregion(env->cpu_as_root, env->mask_dlm);
++        }
++    }
++    tlb_flush(env_cpu(env));
++    env->andes_csr.csrno[csrno] = val;
++    if (locked) {
++        qemu_mutex_unlock_iothread();
++    }
++    return RISCV_EXCP_NONE;
++}
++
+ void andes_csr_init(AndesCsr *andes_csr)
+ {
+     int i;
+@@ -541,6 +576,7 @@ void andes_csr_init(AndesCsr *andes_csr)
+     /* Initilaize Andes CSRs default value */
+     andes_csr->csrno[CSR_UITB] = 0;
+     andes_csr->csrno[CSR_MMSC_CFG] =    (1UL << V5_MMSC_CFG_ECD) |
++                                        (1UL << V5_MMSC_CFG_LMSLVP) |
+                                         (1UL << V5_MMSC_CFG_PPMA);
+     andes_csr->csrno[CSR_MMISC_CTL] =   (1UL << V5_MMISC_CTL_BRPE) |
+                                         (1UL << V5_MMISC_CTL_MSA_OR_UNA);
+@@ -601,8 +637,8 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_MSTATUS_CRASHSAVE] = { "mstatus_crashsave", any, read_csr },
+ 
+     /* Memory CSRs */
+-    [CSR_MILMB]          = { "milmb",             any, read_csr, write_csr  },
+-    [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_csr  },
++    [CSR_MILMB]          = { "milmb",             any, read_csr, write_lmb  },
++    [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_lmb  },
+     [CSR_MECC_CODE]      = { "mecc_code",         ecc, read_csr,
+                                                        write_mecc_code      },
+     [CSR_MNVEC]          = { "mnvec",             any, read_csr,
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index e2db3d164d..f280bf89a6 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -16,6 +16,7 @@ typedef struct AndesVec {
+ 
+ /* mmsc_cfg */
+ #define V5_MMSC_CFG_ECD                     3
++#define V5_MMSC_CFG_LMSLVP                  14
+ #define V5_MMSC_CFG_PPMA                    30
+ #define V5_MMSC_CFG_L2C                     46
+ #define V5_MMSC_CFG2_L2C                    14
+@@ -33,6 +34,13 @@ typedef struct AndesVec {
+ #define V5_MCACHE_CTL_DC_COHEN              19
+ #define V5_MCACHE_CTL_DC_COHSTA             20
+ 
++/* micm_cfg */
++#define V5_MICM_CFG_ILMB                    12
++#define V5_MICM_CFG_ILMSZ                   15
++/* mdcm_cfg */
++#define V5_MDCM_CFG_DLMB                    12
++#define V5_MICM_CFG_DLMSZ                   15
++
+ /* mmsc_cfg */
+ #define MASK_MMSC_CFG_ECC                   (0x01)
+ #define MASK_MMSC_CFG_TLB_ECC               (0x03 << 1)
+-- 
+2.34.1
+

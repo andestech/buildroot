@@ -1,0 +1,32 @@
+From f5159fe5060f38b0396833f0628d1b82ad4ffae4 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Fri, 26 Jan 2024 12:00:55 +0800
+Subject: [PATCH 194/241] target/riscv: Directly write tdata1 type = 15 also
+ disables the trigger
+
+From https://lists.riscv.org/g/tech-debug/message/1576, it seems the
+trigger can be disabled either by writing all zero into tdata1, or set
+the type of trigger to 15. This commit disables the trigger when use
+write type to 15.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index d042f9b4a8..090a0a9668 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -1144,6 +1144,8 @@ void tdata_csr_write(CPURISCVState *env, int tdata_index, target_ulong val)
+     case TRIGGER_TYPE_DISABLED:
+         switch (tdata_index) {
+         case TDATA1:
++            /* Disable trigger. */
++            riscv_disable_trigger(env, env->trigger_cur);
+             /* Bits are ignored except for dmode field. */
+             dmode = extract_tdata1_dmode(env, val);
+             env->tdata1[env->trigger_cur] = build_tdata1(env,
+-- 
+2.34.1
+

@@ -1,0 +1,249 @@
+From d1f38d4cddcd0e383a4b62618603b5428dd0400a Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Tue, 8 Aug 2023 14:03:14 +0800
+Subject: [PATCH 031/241] target/riscv: Add mcounterwen CSR support.           
+    Refine code of uitb and mhsp_ctl CSRs.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu-qom.h              |  2 +-
+ target/riscv/cpu.c                  |  4 +-
+ target/riscv/csr_andes.c            | 91 +++++++++++++++++++++++------
+ target/riscv/csr_andes.h            |  6 +-
+ target/riscv/csr_andes_nx45v_meta.c | 28 +++++++--
+ 5 files changed, 104 insertions(+), 27 deletions(-)
+
+diff --git a/target/riscv/cpu-qom.h b/target/riscv/cpu-qom.h
+index a38ab0a387..58a9fab41d 100644
+--- a/target/riscv/cpu-qom.h
++++ b/target/riscv/cpu-qom.h
+@@ -39,7 +39,7 @@
+ #define TYPE_RISCV_CPU_ANDES_NX25       RISCV_CPU_TYPE_NAME("andes-nx25")
+ #define TYPE_RISCV_CPU_ANDES_NX27V      RISCV_CPU_TYPE_NAME("andes-nx27v")
+ #define TYPE_RISCV_CPU_ANDES_NX45       RISCV_CPU_TYPE_NAME("andes-nx45")
+-#define TYPE_RISCV_CPU_ANDES_NX45V      RISCV_CPU_TYPE_NAME("andes-nx45v")
++#define TYPE_RISCV_CPU_ANDES_NX45V_META RISCV_CPU_TYPE_NAME("andes-nx45v-meta")
+ #define TYPE_RISCV_CPU_ANY              RISCV_CPU_TYPE_NAME("any")
+ #define TYPE_RISCV_CPU_MAX              RISCV_CPU_TYPE_NAME("max")
+ #define TYPE_RISCV_CPU_BASE32           RISCV_CPU_TYPE_NAME("rv32")
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 7195e3e6da..ac650d7f83 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -723,7 +723,7 @@ static void rv64_andes_nx45_cpu_init(Object *obj)
+     cfg->marchid = 0x8045;
+ }
+ 
+-static void rv64_andes_nx45v_cpu_init(Object *obj)
++static void rv64_andes_nx45v_meta_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+@@ -2102,7 +2102,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX25,       rv64_andes_nx25_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX27V,      rv64_andes_nx27v_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX45,       rv64_andes_nx45_cpu_init),
+-    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX45V,      rv64_andes_nx45v_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX45V_META, rv64_andes_nx45v_meta_cpu_init),
+     DEFINE_DYNAMIC_CPU(TYPE_RISCV_CPU_BASE64,   rv64_base_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_SIFIVE_E51,       rv64_sifive_e_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_SIFIVE_U54,       rv64_sifive_u_cpu_init),
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index ee70030489..c6d954a76d 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -62,6 +62,42 @@ static RISCVException hsp(CPURISCVState *env, int csrno)
+     }
+ }
+ 
++static RISCVException pmnds(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_PMNDS) == 0) {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++    else {
++        switch(csrno)
++        {
++            case CSR_MCOUNTERWEN:
++            case CSR_MCOUNTERMASK_M:
++            case CSR_MCOUNTERMASK_U:
++                if (riscv_has_ext(env, RVU)) {
++                    return RISCV_EXCP_NONE;
++                }
++                break;
++            case CSR_MCOUNTERMASK_S:
++            case CSR_SCOUNTERMASK_M:
++            case CSR_SCOUNTERMASK_S:
++            case CSR_SCOUNTERMASK_U:
++            case CSR_SCOUNTERINTEN:
++            case CSR_SCOUNTEROVF:
++            case CSR_SCOUNTINHIBIT:
++            case CSR_SHPMEVENT3:
++            case CSR_SHPMEVENT4:
++            case CSR_SHPMEVENT5:
++            case CSR_SHPMEVENT6:
++                if (riscv_has_ext(env, RVS)) {
++                    return RISCV_EXCP_NONE;
++                }
++                break;
++        }
++    }
++    return RISCV_EXCP_ILLEGAL_INST;
++}
++
+ static RISCVException write_mcache_ctl(CPURISCVState *env,
+                                        int csrno,
+                                        target_ulong val)
+@@ -102,8 +138,19 @@ static RISCVException write_mecc_code(CPURISCVState *env, int csrno,
+ static RISCVException write_uitb(CPURISCVState *env, int csrno,
+                                  target_ulong val)
+ {
+-    env->andes_csr.csrno[CSR_UITB] = val & WRITE_MASK_CSR_UITB;
+-    return RISCV_EXCP_NONE;
++    switch(riscv_cpu_mxl(env))
++    {
++        case MXL_RV32:
++            env->andes_csr.csrno[CSR_UITB] = val & WRITE_MASK_CSR_UITB_32;
++            return RISCV_EXCP_NONE;
++            break;
++        case MXL_RV64:
++            env->andes_csr.csrno[CSR_UITB] = val & WRITE_MASK_CSR_UITB_64;
++            return RISCV_EXCP_NONE;
++            break;
++        default:
++            return RISCV_EXCP_ILLEGAL_INST;
++    }
+ }
+ 
+ static RISCVException write_mpft_ctl(CPURISCVState *env, int csrno,
+@@ -120,6 +167,13 @@ static RISCVException write_mhsp_ctl(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException write_mcounterwen(CPURISCVState *env, int csrno,
++                                        target_ulong val)
++{
++    env->andes_csr.csrno[CSR_MCOUNTERWEN] = val & WRITE_MASK_CSR_MCOUNTERWEN;
++    return RISCV_EXCP_NONE;
++}
++
+ static RISCVException write_all_ignore(CPURISCVState *env, int csrno,
+                                        target_ulong val)
+ {
+@@ -236,12 +290,13 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_MCLK_CTL]  = { "mclk_ctl",               any, read_csr, write_csr},
+ 
+     /* Counter related CSRs */
+-    [CSR_MCOUNTERWEN]    = { "mcounterwen",       any, read_csr, write_csr},
+-    [CSR_MCOUNTERINTEN]  = { "mcounterinten",     any, read_csr, write_csr},
+-    [CSR_MCOUNTERMASK_M] = { "mcountermask_m",    any, read_csr, write_csr},
+-    [CSR_MCOUNTERMASK_S] = { "mcountermask_s",    any, read_csr, write_csr},
+-    [CSR_MCOUNTERMASK_U] = { "mcountermask_u",    any, read_csr, write_csr},
+-    [CSR_MCOUNTEROVF]    = { "mcounterovf",       any, read_csr, write_csr},
++    [CSR_MCOUNTERWEN]    = { "mcounterwen",       pmnds, read_csr,
++                                                         write_mcounterwen  },
++    [CSR_MCOUNTERINTEN]  = { "mcounterinten",     pmnds, read_csr, write_csr},
++    [CSR_MCOUNTERMASK_M] = { "mcountermask_m",    pmnds, read_csr, write_csr},
++    [CSR_MCOUNTERMASK_S] = { "mcountermask_s",    pmnds, read_csr, write_csr},
++    [CSR_MCOUNTERMASK_U] = { "mcountermask_u",    pmnds, read_csr, write_csr},
++    [CSR_MCOUNTEROVF]    = { "mcounterovf",       pmnds, read_csr, write_csr},
+ 
+     /* Enhanced CLIC CSRs */
+     [CSR_MIRQ_ENTRY]   = { "mirq_entry",          any, read_csr, write_csr},
+@@ -286,16 +341,16 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_SDCAUSE] = { "sdcause",                  any, read_csr, write_csr},
+ 
+     /* Supervisor counter registers */
+-    [CSR_SCOUNTERINTEN]  = { "scounterinten",     any, read_csr, write_csr},
+-    [CSR_SCOUNTERMASK_M] = { "scountermask_m",    any, read_csr, write_csr},
+-    [CSR_SCOUNTERMASK_S] = { "scountermask_s",    any, read_csr, write_csr},
+-    [CSR_SCOUNTERMASK_U] = { "scountermask_u",    any, read_csr, write_csr},
+-    [CSR_SCOUNTEROVF]    = { "scounterovf",       any, read_csr, write_csr},
+-    [CSR_SCOUNTINHIBIT]  = { "scountinhibit",     any, read_csr, write_csr},
+-    [CSR_SHPMEVENT3]     = { "shpmevent3",        any, read_csr, write_csr},
+-    [CSR_SHPMEVENT4]     = { "shpmevent4",        any, read_csr, write_csr},
+-    [CSR_SHPMEVENT5]     = { "shpmevent5",        any, read_csr, write_csr},
+-    [CSR_SHPMEVENT6]     = { "shpmevent6",        any, read_csr, write_csr},
++    [CSR_SCOUNTERINTEN]  = { "scounterinten",     pmnds, read_csr, write_csr},
++    [CSR_SCOUNTERMASK_M] = { "scountermask_m",    pmnds, read_csr, write_csr},
++    [CSR_SCOUNTERMASK_S] = { "scountermask_s",    pmnds, read_csr, write_csr},
++    [CSR_SCOUNTERMASK_U] = { "scountermask_u",    pmnds, read_csr, write_csr},
++    [CSR_SCOUNTEROVF]    = { "scounterovf",       pmnds, read_csr, write_csr},
++    [CSR_SCOUNTINHIBIT]  = { "scountinhibit",     pmnds, read_csr, write_csr},
++    [CSR_SHPMEVENT3]     = { "shpmevent3",        pmnds, read_csr, write_csr},
++    [CSR_SHPMEVENT4]     = { "shpmevent4",        pmnds, read_csr, write_csr},
++    [CSR_SHPMEVENT5]     = { "shpmevent5",        pmnds, read_csr, write_csr},
++    [CSR_SHPMEVENT6]     = { "shpmevent6",        pmnds, read_csr, write_csr},
+ 
+     /* Supervisor control registers */
+     [CSR_SCCTLDATA] = { "scctldata",              any, read_csr, write_csr},
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 72cdb7eda9..94e412c242 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -96,9 +96,11 @@ typedef struct AndesVec {
+ #define MASK_MMSC_CFG_2_RVARCH              (0x01 << 20)
+ 
+ #define WRITE_MASK_CSR_MECC_CODE            0xFF
+-#define WRITE_MASK_CSR_UITB                 0xFFFFFFFC
++#define WRITE_MASK_CSR_UITB_32              0xFFFC
++#define WRITE_MASK_CSR_UITB_64              0xFFFFFFFC
+ #define WRITE_MASK_CSR_MPFT_CTL             0x1F0
+-#define WRITE_MASK_CSR_MHSP_CTL             0x1F
++#define WRITE_MASK_CSR_MHSP_CTL             0x3F
++#define WRITE_MASK_CSR_MCOUNTERWEN          0xFFFD
+ 
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+diff --git a/target/riscv/csr_andes_nx45v_meta.c b/target/riscv/csr_andes_nx45v_meta.c
+index a59201c0ea..43c0d62092 100644
+--- a/target/riscv/csr_andes_nx45v_meta.c
++++ b/target/riscv/csr_andes_nx45v_meta.c
+@@ -7,8 +7,10 @@
+ #define MASK_MMSC_CFG_L2C          ((uint64_t)0x1 << 46)
+ #define MASK_MMSC_CFG_IOCP         ((uint64_t)0x1 << 46)
+ 
+-static RISCVException read_mmsc_cfg(CPURISCVState *env, int csrno,
+-                                    target_ulong *val)
++#define WRITE_MASK_CSR_MCOUNTERWEN_N45V_META    0xFD
++
++static RISCVException read_mmsc_cfg_nx45v_meta(CPURISCVState *env, int csrno,
++                                               target_ulong *val)
+ {
+     static target_ulong mask = MASK_MMSC_CFG_ECC     | MASK_MMSC_CFG_ECD
+                              | MASK_MMSC_CFG_PFT     | MASK_MMSC_CFG_HSP
+@@ -29,9 +31,27 @@ static RISCVException read_mmsc_cfg(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException write_mcounterwen_nx45v_meta(CPURISCVState *env,
++                                                   int csrno, target_ulong val)
++{
++    env->andes_csr.csrno[CSR_MCOUNTERWEN] =
++        val & WRITE_MASK_CSR_MCOUNTERWEN_N45V_META;
++
++    return RISCV_EXCP_NONE;
++}
++
++
+ void andes_spec_csr_init_nx45v_meta(AndesCsr *andes_csr)
+ {
+-    andes_csr->csrno[CSR_MECC_CODE] = 0;
++    andes_csr->csrno[CSR_MMSC_CFG] = MASK_MMSC_CFG_ECD   | MASK_MMSC_CFG_PFT
++                                   | MASK_MMSC_CFG_HSP   | MASK_MMSC_CFG_ACE
++                                   | MASK_MMSC_CFG_VPLIC | MASK_MMSC_CFG_EV5PE
++                                   | MASK_MMSC_CFG_PMNDS
++                                   | MASK_MMSC_CFG_CCTLCSR
++                                   | MASK_MMSC_CFG_PPMA  | MASK_MMSC_CFG_ZFH
++                                   | MASK_MMSC_CFG_VL4
++                                   | MASK_MMSC_CFG_VECCFG;
+ 
+-    andes_csr_ops[CSR_MMSC_CFG].read = read_mmsc_cfg;
++    andes_csr_ops[CSR_MMSC_CFG].read = read_mmsc_cfg_nx45v_meta;
++    andes_csr_ops[CSR_MCOUNTERWEN].write = write_mcounterwen_nx45v_meta;
+ }
+\ No newline at end of file
+-- 
+2.34.1
+

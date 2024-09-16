@@ -1,0 +1,138 @@
+From 0827bc9ee18512fe0d7ef1f08a5cd89d45721011 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Tue, 16 Apr 2024 16:57:57 +0800
+Subject: [PATCH 224/241] atcsmu: Implement SYSTEMVER, BOARDVER, SYSTEMCFG, and
+ SMUVER
+
+Implement these registers according to CPU datasheets.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ hw/misc/andes_atcsmu.c         | 26 +++++++++++++++++++++++++-
+ hw/riscv/andes_ae350.c         |  3 ++-
+ include/hw/misc/andes_atcsmu.h | 25 ++++++++++++++++++++++++-
+ 3 files changed, 51 insertions(+), 3 deletions(-)
+
+diff --git a/hw/misc/andes_atcsmu.c b/hw/misc/andes_atcsmu.c
+index 0b35751937..9c1eede721 100644
+--- a/hw/misc/andes_atcsmu.c
++++ b/hw/misc/andes_atcsmu.c
+@@ -78,6 +78,18 @@ andes_atcsmu_read(void *opaque, hwaddr addr, unsigned size)
+     AndesATCSMUState *smu = ANDES_ATCSMU(opaque);
+     unsigned int idx;
+     switch (addr) {
++    case ATCSMU_SYSTEMVER:
++        return smu->systemver;
++        break;
++    case ATCSMU_BOARDVER:
++        return smu->boardver;
++        break;
++    case ATCSMU_SYSTEMCFG:
++        return smu->systemcfg;
++        break;
++    case ATCSMU_SMUVER:
++        return smu->smuver;
++        break;
+     case ATCSMU_WRSR:
+         return smu->wrsr;
+         break;
+@@ -179,6 +191,16 @@ static const MemoryRegionOps andes_atcsmu_ops = {
+ static Property andes_atcsmu_properties[] = {
+     DEFINE_PROP_UINT32("smu-base-addr", AndesATCSMUState, smu_base_addr, 0),
+     DEFINE_PROP_UINT32("smu-base-size", AndesATCSMUState, smu_base_size, 0),
++    DEFINE_PROP_UINT32("systemver", AndesATCSMUState, systemver,
++                       (SYSTEMVER_ID << 8) |
++                       ((SYSTEMVER_MAJOR & 0xF) << 4) |
++                       ((SYSTEMVER_MINOR & 0xF))),
++    DEFINE_PROP_UINT32("boardver", AndesATCSMUState, boardver,
++                       (BOARDVER_ID << 8) |
++                       ((BOARDVER_MAJOR & 0xF) << 4) |
++                       ((BOARDVER_MINOR & 0xF))),
++    DEFINE_PROP_UINT32("systemcfg", AndesATCSMUState, systemcfg, 0),
++    DEFINE_PROP_UINT32("smuver", AndesATCSMUState, smuver, SMUVER_SAMPLE),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+@@ -215,10 +237,12 @@ type_init(andes_atcsmu_register_types)
+  * Create ATCSMU device.
+  */
+ void
+-andes_atcsmu_create(AndesATCSMUState *dev, hwaddr addr, hwaddr size)
++andes_atcsmu_create(AndesATCSMUState *dev, hwaddr addr, hwaddr size,
++                    int num_harts)
+ {
+     qdev_prop_set_uint32(DEVICE(dev), "smu-base-addr", addr);
+     qdev_prop_set_uint32(DEVICE(dev), "smu-base-size", size);
++    qdev_prop_set_uint32(DEVICE(dev), "systemcfg", num_harts & 0xFF);
+     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+ }
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 53f8217775..06b8574e11 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -425,7 +425,8 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+ 
+     /* SMU */
+     andes_atcsmu_create(&s->atcsmu, memmap[ANDES_AE350_SMU].base,
+-                        memmap[ANDES_AE350_SMU].size);
++                        memmap[ANDES_AE350_SMU].size,
++                        machine->smp.cpus);
+ 
+     /* SMC */
+     create_unimplemented_device("riscv.andes.ae350.smc",
+diff --git a/include/hw/misc/andes_atcsmu.h b/include/hw/misc/andes_atcsmu.h
+index 24a5c8c43a..d6e99f35af 100644
+--- a/include/hw/misc/andes_atcsmu.h
++++ b/include/hw/misc/andes_atcsmu.h
+@@ -38,10 +38,18 @@ typedef struct AndesATCSMUState {
+     /* config */
+     uint32_t smu_base_addr;
+     uint32_t smu_base_size;
++    uint32_t systemver;
++    uint32_t boardver;
++    uint32_t systemcfg;
++    uint32_t smuver;
+     uint32_t scratch;
+     pcs_registers pcs_regs[8];
+ } AndesATCSMUState;
+ 
++#define ATCSMU_SYSTEMVER    0x00
++#define ATCSMU_BOARDVER     0x04
++#define ATCSMU_SYSTEMCFG    0x08
++#define ATCSMU_SMUVER       0x0C
+ #define ATCSMU_WRSR         0x10
+ #define ATCSMU_SMUCR        0x14
+ #define ATCSMU_SCRATCH      0x40
+@@ -72,12 +80,27 @@ typedef struct AndesATCSMUState {
+ #define ATCSMU_HART6_RESET_VECTOR_HI 0x218
+ #define ATCSMU_HART7_RESET_VECTOR_HI 0x21C
+ 
++/* SYSTEMVER */
++#define SYSTEMVER_MINOR     0x0
++#define SYSTEMVER_MAJOR     0x0
++#define SYSTEMVER_ID        0x414535
++
++/* BOARDVER */
++#define BOARDVER_MINOR      0x0
++#define BOARDVER_MAJOR      0x1
++#define BOARDVER_ID         0x0174b0
++
++/* SMUVER */
++#define SMUVER_LEGACY       0x0000
++#define SMUVER_SAMPLE       0x0100
++
+ /* SMUCR */
+ #define SMUCMD_RESET        0x3c
+ #define SMUCMD_POWEROFF     0x5a
+ #define SMUCMD_STANDBY      0x55
+ 
+ void
+-andes_atcsmu_create(AndesATCSMUState *dev, hwaddr addr, hwaddr size);
++andes_atcsmu_create(AndesATCSMUState *dev, hwaddr addr, hwaddr size,
++                    int num_harts);
+ 
+ #endif
+-- 
+2.34.1
+

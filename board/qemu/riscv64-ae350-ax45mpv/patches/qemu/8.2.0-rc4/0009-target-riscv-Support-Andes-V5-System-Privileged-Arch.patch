@@ -1,0 +1,665 @@
+From d5908590b8530678f2cbeebdaf26a76e933c4a8c Mon Sep 17 00:00:00 2001
+From: Dylan Jhong <dylan@andestech.com>
+Date: Thu, 22 Sep 2022 17:30:47 +0800
+Subject: [PATCH 009/241] target/riscv: Support Andes V5 System Privileged
+ Architecture and CSR
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+---
+ target/riscv/andes_cpu_bits.h | 120 +++++++++++++++++++
+ target/riscv/cpu-qom.h        |  11 ++
+ target/riscv/cpu.c            | 165 +++++++++++++++++++++++++
+ target/riscv/cpu.h            |   7 ++
+ target/riscv/csr_andes.inc.c  | 219 ++++++++++++++++++++++++++++++++++
+ target/riscv/csr_andes.inc.h  |  23 ++++
+ target/riscv/meson.build      |   1 +
+ 7 files changed, 546 insertions(+)
+ create mode 100644 target/riscv/andes_cpu_bits.h
+ create mode 100644 target/riscv/csr_andes.inc.c
+ create mode 100644 target/riscv/csr_andes.inc.h
+
+diff --git a/target/riscv/andes_cpu_bits.h b/target/riscv/andes_cpu_bits.h
+new file mode 100644
+index 0000000000..7ba67d998d
+--- /dev/null
++++ b/target/riscv/andes_cpu_bits.h
+@@ -0,0 +1,120 @@
++/*
++ * Andes custom CSRs bit definitions
++ *
++ * Copyright (c) 2021 Andes Technology Corp.
++ * SPDX-License-Identifier: GPL-2.0+
++ */
++
++/* ========= AndeStar V5 machine mode CSRs ========= */
++/* Configuration Registers */
++#define CSR_MICM_CFG            0xfc0
++#define CSR_MDCM_CFG            0xfc1
++#define CSR_MMSC_CFG            0xfc2
++#define CSR_MMSC_CFG2           0xfc3
++#define CSR_MVEC_CFG            0xfc7
++
++/* Crash Debug CSRs */
++#define CSR_MCRASH_STATESAVE    0xfc8
++#define CSR_MSTATUS_CRASHSAVE   0xfc9
++
++/* Memory CSRs */
++#define CSR_MILMB               0x7c0
++#define CSR_MDLMB               0x7c1
++#define CSR_MECC_CODE           0x7C2
++#define CSR_MNVEC               0x7c3
++#define CSR_MCACHE_CTL          0x7ca
++#define CSR_MCCTLBEGINADDR      0x7cb
++#define CSR_MCCTLCOMMAND        0x7cc
++#define CSR_MCCTLDATA           0x7cd
++#define CSR_MPPIB               0x7f0
++#define CSR_MFIOB               0x7f1
++
++/* Hardware Stack Protection & Recording */
++#define CSR_MHSP_CTL            0x7c6
++#define CSR_MSP_BOUND           0x7c7
++#define CSR_MSP_BASE            0x7c8
++#define CSR_MXSTATUS            0x7c4
++#define CSR_MDCAUSE             0x7c9
++#define CSR_MSLIDELEG           0x7d5
++#define CSR_MSAVESTATUS         0x7d6
++#define CSR_MSAVEEPC1           0x7d7
++#define CSR_MSAVECAUSE1         0x7d8
++#define CSR_MSAVEEPC2           0x7d9
++#define CSR_MSAVECAUSE2         0x7da
++#define CSR_MSAVEDCAUSE1        0x7db
++#define CSR_MSAVEDCAUSE2        0x7dc
++
++/* Control CSRs */
++#define CSR_MPFT_CTL            0x7c5
++#define CSR_MMISC_CTL           0x7d0
++#define CSR_MCLK_CTL            0x7df
++
++/* Counter related CSRs */
++#define CSR_MCOUNTERWEN         0x7ce
++#define CSR_MCOUNTERINTEN       0x7cf
++#define CSR_MCOUNTERMASK_M      0x7d1
++#define CSR_MCOUNTERMASK_S      0x7d2
++#define CSR_MCOUNTERMASK_U      0x7d3
++#define CSR_MCOUNTEROVF         0x7d4
++
++/* Enhanced CLIC CSRs */
++#define CSR_MIRQ_ENTRY          0x7ec
++#define CSR_MINTSEL_JAL         0x7ed
++#define CSR_PUSHMCAUSE          0x7ee
++#define CSR_PUSHMEPC            0x7ef
++#define CSR_PUSHMXSTATUS        0x7eb
++
++/* Andes Physical Memory Attribute(PMA) CSRs */
++#define CSR_PMACFG0             0xbc0
++#define CSR_PMACFG1             0xbc1
++#define CSR_PMACFG2             0xbc2
++#define CSR_PMACFG3             0xbc3
++#define CSR_PMAADDR0            0xbd0
++#define CSR_PMAADDR1            0xbd1
++#define CSR_PMAADDR2            0xbd2
++#define CSR_PMAADDR3            0xbd3
++#define CSR_PMAADDR4            0xbd4
++#define CSR_PMAADDR5            0xbd5
++#define CSR_PMAADDR6            0xbd6
++#define CSR_PMAADDR7            0xbd7
++#define CSR_PMAADDR8            0xbd8
++#define CSR_PMAADDR9            0xbd9
++#define CSR_PMAADDR10           0xbda
++#define CSR_PMAADDR11           0xbdb
++#define CSR_PMAADDR12           0xbdc
++#define CSR_PMAADDR13           0xbdd
++#define CSR_PMAADDR14           0xbde
++#define CSR_PMAADDR15           0xbdf
++
++/* ========= AndeStar V5 supervisor mode CSRs ========= */
++/* Supervisor trap registers */
++#define CSR_SLIE                0x9c4
++#define CSR_SLIP                0x9c5
++#define CSR_SDCAUSE             0x9c9
++
++/* Supervisor counter registers */
++#define CSR_SCOUNTERINTEN       0x9cf
++#define CSR_SCOUNTERMASK_M      0x9d1
++#define CSR_SCOUNTERMASK_S      0x9d2
++#define CSR_SCOUNTERMASK_U      0x9d3
++#define CSR_SCOUNTEROVF         0x9d4
++#define CSR_SCOUNTINHIBIT       0x9e0
++#define CSR_SHPMEVENT3          0x9e3
++#define CSR_SHPMEVENT4          0x9e4
++#define CSR_SHPMEVENT5          0x9e5
++#define CSR_SHPMEVENT6          0x9e6
++
++/* Supervisor control registers */
++#define CSR_SCCTLDATA           0x9cd
++#define CSR_SMISC_CTL           0x9d0
++
++/* ========= AndeStar V5 user mode CSRs ========= */
++/* User mode control registers */
++#define CSR_UITB                0x800
++#define CSR_UCODE               0x801
++#define CSR_UDCAUSE             0x809
++#define CSR_UCCTLBEGINADDR      0x80b
++#define CSR_UCCTLCOMMAND        0x80c
++#define CSR_WFE                 0x810
++#define CSR_SLEEPVALUE          0x811
++#define CSR_TXEVT               0x812
+diff --git a/target/riscv/cpu-qom.h b/target/riscv/cpu-qom.h
+index 91b3361dec..3f08efea53 100644
+--- a/target/riscv/cpu-qom.h
++++ b/target/riscv/cpu-qom.h
+@@ -27,6 +27,17 @@
+ #define RISCV_CPU_TYPE_SUFFIX "-" TYPE_RISCV_CPU
+ #define RISCV_CPU_TYPE_NAME(name) (name RISCV_CPU_TYPE_SUFFIX)
+ 
++#define TYPE_RISCV_CPU_ANDES_A25        RISCV_CPU_TYPE_NAME("andes-a25")
++#define TYPE_RISCV_CPU_ANDES_A27        RISCV_CPU_TYPE_NAME("andes-a27")
++#define TYPE_RISCV_CPU_ANDES_A45        RISCV_CPU_TYPE_NAME("andes-a45")
++#define TYPE_RISCV_CPU_ANDES_AX25       RISCV_CPU_TYPE_NAME("andes-ax25")
++#define TYPE_RISCV_CPU_ANDES_AX27       RISCV_CPU_TYPE_NAME("andes-ax27")
++#define TYPE_RISCV_CPU_ANDES_AX45       RISCV_CPU_TYPE_NAME("andes-ax45")
++#define TYPE_RISCV_CPU_ANDES_N25        RISCV_CPU_TYPE_NAME("andes-n25")
++#define TYPE_RISCV_CPU_ANDES_N45        RISCV_CPU_TYPE_NAME("andes-n45")
++#define TYPE_RISCV_CPU_ANDES_NX25       RISCV_CPU_TYPE_NAME("andes-nx25")
++#define TYPE_RISCV_CPU_ANDES_NX27V      RISCV_CPU_TYPE_NAME("andes-nx27v")
++#define TYPE_RISCV_CPU_ANDES_NX45       RISCV_CPU_TYPE_NAME("andes-nx45")
+ #define TYPE_RISCV_CPU_ANY              RISCV_CPU_TYPE_NAME("any")
+ #define TYPE_RISCV_CPU_MAX              RISCV_CPU_TYPE_NAME("max")
+ #define TYPE_RISCV_CPU_BASE32           RISCV_CPU_TYPE_NAME("rv32")
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 83c7c0cf07..84aaf63af8 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -552,6 +552,90 @@ static void rv128_base_cpu_init(Object *obj)
+     set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_SV57);
+ #endif
+ }
++
++static void rv64_andes_ax25_cpu_init(Object *obj)
++{
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
++
++    register_cpu_props(obj);
++    set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
++    set_priv_version(env, PRIV_VERSION_1_12_0);
++#ifndef CONFIG_USER_ONLY
++    set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_SV57);
++#endif
++
++    /* Setup Andes Custom CSR */
++    andes_csr_init(&env->andes_csr);
++
++    /* Set vendor ID */
++    cfg->mvendorid = 0x0000031e;
++
++    /* Set CPU ID */
++    cfg->marchid = 0x8a25;
++
++    /* Disable non-supported extension */
++    cfg->ext_sstc = false;
++}
++
++static void rv64_andes_ax27_cpu_init(Object *obj)
++{
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++
++    rv64_andes_ax25_cpu_init(obj);
++
++    /* Set CPU ID */
++    cfg->marchid = 0x8a27;
++}
++
++static void rv64_andes_ax45_cpu_init(Object *obj)
++{
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++
++    rv64_andes_ax25_cpu_init(obj);
++
++    /* Set CPU ID */
++    cfg->marchid = 0x8a45;
++}
++
++static void rv64_andes_nx25_cpu_init(Object *obj)
++{
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
++
++    rv64_andes_ax25_cpu_init(obj);
++    set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVU);
++    cfg->mmu = false;
++
++    /* Set CPU ID */
++    cfg->marchid = 0x8025;
++}
++
++static void rv64_andes_nx27v_cpu_init(Object *obj)
++{
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
++
++    rv64_andes_ax25_cpu_init(obj);
++    set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVU | RVV);
++    cfg->mmu = false;
++
++    /* Set CPU ID */
++    cfg->marchid = 0x8027;
++}
++
++static void rv64_andes_nx45_cpu_init(Object *obj)
++{
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
++
++    rv64_andes_ax25_cpu_init(obj);
++    set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVU);
++    cfg->mmu = false;
++
++    /* Set CPU ID */
++    cfg->marchid = 0x8045;
++}
+ #else
+ static void rv32_base_cpu_init(Object *obj)
+ {
+@@ -633,6 +717,76 @@ static void rv32_imafcu_nommu_cpu_init(Object *obj)
+     cpu->cfg.ext_zicsr = true;
+     cpu->cfg.pmp = true;
+ }
++
++static void rv32_andes_a25_cpu_init(Object *obj)
++{
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
++
++    register_cpu_props(obj);
++    set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
++    set_priv_version(env, PRIV_VERSION_1_12_0);
++#ifndef CONFIG_USER_ONLY
++    set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_SV32);
++#endif
++
++    /* Setup Andes Custom CSR */
++    andes_csr_init(&env->andes_csr);
++
++    /* Set vendor ID */
++    cfg->mvendorid = 0x0000031e;
++
++    /* Set CPU ID */
++    cfg->marchid = 0x0a25;
++
++    /* Disable non-supported extension */
++    cfg->ext_sstc = false;
++}
++
++static void rv32_andes_a27_cpu_init(Object *obj)
++{
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++
++    rv32_andes_a25_cpu_init(obj);
++
++    /* Set CPU ID */
++    cfg->marchid = 0x0a27;
++}
++
++static void rv32_andes_a45_cpu_init(Object *obj)
++{
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++
++    rv32_andes_a25_cpu_init(obj);
++
++    /* Set CPU ID */
++    cfg->marchid = 0x0a45;
++}
++
++static void rv32_andes_n25_cpu_init(Object *obj)
++{
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
++
++    rv32_andes_a25_cpu_init(obj);
++    set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVU);
++    cfg->mmu = false;
++
++    /* Set CPU ID */
++    cfg->marchid = 0x0025;
++}
++
++static void rv32_andes_n45_cpu_init(Object *obj)
++{
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
++
++    rv32_andes_a25_cpu_init(obj);
++    set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVU);
++    cfg->mmu = false;
++
++    /* Set CPU ID */
++    cfg->marchid = 0x0045;
++}
+ #endif
+ 
+ static ObjectClass *riscv_cpu_class_by_name(const char *cpu_model)
+@@ -1798,12 +1952,23 @@ static const TypeInfo riscv_cpu_type_infos[] = {
+     DEFINE_DYNAMIC_CPU(TYPE_RISCV_CPU_ANY,      riscv_any_cpu_init),
+     DEFINE_DYNAMIC_CPU(TYPE_RISCV_CPU_MAX,      riscv_max_cpu_init),
+ #if defined(TARGET_RISCV32)
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_A25,        rv32_andes_a25_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_A27,        rv32_andes_a27_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_A45,        rv32_andes_a45_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_N25,        rv32_andes_n25_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_N45,        rv32_andes_n45_cpu_init),
+     DEFINE_DYNAMIC_CPU(TYPE_RISCV_CPU_BASE32,   rv32_base_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_IBEX,             rv32_ibex_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_SIFIVE_E31,       rv32_sifive_e_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_SIFIVE_E34,       rv32_imafcu_nommu_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_SIFIVE_U34,       rv32_sifive_u_cpu_init),
+ #elif defined(TARGET_RISCV64)
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_AX25,       rv64_andes_ax25_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_AX27,       rv64_andes_ax27_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_AX45,       rv64_andes_ax45_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX25,       rv64_andes_nx25_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX27V,      rv64_andes_nx27v_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX45,       rv64_andes_nx45_cpu_init),
+     DEFINE_DYNAMIC_CPU(TYPE_RISCV_CPU_BASE64,   rv64_base_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_SIFIVE_E51,       rv64_sifive_e_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_SIFIVE_U54,       rv64_sifive_u_cpu_init),
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index d74b361be6..3b7354abb6 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -42,6 +42,9 @@ typedef struct CPUArchState CPURISCVState;
+ # define TYPE_RISCV_CPU_BASE            TYPE_RISCV_CPU_BASE64
+ #endif
+ 
++/* Vendor CSR declaration */
++#include "csr_andes.inc.h"
++
+ #define TCG_GUEST_DEFAULT_MO 0
+ 
+ /*
+@@ -412,6 +415,9 @@ struct CPUArchState {
+     uint64_t kvm_timer_state;
+     uint64_t kvm_timer_frequency;
+ #endif /* CONFIG_KVM */
++
++    /* Add Vender CSR */
++    AndesCsr andes_csr;
+ };
+ 
+ /*
+@@ -783,6 +789,7 @@ void riscv_add_satp_mode_properties(Object *obj);
+ bool riscv_cpu_accelerator_compatible(RISCVCPU *cpu);
+ 
+ /* CSR function table */
++extern riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE];
+ extern riscv_csr_operations csr_ops[CSR_TABLE_SIZE];
+ 
+ extern const bool valid_vm_1_10_32[], valid_vm_1_10_64[];
+diff --git a/target/riscv/csr_andes.inc.c b/target/riscv/csr_andes.inc.c
+new file mode 100644
+index 0000000000..7d33821a59
+--- /dev/null
++++ b/target/riscv/csr_andes.inc.c
+@@ -0,0 +1,219 @@
++/*
++ * Andes custom CSR table and handling functions
++ *
++ * Copyright (c) 2021 Andes Technology Corp.
++ * SPDX-License-Identifier: GPL-2.0+
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qemu/main-loop.h"
++#include "exec/exec-all.h"
++#include "andes_cpu_bits.h"
++#include "csr_andes.inc.h"
++
++static RISCVException read_mmsc_cfg(CPURISCVState *env,
++                                    int csrno,
++                                    target_ulong *val)
++{
++    *val = env->andes_csr.mmsc_cfg;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_uitb(CPURISCVState *env,
++                                 int csrno,
++                                 target_ulong val)
++{
++    env->andes_csr.uitb = val;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException read_uitb(CPURISCVState *env,
++                                int csrno,
++                                target_ulong *val)
++{
++    *val = env->andes_csr.uitb;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_mmisc_ctl(CPURISCVState *env,
++                                     int csrno,
++                                     target_ulong val)
++{
++    env->andes_csr.mmisc_ctl = val;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException read_mmisc_ctl(CPURISCVState *env,
++                                     int csrno,
++                                     target_ulong *val)
++{
++    *val = env->andes_csr.mmisc_ctl;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException any(CPURISCVState *env,
++                          int csrno)
++{
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException read_zero(CPURISCVState *env,
++                                int csrno,
++                                target_ulong *val)
++{
++    *val = 0;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_stub(CPURISCVState *env,
++                                 int csrno,
++                                 target_ulong val)
++{
++    return RISCV_EXCP_NONE;
++}
++
++void andes_csr_init(AndesCsr *andes_csr)
++{
++    int i;
++
++    /* Register CSR read/write method */
++    for (i = 0; i < CSR_TABLE_SIZE; i++) {
++        if (andes_csr_ops[i].name != NULL) {
++            riscv_set_csr_ops(i, &andes_csr_ops[i]);
++        }
++    }
++
++    /* Initilaize CSR default value */
++    andes_csr->uitb = 0;
++    andes_csr->mmsc_cfg =   (1UL << V5_MMSC_CFG_ECD) |
++                            (1UL << V5_MMSC_CFG_PPMA);
++    andes_csr->mmisc_ctl =  (1UL << V5_MMISC_CTL_BRPE) |
++                            (1UL << V5_MMISC_CTL_MSA_OR_UNA);
++}
++
++riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
++    /* ================== AndeStar V5 machine mode CSRs ================== */
++    /* Configuration Registers */
++    [CSR_MICM_CFG]  = { "micm_cfg",          any, read_zero,      write_stub},
++    [CSR_MDCM_CFG]  = { "mdcm_cfg",          any, read_zero,      write_stub},
++    [CSR_MMSC_CFG]  = { "mmsc_cfg",          any, read_mmsc_cfg,  write_stub},
++    [CSR_MMSC_CFG2] = { "mmsc_cfg2",         any, read_zero,      write_stub},
++    [CSR_MVEC_CFG]  = { "mvec_cfg",          any, read_zero,      write_stub},
++
++    /* Crash Debug CSRs */
++    [CSR_MCRASH_STATESAVE]  = { "mcrash_statesave",  any, read_zero,
++                                write_stub                                  },
++    [CSR_MSTATUS_CRASHSAVE] = { "mstatus_crashsave", any, read_zero,
++                                write_stub                                  },
++
++    /* Memory CSRs */
++    [CSR_MILMB]          = { "milmb",             any, read_zero, write_stub},
++    [CSR_MDLMB]          = { "mdlmb",             any, read_zero, write_stub},
++    [CSR_MECC_CODE]      = { "mecc_code",         any, read_zero, write_stub},
++    [CSR_MNVEC]          = { "mnvec",             any, read_zero, write_stub},
++    [CSR_MCACHE_CTL]     = { "mcache_ctl",        any, read_zero, write_stub},
++    [CSR_MCCTLBEGINADDR] = { "mcctlbeginaddr",    any, read_zero, write_stub},
++    [CSR_MCCTLCOMMAND]   = { "mcctlcommand",      any, read_zero, write_stub},
++    [CSR_MCCTLDATA]      = { "mcctldata",         any, read_zero, write_stub},
++    [CSR_MPPIB]          = { "mppib",             any, read_zero, write_stub},
++    [CSR_MFIOB]          = { "mfiob",             any, read_zero, write_stub},
++
++    /* Hardware Stack Protection & Recording */
++    [CSR_MHSP_CTL]     = { "mhsp_ctl",          any, read_zero, write_stub},
++    [CSR_MSP_BOUND]    = { "msp_bound",         any, read_zero, write_stub},
++    [CSR_MSP_BASE]     = { "msp_base",          any, read_zero, write_stub},
++    [CSR_MXSTATUS]     = { "mxstatus",          any, read_zero, write_stub},
++    [CSR_MDCAUSE]      = { "mdcause",           any, read_zero, write_stub},
++    [CSR_MSLIDELEG]    = { "mslideleg",         any, read_zero, write_stub},
++    [CSR_MSAVESTATUS]  = { "msavestatus",       any, read_zero, write_stub},
++    [CSR_MSAVEEPC1]    = { "msaveepc1",         any, read_zero, write_stub},
++    [CSR_MSAVECAUSE1]  = { "msavecause1",       any, read_zero, write_stub},
++    [CSR_MSAVEEPC2]    = { "msaveepc2",         any, read_zero, write_stub},
++    [CSR_MSAVECAUSE2]  = { "msavecause2",       any, read_zero, write_stub},
++    [CSR_MSAVEDCAUSE1] = { "msavedcause1",      any, read_zero, write_stub},
++    [CSR_MSAVEDCAUSE2] = { "msavedcause2",      any, read_zero, write_stub},
++
++    /* Control CSRs */
++    [CSR_MPFT_CTL]  = { "mpft_ctl",          any, read_zero,       write_stub},
++    [CSR_MMISC_CTL] = { "mmisc_ctl",         any, read_mmisc_ctl,
++                        write_mmisc_ctl                                      },
++    [CSR_MCLK_CTL]  = { "mclk_ctl",          any, read_zero,       write_stub},
++
++    /* Counter related CSRs */
++    [CSR_MCOUNTERWEN]    = { "mcounterwen",       any, read_zero, write_stub},
++    [CSR_MCOUNTERINTEN]  = { "mcounterinten",     any, read_zero, write_stub},
++    [CSR_MCOUNTERMASK_M] = { "mcountermask_m",    any, read_zero, write_stub},
++    [CSR_MCOUNTERMASK_S] = { "mcountermask_s",    any, read_zero, write_stub},
++    [CSR_MCOUNTERMASK_U] = { "mcountermask_u",    any, read_zero, write_stub},
++    [CSR_MCOUNTEROVF]    = { "mcounterovf",       any, read_zero, write_stub},
++
++    /* Enhanced CLIC CSRs */
++    [CSR_MIRQ_ENTRY]   = { "mirq_entry",        any, read_zero, write_stub},
++    [CSR_MINTSEL_JAL]  = { "mintsel_jal",       any, read_zero, write_stub},
++    [CSR_PUSHMCAUSE]   = { "pushmcause",        any, read_zero, write_stub},
++    [CSR_PUSHMEPC]     = { "pushmepc",          any, read_zero, write_stub},
++    [CSR_PUSHMXSTATUS] = { "pushmxstatus",      any, read_zero, write_stub},
++
++    /* Andes Physical Memory Attribute(PMA) CSRs */
++    [CSR_PMACFG0]   = { "pmacfg0",           any, read_zero, write_stub},
++    [CSR_PMACFG1]   = { "pmacfg1",           any, read_zero, write_stub},
++    [CSR_PMACFG2]   = { "pmacfg2",           any, read_zero, write_stub},
++    [CSR_PMACFG3]   = { "pmacfg3",           any, read_zero, write_stub},
++    [CSR_PMAADDR0]  = { "pmaaddr0",          any, read_zero, write_stub},
++    [CSR_PMAADDR1]  = { "pmaaddr1",          any, read_zero, write_stub},
++    [CSR_PMAADDR2]  = { "pmaaddr2",          any, read_zero, write_stub},
++    [CSR_PMAADDR3]  = { "pmaaddr3",          any, read_zero, write_stub},
++    [CSR_PMAADDR4]  = { "pmaaddr4",          any, read_zero, write_stub},
++    [CSR_PMAADDR5]  = { "pmaaddr5",          any, read_zero, write_stub},
++    [CSR_PMAADDR6]  = { "pmaaddr6",          any, read_zero, write_stub},
++    [CSR_PMAADDR7]  = { "pmaaddr7",          any, read_zero, write_stub},
++    [CSR_PMAADDR8]  = { "pmaaddr8",          any, read_zero, write_stub},
++    [CSR_PMAADDR9]  = { "pmaaddr9",          any, read_zero, write_stub},
++    [CSR_PMAADDR10] = { "pmaaddr10",         any, read_zero, write_stub},
++    [CSR_PMAADDR11] = { "pmaaddr11",         any, read_zero, write_stub},
++    [CSR_PMAADDR12] = { "pmaaddr12",         any, read_zero, write_stub},
++    [CSR_PMAADDR13] = { "pmaaddr13",         any, read_zero, write_stub},
++    [CSR_PMAADDR14] = { "pmaaddr14",         any, read_zero, write_stub},
++    [CSR_PMAADDR15] = { "pmaaddr15",         any, read_zero, write_stub},
++
++    /* Debug/Trace Registers (shared with Debug Mode) */
++    [CSR_TSELECT] = { "tselect",           any, read_zero, write_stub},
++    [CSR_TDATA1]  = { "tdata1",            any, read_zero, write_stub},
++    [CSR_TDATA2]  = { "tdata2",            any, read_zero, write_stub},
++    [CSR_TDATA3]  = { "tdata3",            any, read_zero, write_stub},
++    [CSR_TINFO]   = { "tinfo",             any, read_zero, write_stub},
++
++    /* ================ AndeStar V5 supervisor mode CSRs ================ */
++    /* Supervisor trap registers */
++    [CSR_SLIE]    = { "slie",              any, read_zero, write_stub},
++    [CSR_SLIP]    = { "slip",              any, read_zero, write_stub},
++    [CSR_SDCAUSE] = { "sdcause",           any, read_zero, write_stub},
++
++    /* Supervisor counter registers */
++    [CSR_SCOUNTERINTEN]  = { "scounterinten",     any, read_zero, write_stub},
++    [CSR_SCOUNTERMASK_M] = { "scountermask_m",    any, read_zero, write_stub},
++    [CSR_SCOUNTERMASK_S] = { "scountermask_s",    any, read_zero, write_stub},
++    [CSR_SCOUNTERMASK_U] = { "scountermask_u",    any, read_zero, write_stub},
++    [CSR_SCOUNTEROVF]    = { "scounterovf",       any, read_zero, write_stub},
++    [CSR_SCOUNTINHIBIT]  = { "scountinhibit",     any, read_zero, write_stub},
++    [CSR_SHPMEVENT3]     = { "shpmevent3",        any, read_zero, write_stub},
++    [CSR_SHPMEVENT4]     = { "shpmevent4",        any, read_zero, write_stub},
++    [CSR_SHPMEVENT5]     = { "shpmevent5",        any, read_zero, write_stub},
++    [CSR_SHPMEVENT6]     = { "shpmevent6",        any, read_zero, write_stub},
++
++    /* Supervisor control registers */
++    [CSR_SCCTLDATA] = { "scctldata",         any, read_zero, write_stub},
++    [CSR_SMISC_CTL] = { "smisc_ctl",         any, read_zero, write_stub},
++
++    /* =================== AndeStar V5 user mode CSRs =================== */
++    /* User mode control registers */
++    [CSR_UITB]           = { "uitb",              any, read_uitb, write_uitb},
++    [CSR_UCODE]          = { "ucode",             any, read_zero, write_stub},
++    [CSR_UDCAUSE]        = { "udcause",           any, read_zero, write_stub},
++    [CSR_UCCTLBEGINADDR] = { "ucctlbeginaddr",    any, read_zero, write_stub},
++    [CSR_UCCTLCOMMAND]   = { "ucctlcommand",      any, read_zero, write_stub},
++    [CSR_WFE]            = { "wfe",               any, read_zero, write_stub},
++    [CSR_SLEEPVALUE]     = { "sleepvalue",        any, read_zero, write_stub},
++    [CSR_TXEVT]          = { "csr_txevt",         any, read_zero, write_stub},
++};
+diff --git a/target/riscv/csr_andes.inc.h b/target/riscv/csr_andes.inc.h
+new file mode 100644
+index 0000000000..cdd3d260fc
+--- /dev/null
++++ b/target/riscv/csr_andes.inc.h
+@@ -0,0 +1,23 @@
++#ifndef RISCV_CSR_ANDES_INC_H
++#define RISCV_CSR_ANDES_INC_H
++
++typedef struct andes_csr {
++    target_long uitb;
++    target_long mmsc_cfg;
++    target_long mmisc_ctl;
++} AndesCsr;
++
++/* mmsc_cfg */
++#define V5_MMSC_CFG_ECD                     3
++#define V5_MMSC_CFG_PPMA                    30
++
++/* mmisc_ctl */
++#define V5_MMISC_CTL_VEC_PLIC               1
++#define V5_MMISC_CTL_RVCOMPM                2
++#define V5_MMISC_CTL_BRPE                   3
++#define V5_MMISC_CTL_MSA_OR_UNA             6
++#define V5_MMISC_CTL_NON_BLOCKING           8
++
++void andes_csr_init(AndesCsr *);
++
++#endif /* RISCV_CSR_ANDES_INC_H */
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index a5e0734e7f..f703b915f6 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -9,6 +9,7 @@ gen = [
+ riscv_ss = ss.source_set()
+ riscv_ss.add(gen)
+ riscv_ss.add(files(
++  'csr_andes.inc.c',
+   'cpu.c',
+   'cpu_helper.c',
+   'csr.c',
+-- 
+2.34.1
+

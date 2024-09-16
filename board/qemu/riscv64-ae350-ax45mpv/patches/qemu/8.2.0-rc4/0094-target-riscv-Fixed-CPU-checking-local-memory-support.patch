@@ -1,0 +1,26 @@
+From 0efef9dc6e88be71399c8dd95b05748cc3b9b5f1 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Wed, 27 Sep 2023 13:57:54 +0800
+Subject: [PATCH 094/241] target/riscv: Fixed CPU checking local memory support
+ code causes compile error at v8.1
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/cpu.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 3ab4bd2530..6b125219f9 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1624,6 +1624,7 @@ static void riscv_cpu_realize(DeviceState *dev, Error **errp)
+ 
+ #ifndef CONFIG_USER_ONLY
+     /* if local memory is initialized */
++    CPURISCVState *env = &cpu->env;
+     if(env->cpu_as_root) {
+         andes_cpu_lm_realize(dev);
+     }
+-- 
+2.34.1
+

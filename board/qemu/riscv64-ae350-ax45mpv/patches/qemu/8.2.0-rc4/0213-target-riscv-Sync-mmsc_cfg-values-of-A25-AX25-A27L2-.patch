@@ -1,0 +1,379 @@
+From 026deb89fca21bdfc2b2b129a4fe7d4bfbe583a9 Mon Sep 17 00:00:00 2001
+From: Leo Yu-Chi Liang <ycliang@andestech.com>
+Date: Fri, 8 Mar 2024 16:46:05 +0800
+Subject: [PATCH 213/241] target/riscv: Sync mmsc_cfg values of
+ A25/AX25/A27L2/AX27L2 with ast530 release FPGA bitmap (#130)
+
+We use mmsc_cfg.PMNDS to check if the machine supports Andes HPM.
+This could affect the result of LTP perf_event_open01 testcase,
+so sync it with bitmap.
+
+Signed-off-by: Leo Yu-Chi Liang <ycliang@andestech.com>
+
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/130
+Reviewed-by: Dylan Dai-Rong Jhong <dylan@andestech.com>
+Reviewed-by: Yuming Yu-Ming Chang <yumin686@andestech.com>
+Co-authored-by: Leo Yu-Chi Liang <ycliang@andestech.com>
+Co-committed-by: Leo Yu-Chi Liang <ycliang@andestech.com>
+---
+ docs/config/andes.cfg    |   1 +
+ target/riscv/cpu.c       | 141 ++++++++++++++++++++++++++++++++++++---
+ target/riscv/csr_andes.c |   2 +-
+ target/riscv/csr_andes.h |  80 ++++++++++++++++++++++
+ 4 files changed, 213 insertions(+), 11 deletions(-)
+
+diff --git a/docs/config/andes.cfg b/docs/config/andes.cfg
+index 9f7fd39511..f1d29cf218 100644
+--- a/docs/config/andes.cfg
++++ b/docs/config/andes.cfg
+@@ -43,6 +43,7 @@ isa-efhw = "on"
+ #cctl version is 2 bits value
+ cctl-version = "1"
+ ppi = "on"
++ppma = "off"
+ isa-dsp = "on"
+ msc-ext = "on"
+ isa-bf16cvt = "on"
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index c5d017d801..7cad8bc1af 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -744,21 +744,50 @@ static void rv64_andes_common_cpu_init(Object *obj,
+ static void rv64_andes_ax25_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     rv64_andes_common_cpu_init(obj, VM_1_10_SV48, NULL);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x8a25;
++
++    /* CSR_MMSC_CFG = 0x1000002007b038 */
++    env->andes_csr.csrno[CSR_MMSC_CFG] = BIT(V5_MMSC_CFG_ECD) |
++                                         BIT(V5_MMSC_CFG_PFT) |
++                                         BIT(V5_MMSC_CFG_HSP) |
++                                         BIT(V5_MMSC_CFG_VPLIC) |
++                                         BIT(V5_MMSC_CFG_EV5PE) |
++                                         BIT(V5_MMSC_CFG_PMNDS) |
++                                         BIT(V5_MMSC_CFG_CCTLCSR) |
++                                         BIT(V5_MMSC_CFG_EFHW) |
++                                         BIT(V5_MMSC_CFG_VCCTL) |
++                                         BIT(V5_MMSC_CFG_EDSP) |
++                                         BIT(V5_MMSC_CFG_RVARCH);
+ }
+ 
+ static void rv64_andes_ax27_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     rv64_andes_common_cpu_init(obj, VM_1_10_SV48, NULL);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x8a27;
++
++    /* CSR_MMSC_CFG = 0x6007f038 */
++    env->andes_csr.csrno[CSR_MMSC_CFG] = BIT(V5_MMSC_CFG_ECD) |
++                                         BIT(V5_MMSC_CFG_PFT) |
++                                         BIT(V5_MMSC_CFG_HSP) |
++                                         BIT(V5_MMSC_CFG_VPLIC) |
++                                         BIT(V5_MMSC_CFG_EV5PE) |
++                                         BIT(V5_MMSC_CFG_LMSLVP) |
++                                         BIT(V5_MMSC_CFG_PMNDS) |
++                                         BIT(V5_MMSC_CFG_CCTLCSR) |
++                                         BIT(V5_MMSC_CFG_EFHW) |
++                                         BIT(V5_MMSC_CFG_VCCTL) |
++                                         BIT(V5_MMSC_CFG_EDSP) |
++                                         BIT(V5_MMSC_CFG_PPMA);
+ }
+ 
+ static void rv64_andes_ax45_cpu_init(Object *obj)
+@@ -768,13 +797,28 @@ static void rv64_andes_ax45_cpu_init(Object *obj)
+ 
+     rv64_andes_common_cpu_init(obj, VM_1_10_SV48, andes_set_mmsc_cfg_l2c);
+ 
+-    /* Set CPU extensions */
+-    cfg->ext_zfh = true;
+-
+     /* Set CPU ID */
+     cfg->marchid = 0x8a45;
+ 
+-    env->andes_csr.csrno[CSR_MMSC_CFG] = 0x2000236005f03d;
++    /* CSR_MMSC_CFG = 0x2000236005f03d */
++    cfg-> ext_zfh = true;
++    env->andes_csr.csrno[CSR_MMSC_CFG] = BIT(V5_MMSC_CFG_ECC) |
++                                         BIT(V5_MMSC_CFG_TLB_ECC2) |
++                                         BIT(V5_MMSC_CFG_ECD) |
++                                         BIT(V5_MMSC_CFG_PFT) |
++                                         BIT(V5_MMSC_CFG_HSP) |
++                                         BIT(V5_MMSC_CFG_VPLIC) |
++                                         BIT(V5_MMSC_CFG_EV5PE) |
++                                         BIT(V5_MMSC_CFG_LMSLVP) |
++                                         BIT(V5_MMSC_CFG_PMNDS) |
++                                         BIT(V5_MMSC_CFG_CCTLCSR) |
++                                         BIT(V5_MMSC_CFG_VCCTL) |
++                                         BIT(V5_MMSC_CFG_EDSP) |
++                                         BIT(V5_MMSC_CFG_PPMA) |
++                                         BIT(V5_MMSC_CFG_BF16CVT) |
++                                         BIT(V5_MMSC_CFG_ZFH) |
++                                         BIT(V5_MMSC_CFG_FINV) |
++                                         BIT(V5_MMSC_CFG_TLB_RAM_CMD);
+ }
+ 
+ static void rv64_andes_ax45mpv_cpu_init(Object *obj)
+@@ -800,8 +844,28 @@ static void rv64_andes_ax45mpv_cpu_init(Object *obj)
+     cfg->vlen  = 1024;
+     cfg->elen  = 64;
+ 
++    /* CSR_MMSC_CFG = 0x801079174005b038 */
+     cfg->ext_zfh = true;
+-    env->andes_csr.csrno[CSR_MMSC_CFG] = 0x801079174005b038;
++    env->andes_csr.csrno[CSR_MMSC_CFG] = BIT(V5_MMSC_CFG_ECD) |
++                                         BIT(V5_MMSC_CFG_PFT) |
++                                         BIT(V5_MMSC_CFG_HSP) |
++                                         BIT(V5_MMSC_CFG_VPLIC) |
++                                         BIT(V5_MMSC_CFG_EV5PE) |
++                                         BIT(V5_MMSC_CFG_PMNDS) |
++                                         BIT(V5_MMSC_CFG_CCTLCSR) |
++                                         BIT(V5_MMSC_CFG_VCCTL) |
++                                         BIT(V5_MMSC_CFG_PPMA) |
++                                         BIT(V5_MMSC_CFG_BF16CVT) |
++                                         BIT(V5_MMSC_CFG_ZFH) |
++                                         BIT(V5_MMSC_CFG_VL4) |
++                                         BIT(V5_MMSC_CFG_VECCFG) |
++                                         BIT(V5_MMSC_CFG_VSIH) |
++                                         BIT(V5_MMSC_CFG_VDOT) |
++                                         BIT(V5_MMSC_CFG_VPFH) |
++                                         BIT(V5_MMSC_CFG_L2CMP_CFG) |
++                                         BIT(V5_MMSC_CFG_L2C) |
++                                         BIT(V5_MMSC_CFG_RVARCH) |
++                                         BIT(V5_MMSC_CFG_MSC_EXT3);
+ }
+ 
+ static void rv64_andes_ax65_cpu_init(Object *obj)
+@@ -824,9 +888,6 @@ static void rv64_andes_ax65_cpu_init(Object *obj)
+     cfg->ext_zk  = true;
+     cfg->ext_zks = true;
+ 
+-    /* Half Width FP */
+-    cfg->ext_zfh = true;
+-
+     /* Base Cache Management Operation */
+     cfg->ext_zicbom      = true;
+     cfg->cbom_blocksize = 64;
+@@ -849,7 +910,24 @@ static void rv64_andes_ax65_cpu_init(Object *obj)
+     /* ePMP 0.9.3 (experimental) */
+     cfg->ext_smepmp = true;
+ 
+-    env->andes_csr.csrno[CSR_MMSC_CFG] = 0xf0e00340092015;
++    /* CSR_MMSC_CFG = 0xf0e00340092015 */
++    cfg->ext_zfh = true;
++    env->andes_csr.csrno[CSR_MMSC_CFG] = BIT(V5_MMSC_CFG_ECC) |
++                                         BIT(V5_MMSC_CFG_TLB_ECC2) |
++                                         BIT(V5_MMSC_CFG_PFT) |
++                                         BIT(V5_MMSC_CFG_EV5PE) |
++                                         BIT(V5_MMSC_CFG_CCTLCSR) |
++                                         BIT(V5_MMSC_CFG_VCCTL2) |
++                                         BIT(V5_MMSC_CFG_PPMA) |
++                                         BIT(V5_MMSC_CFG_BF16CVT) |
++                                         BIT(V5_MMSC_CFG_ZFH) |
++                                         BIT(V5_MMSC_CFG_L2CMP_CFG) |
++                                         BIT(V5_MMSC_CFG_L2C) |
++                                         BIT(V5_MMSC_CFG_IOCP) |
++                                         BIT(V5_MMSC_CFG_RVARCH) |
++                                         BIT(V5_MMSC_CFG_TLB_RAM_CMD) |
++                                         BIT(V5_MMSC_CFG_CCTL_FL_UL) |
++                                         BIT(V5_MMSC_CFG_HSPO);
+ }
+ 
+ static void rv64_andes_nx25_cpu_init(Object *obj)
+@@ -1054,21 +1132,51 @@ static void rv32_andes_common_cpu_init(Object *obj,
+ static void rv32_andes_a25_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     rv32_andes_common_cpu_init(obj, VM_1_10_SV32, NULL);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0a25;
++
++    /* CSR_MMSC_CFG = 0xa007b038 */
++    env->andes_csr.csrno[CSR_MMSC_CFG] = BIT(V5_MMSC_CFG_ECD) |
++                                         BIT(V5_MMSC_CFG_PFT) |
++                                         BIT(V5_MMSC_CFG_HSP) |
++                                         BIT(V5_MMSC_CFG_VPLIC) |
++                                         BIT(V5_MMSC_CFG_EV5PE) |
++                                         BIT(V5_MMSC_CFG_PMNDS) |
++                                         BIT(V5_MMSC_CFG_CCTLCSR) |
++                                         BIT(V5_MMSC_CFG_EFHW) |
++                                         BIT(V5_MMSC_CFG_VCCTL) |
++                                         BIT(V5_MMSC_CFG_EDSP) |
++                                         BIT(V5_MMSC_CFG_MSC_EXT);
+ }
+ 
+ static void rv32_andes_a27_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     rv32_andes_common_cpu_init(obj, VM_1_10_SV32, NULL);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0a27;
++
++    /* CSR_MMSC_CFG = 0xe007f038 */
++    env->andes_csr.csrno[CSR_MMSC_CFG] = BIT(V5_MMSC_CFG_ECD) |
++                                         BIT(V5_MMSC_CFG_PFT) |
++                                         BIT(V5_MMSC_CFG_HSP) |
++                                         BIT(V5_MMSC_CFG_VPLIC) |
++                                         BIT(V5_MMSC_CFG_EV5PE) |
++                                         BIT(V5_MMSC_CFG_LMSLVP) |
++                                         BIT(V5_MMSC_CFG_PMNDS) |
++                                         BIT(V5_MMSC_CFG_CCTLCSR) |
++                                         BIT(V5_MMSC_CFG_EFHW) |
++                                         BIT(V5_MMSC_CFG_VCCTL) |
++                                         BIT(V5_MMSC_CFG_EDSP) |
++                                         BIT(V5_MMSC_CFG_PPMA) |
++                                         BIT(V5_MMSC_CFG_MSC_EXT);
+ }
+ 
+ static void rv32_andes_a45_cpu_init(Object *obj)
+@@ -1081,7 +1189,20 @@ static void rv32_andes_a45_cpu_init(Object *obj)
+     /* Set CPU ID */
+     cfg->marchid = 0x0a45;
+ 
+-    env->andes_csr.csrno[CSR_MMSC_CFG] = 0xe005f039;
++    /* CSR_MMSC_CFG = 0xe005f039 */
++    env->andes_csr.csrno[CSR_MMSC_CFG] = BIT(V5_MMSC_CFG_ECC) |
++                                         BIT(V5_MMSC_CFG_ECD) |
++                                         BIT(V5_MMSC_CFG_PFT) |
++                                         BIT(V5_MMSC_CFG_HSP) |
++                                         BIT(V5_MMSC_CFG_VPLIC) |
++                                         BIT(V5_MMSC_CFG_EV5PE) |
++                                         BIT(V5_MMSC_CFG_LMSLVP) |
++                                         BIT(V5_MMSC_CFG_PMNDS) |
++                                         BIT(V5_MMSC_CFG_CCTLCSR) |
++                                         BIT(V5_MMSC_CFG_VCCTL) |
++                                         BIT(V5_MMSC_CFG_EDSP) |
++                                         BIT(V5_MMSC_CFG_PPMA) |
++                                         BIT(V5_MMSC_CFG_MSC_EXT);
+ }
+ 
+ static void rv32_andes_d23_cpu_init(Object *obj)
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 91c9e892cf..40320e9d6a 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -852,7 +852,7 @@ AndesCsrConfigInfo csr_mmsc_cfg_map[] = {
+     {CONFIG_NUMBER, MASK_MMSC_CFG_VCCTL, "cctl-version"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_PPI, "ppi"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_EDSP, "isa-dsp"},
+-    {CONFIG_BOOL,   MASK_MMSC_CFG_PPMA, NULL},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_PPMA, "ppma"},
+     {CONFIG_BOOL,   MASK_MMSC_CFG_MSC_EXT, "msc-ext"},
+ #ifdef TARGET_RISCV64
+     /* bits:[32] */
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 8b2d402392..836eda7eaf 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -17,13 +17,93 @@ typedef struct AndesVec {
+ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ 
+ /* mmsc_cfg */
++#define V5_MMSC_CFG_ECC                     0
++#define V5_MMSC_CFG_TLB_ECC                 1
++#define V5_MMSC_CFG_TLB_ECC2                2
+ #define V5_MMSC_CFG_ECD                     3
++#define V5_MMSC_CFG_PFT                     4
+ #define V5_MMSC_CFG_HSP                     5
++#define V5_MMSC_CFG_ACE                     6
++#define V5_MMSC_CFG_ADDPMC                  7
++#define V5_MMSC_CFG_VPLIC                   12
++#define V5_MMSC_CFG_EV5PE                   13
+ #define V5_MMSC_CFG_LMSLVP                  14
++#define V5_MMSC_CFG_PMNDS                   15
+ #define V5_MMSC_CFG_CCTLCSR                 16
++#define V5_MMSC_CFG_EFHW                    17
++#define V5_MMSC_CFG_VCCTL                   18
++#define V5_MMSC_CFG_VCCTL2                  19
++#define V5_MMSC_CFG_EXCSLVL                 20
++#define V5_MMSC_CFG_NOPMC                   22
++#define V5_MMSC_CFG_SPE_AFT                 23
++#define V5_MMSC_CFG_ESLEEP                  24
++#define V5_MMSC_CFG_PPI                     25
++#define V5_MMSC_CFG_FIO                     26
++#define V5_MMSC_CFG_CLIC                    27
++#define V5_MMSC_CFG_ECLIC                   28
++#define V5_MMSC_CFG_EDSP                    29
+ #define V5_MMSC_CFG_PPMA                    30
++#define V5_MMSC_CFG_MSC_EXT                 31
++
++#define V5_MMSC_CFG_BF16CVT                 32
++#define V5_MMSC_CFG_ZFH                     33
++#define V5_MMSC_CFG_VL4                     34
++#define V5_MMSC_CFG_CRASHSAVE               35
++#define V5_MMSC_CFG_VECCFG                  36
++#define V5_MMSC_CFG_FINV                    37
++#define V5_MMSC_CFG_PP16                    38
++#define V5_MMSC_CFG_VSIH                    40
++#define V5_MMSC_CFG_ECDV                    41
++#define V5_MMSC_CFG_VDOT                    43
++#define V5_MMSC_CFG_VPFH                    44
++#define V5_MMSC_CFG_L2CMP_CFG               45
+ #define V5_MMSC_CFG_L2C                     46
++#define V5_MMSC_CFG_IOCP                    47
++#define V5_MMSC_CFG_CORE_PCLUS              48
++#define V5_MMSC_CFG_RVARCH                  52
++#define V5_MMSC_CFG_TLB_RAM_CMD             53
++#define V5_MMSC_CFG_CCTL_FL_UL              54
++#define V5_MMSC_CFG_HSPO                    55
++#define V5_MMSC_CFG_ALT_FP_FMT              57
++#define V5_MMSC_CFG_D_LMSLVP                58
++#define V5_MMSC_CFG_I_LMSLVP                59
++#define V5_MMSC_CFG_BTB_ECC                 61
++#define V5_MMSC_CFG_MSC_EXT3                63
++
++#define V5_MMSC_CFG2_BF16CVT                0
++#define V5_MMSC_CFG2_ZFH                    1
++#define V5_MMSC_CFG2_VL4                    2
++#define V5_MMSC_CFG2_CRASHSAVE              3
++#define V5_MMSC_CFG2_VECCFG                 4
++#define V5_MMSC_CFG2_FINV                   5
++#define V5_MMSC_CFG2_PP16                   6
++#define V5_MMSC_CFG2_VSIH                   8
++#define V5_MMSC_CFG2_ECDV                   9
++#define V5_MMSC_CFG2_VDOT                   11
++#define V5_MMSC_CFG2_VPFH                   12
++#define V5_MMSC_CFG2_L2CMP_CFG              13
+ #define V5_MMSC_CFG2_L2C                    14
++#define V5_MMSC_CFG2_IOCP                   15
++#define V5_MMSC_CFG2_CORE_PCLUS             16
++#define V5_MMSC_CFG2_RVARCH                 20
++#define V5_MMSC_CFG2_TLB_RAM_CMD            21
++#define V5_MMSC_CFG2_CCTL_FL_UL             22
++#define V5_MMSC_CFG2_HSPO                   23
++#define V5_MMSC_CFG2_ALT_FP_FMT             25
++#define V5_MMSC_CFG2_D_LMSLVP               26
++#define V5_MMSC_CFG2_I_LMSLVP               27
++#define V5_MMSC_CFG2_RVARCH2                28
++#define V5_MMSC_CFG2_BTB_ECC                29
++#define V5_MMSC_CFG2_MSC_EXT3               31
++
++#define V5_MMSC_CFG3_BTB_RAM_CMD            0
++#define V5_MMSC_CFG3_NO_CCTL_VA             1
++#define V5_MMSC_CFG3_NO_CCTL_ALL            2
++#define V5_MMSC_CFG3_NO_CCTL_IX_INVWB       3
++#define V5_MMSC_CFG3_HVMCSR                 4
++#define V5_MMSC_CFG3_PL2C                   5
++#define V5_MMSC_CFG3_PL2_CMD                6
++#define V5_MMSC_CFG3_CST_CTL                7
+ 
+ /* mmisc_ctl */
+ #define V5_MMISC_CTL_VEC_PLIC               1
+-- 
+2.34.1
+

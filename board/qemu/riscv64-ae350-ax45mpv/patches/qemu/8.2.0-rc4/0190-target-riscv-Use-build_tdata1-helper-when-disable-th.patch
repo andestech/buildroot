@@ -1,0 +1,32 @@
+From ccbfa8afd6f614237ecd867a35ce1a4e55f0c29a Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Thu, 25 Jan 2024 10:42:00 +0800
+Subject: [PATCH 190/241] target/riscv: Use build_tdata1() helper when disable
+ the trigger
+
+build_tdata1() can be used to build the value of tdata1.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index 757815dacf..bca6ee21a7 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -1094,9 +1094,8 @@ void tdata_csr_write(CPURISCVState *env, int tdata_index, target_ulong val)
+     if (tdata_index == TDATA1 && val == 0) {
+         /* Write 0 to tdata1 disables the trigger. */
+         riscv_disable_trigger(env, env->trigger_cur);
+-        env->tdata1[env->trigger_cur] =
+-            (riscv_cpu_mxl(env) == MXL_RV32) ? RV32_TYPE(TRIGGER_TYPE_DISABLED)
+-                                             : RV64_TYPE(TRIGGER_TYPE_DISABLED);
++        env->tdata1[env->trigger_cur] = build_tdata1(env, TRIGGER_TYPE_DISABLED,
++                                                     0, 0);
+         return;
+     }
+ 
+-- 
+2.34.1
+

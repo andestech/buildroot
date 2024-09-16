@@ -1,0 +1,29 @@
+From 150676dd975ad5528b9af5d7079df0d36b35c62d Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Fri, 26 Jan 2024 12:03:13 +0800
+Subject: [PATCH 195/241] target/riscv: Enlarge the number of trigger to 8
+
+2 triggers is not enough for testing. Enlarge the number of trigger to
+8.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/target/riscv/debug.h b/target/riscv/debug.h
+index 07a47ce682..f2df5bea43 100644
+--- a/target/riscv/debug.h
++++ b/target/riscv/debug.h
+@@ -22,7 +22,7 @@
+ #ifndef RISCV_DEBUG_H
+ #define RISCV_DEBUG_H
+ 
+-#define RV_MAX_TRIGGERS         2
++#define RV_MAX_TRIGGERS         8
+ #define RV_SDTRIG_VERSION       1
+ 
+ /* register index of tdata CSRs */
+-- 
+2.34.1
+

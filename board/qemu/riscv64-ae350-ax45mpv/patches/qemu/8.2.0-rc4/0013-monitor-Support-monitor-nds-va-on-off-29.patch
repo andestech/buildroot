@@ -1,0 +1,105 @@
+From d52725dfe8becb84108e15498b344e68bd172d7b Mon Sep 17 00:00:00 2001
+From: Dylan Dai-Rong Jhong <dylan@andestech.com>
+Date: Thu, 9 Mar 2023 19:48:41 +0800
+Subject: [PATCH 013/241] monitor: Support "monitor nds va [on|off]" (#29)
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+Co-authored-by: Dylan Jhong <dylan@andestech.com>
+Reviewed-on: http://gitea.andestech.com:3000/RD-SW/qemu/pulls/29
+---
+ gdbstub/internals.h   |  2 ++
+ gdbstub/system.c      |  5 +++++
+ hmp-commands.hx       | 12 ++++++++++++
+ include/monitor/hmp.h |  1 +
+ monitor/hmp-cmds.c    | 13 +++++++++++++
+ 5 files changed, 33 insertions(+)
+
+diff --git a/gdbstub/internals.h b/gdbstub/internals.h
+index 5c0c725e54..54a38d4f30 100644
+--- a/gdbstub/internals.h
++++ b/gdbstub/internals.h
+@@ -234,4 +234,6 @@ void gdb_breakpoint_remove_all(CPUState *cs);
+ int gdb_target_memory_rw_debug(CPUState *cs, hwaddr addr,
+                                uint8_t *buf, int len, bool is_write);
+ 
++void set_qemu_phy_mem_mode(int mode);
++static inline bool get_phy_mode(bool va_mode) { return !va_mode; }
+ #endif /* GDBSTUB_INTERNALS_H */
+diff --git a/gdbstub/system.c b/gdbstub/system.c
+index 83fd452800..01ca5ca0db 100644
+--- a/gdbstub/system.c
++++ b/gdbstub/system.c
+@@ -468,6 +468,11 @@ int gdb_target_memory_rw_debug(CPUState *cpu, hwaddr addr,
+     return cpu_memory_rw_debug(cpu, addr, buf, len, is_write);
+ }
+ 
++void set_qemu_phy_mem_mode(int mode)
++{
++    phy_memory_mode = mode;
++}
++
+ /*
+  * cpu helpers
+  */
+diff --git a/hmp-commands.hx b/hmp-commands.hx
+index 765349ed14..bdc05017b8 100644
+--- a/hmp-commands.hx
++++ b/hmp-commands.hx
+@@ -1875,3 +1875,15 @@ SRST
+   List event channels in the guest
+ ERST
+ #endif
++    {
++        .name       = "nds",
++        .args_type  = "option:s,value:b",
++        .params     = "va [on|off]",
++        .help       = "Switch memory access mode (PA/VA)",
++        .cmd        = hmp_nds_help,
++    },
++
++SRST
++``nds``
++  Andes monitor nds va command
++ERST
+diff --git a/include/monitor/hmp.h b/include/monitor/hmp.h
+index 13f9a2dedb..18592be400 100644
+--- a/include/monitor/hmp.h
++++ b/include/monitor/hmp.h
+@@ -181,5 +181,6 @@ void hmp_ioport_write(Monitor *mon, const QDict *qdict);
+ void hmp_boot_set(Monitor *mon, const QDict *qdict);
+ void hmp_info_mtree(Monitor *mon, const QDict *qdict);
+ void hmp_info_cryptodev(Monitor *mon, const QDict *qdict);
++void hmp_nds_help(Monitor *mon, const QDict *qdict);
+ 
+ #endif
+diff --git a/monitor/hmp-cmds.c b/monitor/hmp-cmds.c
+index 871898ac46..dec6dce6e2 100644
+--- a/monitor/hmp-cmds.c
++++ b/monitor/hmp-cmds.c
+@@ -28,6 +28,7 @@
+ #include "hw/intc/intc.h"
+ #include "qemu/log.h"
+ #include "sysemu/sysemu.h"
++#include "gdbstub/internals.h"
+ 
+ bool hmp_handle_error(Monitor *mon, Error *err)
+ {
+@@ -443,3 +444,15 @@ void hmp_info_mtree(Monitor *mon, const QDict *qdict)
+ 
+     mtree_info(flatview, dispatch_tree, owner, disabled);
+ }
++
++void hmp_nds_help(Monitor *mon, const QDict *qdict)
++{
++    const char *option = qdict_get_str(qdict, "option");
++    const bool  value  = qdict_get_bool(qdict, "value");
++
++    if (strncmp(option, "va", 2) == 0) {
++        set_qemu_phy_mem_mode(get_phy_mode(value));
++    } else {
++        monitor_printf(mon, "Unsupported nds '%s' command\n", option);
++    }
++}
+-- 
+2.34.1
+

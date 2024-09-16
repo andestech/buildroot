@@ -1,0 +1,59 @@
+From 826936d84375f6ef755efc1d0c76c770cabbfb49 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Wed, 24 Jan 2024 15:27:10 +0800
+Subject: [PATCH 187/241] target/riscv: Disable trigger when type of trigger is
+ 0
+
+Refer to RISC-V debug specification version 1.0-STABLE section 5.7, a
+debugger can write 0 to tdata1 to disable the trigger. Implement
+riscv_disable_trigger() to remove breakpoints or watchpoints. Also the
+type of this trigger will be automatically set to 15, which means
+"disabled".
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index c06d69daa1..9da9b251e8 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -1050,6 +1050,22 @@ static int itrigger_get_adjust_count(CPURISCVState *env)
+     return count;
+ }
+ 
++static void riscv_disable_trigger(CPURISCVState *env,
++                                  target_ulong trigger_index)
++{
++    int trigger_type;
++
++    trigger_type = extract_trigger_type(env, env->tdata1[trigger_index]);
++    switch (trigger_type) {
++    case TRIGGER_TYPE_AD_MATCH:
++        type2_breakpoint_remove(env, trigger_index);
++        break;
++    case TRIGGER_TYPE_AD_MATCH6:
++        type6_breakpoint_remove(env, trigger_index);
++        break;
++    }
++}
++
+ target_ulong tdata_csr_read(CPURISCVState *env, int tdata_index)
+ {
+     int trigger_type;
+@@ -1098,6 +1114,11 @@ void tdata_csr_write(CPURISCVState *env, int tdata_index, target_ulong val)
+                       trigger_type);
+         break;
+     case TRIGGER_TYPE_NO_EXIST:
++        riscv_disable_trigger(env, env->trigger_cur);
++        env->tdata1[env->trigger_cur] =
++            (riscv_cpu_mxl(env) == MXL_RV32) ? RV32_TYPE(TRIGGER_TYPE_DISABLED)
++                                             : RV64_TYPE(TRIGGER_TYPE_DISABLED);
++        break;
+     case TRIGGER_TYPE_DISABLED:
+         qemu_log_mask(LOG_GUEST_ERROR, "trigger type: %d does not exit\n",
+                       trigger_type);
+-- 
+2.34.1
+

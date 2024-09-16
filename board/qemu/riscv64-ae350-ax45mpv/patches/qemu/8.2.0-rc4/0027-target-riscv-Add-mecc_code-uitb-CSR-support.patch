@@ -1,0 +1,100 @@
+From 58787045734acd16ead245e3e58d6b73af99db93 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 2 Aug 2023 16:44:37 +0800
+Subject: [PATCH 027/241] target/riscv: Add mecc_code/uitb CSR support.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c       | 21 +++++++++++++++++++--
+ target/riscv/csr_andes.h       |  2 ++
+ target/riscv/csr_andes_nx45v.c | 13 +------------
+ 3 files changed, 22 insertions(+), 14 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 1da4ab21e9..51192c8617 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -48,6 +48,22 @@ static RISCVException write_csr(CPURISCVState *env,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException write_mecc_code(CPURISCVState *env, int csrno,
++                                      target_ulong val)
++{
++    // we only need to take care of CODE field, other fields are always zero.
++    env->andes_csr.csrno[CSR_MECC_CODE] = val & MASK_CSR_MECC_CODE_CODE;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_uitb(CPURISCVState *env, int csrno,
++                                 target_ulong val)
++{
++    // we only need to take care of ADDR field
++    env->andes_csr.csrno[CSR_UITB] = val & MASK_CSR_UITB_ADDR;
++    return RISCV_EXCP_NONE;
++}
++
+ void andes_csr_init(AndesCsr *andes_csr)
+ {
+     int i;
+@@ -121,7 +137,8 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     /* Memory CSRs */
+     [CSR_MILMB]          = { "milmb",             any, read_csr, write_csr},
+     [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_csr},
+-    [CSR_MECC_CODE]      = { "mecc_code",         any, read_csr, write_csr},
++    [CSR_MECC_CODE]      = { "mecc_code",         any, read_csr,
++                                                       write_mecc_code    },
+     [CSR_MNVEC]          = { "mnvec",             any, read_csr, write_csr},
+     [CSR_MCACHE_CTL]     = { "mcache_ctl",        any, read_csr,
+                                                   write_mcache_ctl        },
+@@ -219,7 +236,7 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+ 
+     /* =================== AndeStar V5 user mode CSRs =================== */
+     /* User mode control registers */
+-    [CSR_UITB]           = { "uitb",              any, read_csr, write_csr},
++    [CSR_UITB]           = { "uitb",              any, read_csr, write_uitb},
+     [CSR_UCODE]          = { "ucode",             any, read_csr, write_csr},
+     [CSR_UDCAUSE]        = { "udcause",           any, read_csr, write_csr},
+     [CSR_UCCTLBEGINADDR] = { "ucctlbeginaddr",    any, read_csr, write_csr},
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 25716a9eb1..399f8b50d5 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -33,6 +33,8 @@ typedef struct AndesVec {
+ #define V5_MCACHE_CTL_DC_COHEN              19
+ #define V5_MCACHE_CTL_DC_COHSTA             20
+ 
++#define MASK_CSR_MECC_CODE_CODE             0xFF
++#define MASK_CSR_UITB_ADDR                  0xFFFFFFFC
+ 
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+diff --git a/target/riscv/csr_andes_nx45v.c b/target/riscv/csr_andes_nx45v.c
+index 3f7560bec5..786aa340eb 100644
+--- a/target/riscv/csr_andes_nx45v.c
++++ b/target/riscv/csr_andes_nx45v.c
+@@ -2,19 +2,8 @@
+ #include "cpu.h"
+ #include "csr_andes.h"
+ 
+-#define MASK_CSR_MECC_CODE_CODE  0xFF
+-
+-static RISCVException write_mecc_code(CPURISCVState *env, int csrno,
+-                                      target_ulong val)
+-{
+-    // we only need to take care of CODE field, other fields are always zero.
+-    env->andes_csr.csrno[CSR_MECC_CODE] = val & MASK_CSR_MECC_CODE_CODE;
+-    return RISCV_EXCP_NONE;
+-}
+ 
+ void andes_spec_csr_init_nx45v(AndesCsr *andes_csr)
+ {
+     andes_csr->csrno[CSR_MECC_CODE] = 0;
+-
+-    andes_csr_ops[CSR_MECC_CODE].write = write_mecc_code;
+-}
++}
+\ No newline at end of file
+-- 
+2.34.1
+

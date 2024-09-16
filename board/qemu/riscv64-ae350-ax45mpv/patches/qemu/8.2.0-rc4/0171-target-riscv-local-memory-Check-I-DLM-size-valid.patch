@@ -1,0 +1,35 @@
+From a7cdd55d19daebe9261c05d4d5803e4ff2ac96f1 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Wed, 10 Jan 2024 13:48:37 +0800
+Subject: [PATCH 171/241] target/riscv: local memory: Check I/DLM size valid
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/andes_ae350.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 88bdc1ce51..62b045bb86 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -324,6 +324,17 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     char *plic_hart_config, *plicsw_hart_config;
+     NICInfo *nd = &nd_table[0];
+ 
++    if (s->ilm_size < 0x1000 || s->ilm_size > 0x1000000) {
++        error_report("Cannot set instruction local memory size beyond the range"
++                     "of 0x1000 to 0x1000000");
++        exit(1);
++    }
++    if (s->dlm_size < 0x1000 || s->dlm_size > 0x1000000) {
++        error_report("Cannot set data local memory size beyond the range of"
++                     "0x1000 to 0x1000000");
++        exit(1);
++    }
++
+     /* round down local memory size to valid value */
+     s->ilm_size = 1 << (31 - __builtin_clz(s->ilm_size));
+     s->dlm_size = 1 << (31 - __builtin_clz(s->dlm_size));
+-- 
+2.34.1
+

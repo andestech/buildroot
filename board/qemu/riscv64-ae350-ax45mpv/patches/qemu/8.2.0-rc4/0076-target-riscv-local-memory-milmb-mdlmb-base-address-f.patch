@@ -1,0 +1,37 @@
+From 07ea2271221e4044100edf6b07535c5215b706ef Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Wed, 6 Sep 2023 13:29:25 +0800
+Subject: [PATCH 076/241] target/riscv: local memory: milmb, mdlmb base address
+ field is read only
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ target/riscv/csr_andes.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 85a15d4843..f59265c0e8 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -570,6 +570,7 @@ static RISCVException write_lmb(CPURISCVState *env,
+         } else if (!enable && ilm_mapped) {
+             memory_region_del_subregion(env->cpu_as_root, env->mask_ilm);
+         }
++        env->andes_csr.csrno[csrno] = env->ilm_base | (val & 0xf);
+     }
+     if (csrno == CSR_MDLMB) {
+         dlm_mapped = memory_region_is_mapped(env->mask_dlm);
+@@ -579,9 +580,9 @@ static RISCVException write_lmb(CPURISCVState *env,
+         } else if (!enable && dlm_mapped) {
+             memory_region_del_subregion(env->cpu_as_root, env->mask_dlm);
+         }
++        env->andes_csr.csrno[csrno] = env->dlm_base | (val & 0xf);
+     }
+     tlb_flush(env_cpu(env));
+-    env->andes_csr.csrno[csrno] = val;
+     if (locked) {
+         qemu_mutex_unlock_iothread();
+     }
+-- 
+2.34.1
+

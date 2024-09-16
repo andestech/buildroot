@@ -1,0 +1,154 @@
+From 2d15449712b7edc91bfcc1c889cc5d3b97ea2046 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 6 Sep 2023 15:45:10 +0800
+Subject: [PATCH 077/241] target/riscv: Add functions to Andes CSRs.           
+    Fix typos. Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+
+---
+ target/riscv/cpu.c       |  2 +-
+ target/riscv/csr_andes.c | 48 ++++++++++++++++++++++++++++++++++------
+ target/riscv/csr_andes.h | 27 +++++++++++++++++++++-
+ 3 files changed, 68 insertions(+), 9 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index d15d424e85..620143e5a3 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -547,7 +547,7 @@ static void andes_cpu_lm_realize(DeviceState *dev)
+     env->andes_csr.csrno[CSR_MICM_CFG] = (1UL << V5_MICM_CFG_ILMB) |
+                                      (ilmsz << V5_MICM_CFG_ILMSZ);
+     env->andes_csr.csrno[CSR_MDCM_CFG] = (1UL << V5_MDCM_CFG_DLMB) |
+-                                     (dlmsz << V5_MICM_CFG_DLMSZ);
++                                     (dlmsz << V5_MDCM_CFG_DLMSZ);
+ 
+     env->andes_csr.csrno[CSR_MILMB] = env->ilm_base | env->ilm_default_enable;
+     env->andes_csr.csrno[CSR_MDLMB] = env->dlm_base | env->dlm_default_enable;
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index f59265c0e8..ba08e9a2d3 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -130,6 +130,40 @@ static RISCVException fio(CPURISCVState *env, int csrno)
+     }
+ }
+ 
++static RISCVException ilmb(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (get_field(csr->csrno[CSR_MICM_CFG], MASK_MICM_CFG_ILMB) != 0) {
++        return RISCV_EXCP_NONE;
++    }
++    else {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++}
++
++static RISCVException dlmb(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (get_field(csr->csrno[CSR_MDCM_CFG], MASK_MDCM_CFG_DLMB) != 0) {
++        return RISCV_EXCP_NONE;
++    }
++    else {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++}
++
++static RISCVException isz_dsz(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (get_field(csr->csrno[CSR_MICM_CFG], MASK_MICM_CFG_ISZ) != 0) {
++        return RISCV_EXCP_NONE;
++    }
++    if (get_field(csr->csrno[CSR_MDCM_CFG], MASK_MDCM_CFG_DSZ) != 0) {
++        return RISCV_EXCP_NONE;
++    }
++    return RISCV_EXCP_ILLEGAL_INST;
++}
++
+ static RISCVException rvarch(CPURISCVState *env, int csrno)
+ {
+     AndesCsr *csr = &env->andes_csr;
+@@ -261,7 +295,7 @@ static RISCVException write_mcache_ctl(CPURISCVState *env,
+     } else {
+         val &= ~(1UL << V5_MCACHE_CTL_DC_COHSTA);
+     }
+-    env->andes_csr.csrno[csrno] = val;
++    env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_MCACHE_CTL;
+     return RISCV_EXCP_NONE;
+ }
+ 
+@@ -666,18 +700,18 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+ 
+     /* Memory CSRs */
+ #ifndef CONFIG_USER_ONLY
+-    [CSR_MILMB]          = { "milmb",             any, read_csr, write_lmb  },
+-    [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_lmb  },
++    [CSR_MILMB]          = { "milmb",             ilmb, read_csr, write_lmb },
++    [CSR_MDLMB]          = { "mdlmb",             dlmb, read_csr, write_lmb },
+ #else
+-    [CSR_MILMB]          = { "milmb",             any, read_csr, write_csr  },
+-    [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_csr  },
++    [CSR_MILMB]          = { "milmb",             ilmb, read_csr, write_csr },
++    [CSR_MDLMB]          = { "mdlmb",             dlmb, read_csr, write_csr },
+ #endif
+     [CSR_MECC_CODE]      = { "mecc_code",         ecc, read_csr,
+                                                        write_mecc_code      },
+     [CSR_MNVEC]          = { "mnvec",             any, read_csr,
+                                                        write_all_ignore     },
+-    [CSR_MCACHE_CTL]     = { "mcache_ctl",        any, read_csr,
+-                                                       write_mcache_ctl     },
++    [CSR_MCACHE_CTL]     = { "mcache_ctl",        isz_dsz, read_csr,
++                                                           write_mcache_ctl },
+     [CSR_MCCTLBEGINADDR] = { "mcctlbeginaddr",    any, read_csr, write_csr  },
+     [CSR_MCCTLCOMMAND]   = { "mcctlcommand",      any, read_csr, write_csr  },
+     [CSR_MCCTLDATA]      = { "mcctldata",         any, read_csr, write_csr  },
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index db3ff14607..a736b3394f 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -37,9 +37,33 @@ typedef struct AndesVec {
+ /* micm_cfg */
+ #define V5_MICM_CFG_ILMB                    12
+ #define V5_MICM_CFG_ILMSZ                   15
++#define MASK_MICM_CFG_ISET                  (0x07)
++#define MASK_MICM_CFG_IWAY                  (0x07 << 3)
++#define MASK_MICM_CFG_ISZ                   (0x07 << 6)
++#define MASK_MICM_CFG_ILCK                  (0x01 << 9)
++#define MASK_MICM_CFG_IC_ECC                (0x03 << 10)
++#define MASK_MICM_CFG_ILMB                  (0x07 << 12)
++#define MASK_MICM_CFG_ILMSZ                 (0x1F << 15)
++#define MASK_MICM_CFG_ULM_2BANK             (0x01 << 20)
++#define MASK_MICM_CFG_ILM_ECC               (0x03 << 21)
++#define MASK_MICM_CFG_ILM_XONLY             (0x01 << 23)
++#define MASK_MICM_CFG_SETH                  (0x01 << 24)
++#define MASK_MICM_CFG_IC_REPL               (0x03 << 25)
++
+ /* mdcm_cfg */
+ #define V5_MDCM_CFG_DLMB                    12
+-#define V5_MICM_CFG_DLMSZ                   15
++#define V5_MDCM_CFG_DLMSZ                   15
++#define MASK_MDCM_CFG_DSET                  (0x07)
++#define MASK_MDCM_CFG_DWAY                  (0x07 << 3)
++#define MASK_MDCM_CFG_DSZ                   (0x07 << 6)
++#define MASK_MDCM_CFG_DLCK                  (0x01 << 9)
++#define MASK_MDCM_CFG_DC_ECC                (0x03 << 10)
++#define MASK_MDCM_CFG_DLMB                  (0x07 << 12)
++#define MASK_MDCM_CFG_DLMSZ                 (0x1F << 15)
++#define MASK_MDCM_CFG_ULM_2BANK             (0x01 << 20)
++#define MASK_MDCM_CFG_DLM_ECC               (0x03 << 21)
++#define MASK_MDCM_CFG_SETH                  (0x01 << 24)
++#define MASK_MDCM_CFG_DC_REPL               (0x03 << 25)
+ 
+ /* mmsc_cfg */
+ #define MASK_MMSC_CFG_ECC                   (0x01)
+@@ -167,6 +191,7 @@ typedef struct AndesVec {
+ #define WRITE_MASK_CSR_SDCAUSE              0x7F
+ #define WRITE_MASK_CSR_MMISC_CTL            0x3F7F
+ #define WRITE_MASK_CSR_SMISC_CTL            0x30
++#define WRITE_MASK_CSR_MCACHE_CTL           0x7FFFFF
+ 
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+-- 
+2.34.1
+

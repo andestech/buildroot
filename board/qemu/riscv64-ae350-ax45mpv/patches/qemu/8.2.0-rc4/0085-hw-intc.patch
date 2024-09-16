@@ -1,0 +1,35 @@
+From c2e2442afbf8e8fe025d9f237652c3769d338ca1 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Mon, 18 Sep 2023 17:36:58 +0800
+Subject: [PATCH 085/241] hw/intc: Let Andes PLIC and SWPLIC disable IO
+ re-entrant check, see softmmu/memory.c:access_with_adjusted_size() This
+ workaround can fix the booting with SMP issue (IPI doesn't work), and also
+ cannot normally boot to shell issue
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ hw/intc/andes_plic.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/hw/intc/andes_plic.c b/hw/intc/andes_plic.c
+index bd370019b9..becd725d00 100644
+--- a/hw/intc/andes_plic.c
++++ b/hw/intc/andes_plic.c
+@@ -205,9 +205,14 @@ andes_plic_realize(DeviceState *dev, Error **errp)
+ 
+     if (strstr(andes_plic->plic_name , "SW") != NULL) {
+         riscv_plic->riscv_plic_update = andes_plicsw_update;
++
+     } else {
+         riscv_plic->riscv_plic_update = andes_plichw_update;
+     }
++    /* Let Andes PLIC and SWPLIC disable IO re-entrant check, 
++     * see softmmu/memory.c:access_with_adjusted_size() 
++     */
++    riscv_plic->mmio.disable_reentrancy_guard = true;
+     riscv_plic->riscv_plic_write_pending = andes_plic_write_pending;
+ 
+     andes_plic->parent_mmio = riscv_plic->mmio;
+-- 
+2.34.1
+

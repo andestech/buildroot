@@ -1,0 +1,29 @@
+From dc2c9c2432d4ffb21798856d80a7f7b57d096d09 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Fri, 1 Sep 2023 17:26:41 +0800
+Subject: [PATCH 061/241] target/riscv: reset CSR mseccfg in
+ riscv_cpu_reset_hold()
+
+ePMP relies on CSR mseccfg. If the mseccfg.MML/MMWP/RLB bits are not
+reset, unexpected behaviors might occur.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/cpu.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 609bc1fd2c..b7336f3318 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1377,6 +1377,7 @@ static void riscv_cpu_reset_hold(Object *obj)
+     env->mie = 0;
+     env->mepc = 0;
+     env->mip = 0;
++    env->mseccfg = 0;
+     env->frm = 0;
+     env->scause = 0;
+     env->satp = 0;
+-- 
+2.34.1
+

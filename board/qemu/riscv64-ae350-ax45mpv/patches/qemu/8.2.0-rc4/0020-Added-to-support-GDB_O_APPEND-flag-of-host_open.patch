@@ -1,0 +1,27 @@
+From 0662cb119e49700626c51155f5eb5a1479131142 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 8 Jun 2023 17:07:59 +0800
+Subject: [PATCH 020/241] Added to support GDB_O_APPEND flag of host_open()
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ semihosting/syscalls.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/semihosting/syscalls.c b/semihosting/syscalls.c
+index c40348f996..7f704ac3a3 100644
+--- a/semihosting/syscalls.c
++++ b/semihosting/syscalls.c
+@@ -281,6 +281,9 @@ static void host_open(CPUState *cs, gdb_syscall_complete_cb complete,
+     if (gdb_flags & GDB_O_TRUNC) {
+         host_flags |= O_TRUNC;
+     }
++    if (gdb_flags & GDB_O_APPEND) {
++        host_flags |= O_APPEND;
++    }
+     if (gdb_flags & GDB_O_EXCL) {
+         host_flags |= O_EXCL;
+     }
+-- 
+2.34.1
+

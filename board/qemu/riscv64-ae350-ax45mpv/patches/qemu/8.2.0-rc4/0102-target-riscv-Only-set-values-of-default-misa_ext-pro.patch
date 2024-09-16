@@ -1,0 +1,37 @@
+From 870a0a9ab49787aa7a8c3f1ec503f8118419f1be Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Thu, 2 Nov 2023 17:05:54 +0800
+Subject: [PATCH 102/241] target/riscv: Only set values of default misa_ext
+ properties when use generic riscv cpu. (#70)
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/70
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 3cee59b255..d4802ce916 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -696,6 +696,7 @@ static void rv64_andes_common_cpu_init(Object *obj, fp_spec_csr_init_fn spec_csr
+     if (!env->misa_ext) {
+         set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     }
++    riscv_cpu_add_user_properties(obj);
+     register_andes_cpu_props(obj);
+     env->priv_ver = PRIV_VERSION_1_12_0;
+ 
+@@ -994,6 +995,7 @@ static void rv32_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+     if (!env->misa_ext) {
+         set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     }
++    riscv_cpu_add_user_properties(obj);
+     register_andes_cpu_props(obj);
+     env->priv_ver = PRIV_VERSION_1_12_0;
+ 
+-- 
+2.34.1
+

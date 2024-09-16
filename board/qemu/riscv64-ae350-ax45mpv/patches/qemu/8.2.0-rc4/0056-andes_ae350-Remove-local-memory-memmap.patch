@@ -1,0 +1,42 @@
+From 0f63b138a70a353330045ff4ad9de1ab03c5ee1b Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Mon, 4 Sep 2023 13:25:12 +0800
+Subject: [PATCH 056/241] andes_ae350: Remove local memory memmap
+
+Local memory base and size are from property.
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/andes_ae350.c         | 2 --
+ include/hw/riscv/andes_ae350.h | 2 --
+ 2 files changed, 4 deletions(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 8ccda7c7a9..afd13da699 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -58,8 +58,6 @@ static const struct MemmapEntry {
+ } andes_ae350_memmap[] = {
+     [ANDES_AE350_DRAM]      = { 0x00000000, 0x80000000 },
+     [ANDES_AE350_MROM]      = { 0x80000000,  0x8000000 },
+-    [ANDES_AE350_ILM]       = { 0x00000000,   0x200000 },
+-    [ADNES_AE350_DLM]       = { 0x00200000,   0x200000 },
+     [ANDES_AE350_SLAVEPORT0_ILM] = { 0xa0000000,   0x200000 },
+     [ANDES_AE350_SLAVEPORT0_DLM] = { 0xa0200000,   0x200000 },
+     [ANDES_AE350_SLAVEPORT1_ILM] = { 0xa0400000,   0x200000 },
+diff --git a/include/hw/riscv/andes_ae350.h b/include/hw/riscv/andes_ae350.h
+index 42071db199..057fc67528 100644
+--- a/include/hw/riscv/andes_ae350.h
++++ b/include/hw/riscv/andes_ae350.h
+@@ -70,8 +70,6 @@ typedef struct AndesAe350BoardState {
+ enum {
+     ANDES_AE350_DRAM,
+     ANDES_AE350_MROM,
+-    ANDES_AE350_ILM,
+-    ADNES_AE350_DLM,
+     ANDES_AE350_SLAVEPORT0_ILM,
+     ANDES_AE350_SLAVEPORT0_DLM,
+     ANDES_AE350_SLAVEPORT1_ILM,
+-- 
+2.34.1
+

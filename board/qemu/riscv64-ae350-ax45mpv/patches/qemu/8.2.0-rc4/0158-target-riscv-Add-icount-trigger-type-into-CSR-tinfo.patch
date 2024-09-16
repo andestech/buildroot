@@ -1,0 +1,28 @@
+From eed123e1fe16f80b7e6ef4ef2b581f577dc22499 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Wed, 20 Dec 2023 17:51:11 +0800
+Subject: [PATCH 158/241] target/riscv: Add icount trigger type into CSR tinfo
+
+Since we are supporting icount trigger, add this trigger type into CSR
+tinfo to indicate that we support it.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index e6736228c6..6e8f1e5f98 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -1089,6 +1089,7 @@ target_ulong tinfo_csr_read(CPURISCVState *env)
+ {
+     /* assume all triggers support the same types of triggers */
+     return BIT(TRIGGER_TYPE_AD_MATCH) |
++           BIT(TRIGGER_TYPE_INST_CNT) |
+            BIT(TRIGGER_TYPE_AD_MATCH6);
+ }
+ 
+-- 
+2.34.1
+

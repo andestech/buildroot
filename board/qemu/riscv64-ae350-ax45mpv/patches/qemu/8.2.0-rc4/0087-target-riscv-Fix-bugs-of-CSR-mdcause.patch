@@ -1,0 +1,59 @@
+From 2d896d57a3a89bb5a935fc7890dcff035b206a45 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 15 Sep 2023 15:55:30 +0800
+Subject: [PATCH 087/241] target/riscv: Fix bugs of CSR mdcause.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c       | 2 +-
+ target/riscv/csr_andes.h       | 3 +--
+ target/riscv/csr_andes_nx45v.c | 4 ++--
+ 3 files changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 9d4828fa8f..4a460d0bfb 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -510,7 +510,7 @@ static RISCVException write_smdcause(CPURISCVState *env, int csrno,
+     }
+ 
+     if (interrupt) {
+-        env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_MDCAUSE;
++        env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_SMDCAUSE;
+     }
+     else {
+         env->andes_csr.csrno[csrno] = val;
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 67942b765e..0308beaa33 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -192,8 +192,7 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define WRITE_MASK_CSR_UCODE                0x1
+ #define WRITE_MASK_CSR_MVEC_CFG             0x3FFFF
+ #define WRITE_MASK_CSR_MXSTATUS             0x3FF
+-#define WRITE_MASK_CSR_MDCAUSE              0x7F
+-#define WRITE_MASK_CSR_SDCAUSE              0x7F
++#define WRITE_MASK_CSR_SMDCAUSE             0x7F
+ #define WRITE_MASK_CSR_MMISC_CTL            0x3F7F
+ #define WRITE_MASK_CSR_SMISC_CTL            0x30
+ #define WRITE_MASK_CSR_MCACHE_CTL           0x7FFFFF
+diff --git a/target/riscv/csr_andes_nx45v.c b/target/riscv/csr_andes_nx45v.c
+index 945d6516e7..b85788b292 100644
+--- a/target/riscv/csr_andes_nx45v.c
++++ b/target/riscv/csr_andes_nx45v.c
+@@ -92,10 +92,10 @@ static RISCVException write_smdcause_nx45v(CPURISCVState *env, int csrno,
+     }
+ 
+     if (interrupt) {
+-        env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_MDCAUSE_EXCP_NX45V;
++        env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_MDCAUSE_INT_NX45V;
+     }
+     else {
+-        env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_MDCAUSE_INT_NX45V;
++        env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_MDCAUSE_EXCP_NX45V;
+     }
+     return RISCV_EXCP_NONE;
+ }
+-- 
+2.34.1
+

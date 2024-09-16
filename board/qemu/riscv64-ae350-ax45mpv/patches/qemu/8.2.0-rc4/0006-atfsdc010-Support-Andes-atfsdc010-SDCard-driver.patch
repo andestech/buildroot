@@ -1,0 +1,717 @@
+From 54f1fc8443134d229ed590523ab4841175a29776 Mon Sep 17 00:00:00 2001
+From: Dylan Jhong <dylan@andestech.com>
+Date: Mon, 29 Mar 2021 17:08:38 +0800
+Subject: [PATCH 006/241] atfsdc010: Support Andes atfsdc010 SDCard driver.
+
+Create SDCard:
+   ~# qemu-img create sdcard.img 64M
+   ~# sudo mkfs.ext4 sdcard.img
+
+qemu example:
+  ~# ./qemu/build/qemu-system-riscv64 \
+      --smp 2 \
+      -m 1G \
+      -M andes_ae350 \
+      --cpu andes-ax25 \
+      --nographic \
+      -kernel ./bin/fw_payload.elf \
+      -sd sdcard.img
+
+Shell command:
+  ~# mount /dev/mmcblk0 /mnt
+
+ref:
+    1dbae2a37b atfsdc010: Support Andes atfsdc010 SDCard driver.
+    10a82da939 atfsdc010: Modified SDC revision.
+    17a4f98e7c atfsdc010: Temporary remove SD card support from AE350.
+    68d2768b0b atfsdc010: Re-enable SD card support.
+    9a9f7afd14 atcsdc010.c: Fix compile error.
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+---
+ hw/riscv/Kconfig               |   1 +
+ hw/riscv/andes_ae350.c         |   5 +
+ hw/sd/Kconfig                  |   3 +
+ hw/sd/atfsdc010.c              | 534 +++++++++++++++++++++++++++++++++
+ hw/sd/meson.build              |   1 +
+ include/hw/riscv/andes_ae350.h |   1 +
+ include/hw/sd/atfsdc010.h      |  66 ++++
+ 7 files changed, 611 insertions(+)
+ create mode 100644 hw/sd/atfsdc010.c
+ create mode 100644 include/hw/sd/atfsdc010.h
+
+diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
+index 0f2dc89496..8209d0b196 100644
+--- a/hw/riscv/Kconfig
++++ b/hw/riscv/Kconfig
+@@ -11,6 +11,7 @@ config ANDES_AE350
+     select ANDES_PLMT
+     select ATCDMAC300
+     select ATFMAC100
++    select ATFSDC010
+     select SERIAL
+     select VIRTIO_MMIO
+ 
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index cb48175b53..626343b838 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -388,6 +388,11 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+                  nd, memmap[ANDES_AE350_MAC].base,
+                  qdev_get_gpio_in(DEVICE(s->plic), ANDES_AE350_MAC_IRQ));
+ 
++    /* SDC */
++    atfsdc010_create(memmap[ANDES_AE350_SDC].base,
++                qdev_get_gpio_in(DEVICE(s->plic), ANDES_AE350_SDC_IRQ));
++
++
+     /* UART */
+     serial_mm_init(system_memory,
+         memmap[ANDES_AE350_UART1].base + ANDES_UART_REG_OFFSET,
+diff --git a/hw/sd/Kconfig b/hw/sd/Kconfig
+index 633b9afec9..37012e7e9b 100644
+--- a/hw/sd/Kconfig
++++ b/hw/sd/Kconfig
+@@ -23,3 +23,6 @@ config SDHCI_PCI
+ config CADENCE_SDHCI
+     bool
+     select SDHCI
++
++config ATFSDC010
++    bool
+diff --git a/hw/sd/atfsdc010.c b/hw/sd/atfsdc010.c
+new file mode 100644
+index 0000000000..a3414a1abd
+--- /dev/null
++++ b/hw/sd/atfsdc010.c
+@@ -0,0 +1,534 @@
++/*
++ * Andes Secure Digital (SD) host controller, ATFSDC010.
++ *
++ * Copyright (c) 2018 Andes Tech. Corp.
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ *
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/log.h"
++#include "qapi/error.h"
++#include "sysemu/block-backend.h"
++#include "sysemu/blockdev.h"
++#include "migration/vmstate.h"
++#include "hw/irq.h"
++#include "hw/qdev-properties.h"
++#include "hw/sysbus.h"
++#include "hw/sd/sd.h"
++#include "hw/sd/sdcard_legacy.h"
++#include "hw/sd/atfsdc010.h"
++
++/* #define DEBUG_ATFSDC010 */
++#define LOGGE(x...) qemu_log_mask(LOG_GUEST_ERROR, x)
++#define xLOG(x...)
++#define yLOG(x...) qemu_log(x)
++#ifdef DEBUG_ATFSDC010
++  #define LOG(x...) yLOG(x)
++#else
++  #define LOG(x...) xLOG(x)
++#endif
++
++#define FTSDC_CMD_INDEX     0x3f
++#define FTSDC_CMD_RESPONSE  (1 << 6)
++#define FTSDC_CMD_LONGRESP  (1 << 7)
++#define FTSDC_CMD_APPCMD    (1 << 8)
++#define FTSDC_CMD_ENABLE    (1 << 9)
++#define FTSDC_CMD_SDCRST    (1 << 10)
++
++#define FTSDC_DATA_WRITE              (1 << 4)
++#define FTSDC_DATA_DMAENABLE          (1 << 5)
++#define FTSDC_DATA_ENABLE             (1 << 6)
++
++#define FTSDC_STATUS_CMDCRCFAIL       (1 << 0)
++#define FTSDC_STATUS_DATACRCFAIL      (1 << 1)
++#define FTSDC_STATUS_CMDTIMEOUT       (1 << 2)
++#define FTSDC_STATUS_DATATIMEOUT      (1 << 3)
++#define FTSDC_STATUS_CMDRESPEND       (1 << 4)
++#define FTSDC_STATUS_DATABLOCKEND     (1 << 5)
++#define FTSDC_STATUS_CMDSENT          (1 << 6)
++#define FTSDC_STATUS_DATAEND          (1 << 7)
++#define FTSDC_STATUS_FIFO_URUN        (1 << 8)
++#define FTSDC_STATUS_FIFO_ORUN        (1 << 9)
++#define FTSDC_STATUS_CARD_CHANGE      (1 << 10)
++#define FTSDC_STATUS_CARD_DETECT      (1 << 11)
++#define FTSDC_STATUS_WRITE_PROT       (1 << 12)
++
++static void atfsdc010_reset_cmd(void *opaque)
++{
++    ATFSDC010State *s = (ATFSDC010State *)opaque;
++
++    s->power = 0x10;
++    s->clock = 0x1ff;
++    s->buswidth = 0x9;  /* or 0x1 */
++    s->mmc_irq_resptime = 0x42;
++    s->cmdarg = 0;
++    s->cmd = 0;
++    s->datatimer = 0;
++    s->datalength = 0;
++    s->respcmd = 0;
++    s->datatimer = 0;
++    s->datactrl = 0;
++    s->datacnt = 0;
++    s->status = 0;
++    s->mask = 0x400;
++    s->feature = 4;
++    s->revision = ATFSDC_REVISION;
++}
++
++static void atfsdc010_update(ATFSDC010State *s)
++{
++    qemu_set_irq(s->irq, (s->status & s->mask) != 0);
++}
++
++static void atfsdc010_fifo_push(ATFSDC010State *s, uint32_t value)
++{
++    int n;
++
++    if (s->fifo_len == ATFSDC010_FIFO_LEN) {
++        LOGGE("%s: FIFO overflow\n", __func__);
++        return;
++    }
++    n = (s->fifo_pos + s->fifo_len) & (ATFSDC010_FIFO_LEN - 1);
++    s->fifo_len++;
++    s->fifo[n] = value;
++    LOG("FIFO push %08x\n", (int)value);
++}
++
++static uint32_t atfsdc010_fifo_pop(ATFSDC010State *s)
++{
++    uint32_t value;
++
++    if (s->fifo_len == 0) {
++        LOGGE("%s: FIFO underflow\n", __func__);
++        return 0;
++    }
++    value = s->fifo[s->fifo_pos];
++    s->fifo_len--;
++    s->fifo_pos = (s->fifo_pos + 1) & (ATFSDC010_FIFO_LEN - 1);
++    LOG("FIFO pop %08x\n", (int)value);
++    return value;
++}
++
++static void atfsdc010_send_command(ATFSDC010State *s)
++{
++    SDRequest request;
++    uint8_t response[16];
++    int rlen;
++
++    request.cmd = s->cmd & FTSDC_CMD_INDEX;
++    request.arg = s->cmdarg;
++    LOG("Command %d %08x\n", request.cmd, request.arg);
++    rlen = sdbus_do_command(&s->sdbus, &request, response);
++    if (rlen < 0) {
++        goto error;
++    }
++    if (s->cmd & FTSDC_CMD_RESPONSE) {
++#define RWORD(n) ((response[n] << 24) | (response[n + 1] << 16) \
++                  | (response[n + 2] << 8) | response[n + 3])
++        if (rlen == 0 || (rlen == 4 && (s->cmd & FTSDC_CMD_LONGRESP))) {
++            goto error;
++        }
++        if (rlen != 4 && rlen != 16) {
++            goto error;
++        }
++        if (rlen == 4) {
++            s->response[0] = RWORD(0);
++            s->response[1] = s->response[2] = s->response[3] = 0;
++        } else {
++            s->response[3] = RWORD(0);
++            s->response[2] = RWORD(4);
++            s->response[1] = RWORD(8);
++            s->response[0] = RWORD(12);
++        }
++        LOG("Response received\n");
++        s->status |= FTSDC_STATUS_CMDRESPEND;
++#undef RWORD
++    } else {
++        LOG("Command sent\n");
++        s->status |= FTSDC_STATUS_CMDSENT;
++    }
++    return;
++
++error:
++    LOG("Timeout\n");
++    s->status |= FTSDC_STATUS_CMDTIMEOUT;
++}
++
++/*
++ * Transfer data between the card and the FIFO.  This is complicated by
++ * the FIFO holding 32-bit words and the card taking data in single byte
++ * chunks.  FIFO bytes are transferred in little-endian order.
++ */
++static void atfsdc010_fifo_run(ATFSDC010State *s)
++{
++    uint32_t value;
++    int n;
++    int is_read;
++
++    is_read = (s->datactrl & FTSDC_DATA_WRITE) == 0;
++    if (s->datacnt != 0 && (!is_read || sdbus_data_ready(&s->sdbus))) {
++        if (is_read) {
++            while (s->datacnt > 0 && s->fifo_len < ATFSDC010_FIFO_LEN) {
++                value = 0;
++                for (n = 0; n < 4 && s->datacnt > 0; n++, s->datacnt--) {
++                    value |= (uint32_t)sdbus_read_byte(&s->sdbus) << (n * 8);
++                }
++                atfsdc010_fifo_push(s, value);
++            }
++        } else {
++            while (s->datacnt > 0 && s->fifo_len > 0) {
++                value = atfsdc010_fifo_pop(s);
++                for (n = 0; n < 4 && s->datacnt > 0; n++, s->datacnt--) {
++                    sdbus_write_byte(&s->sdbus, value & 0xff);
++                    value >>= 8;
++                }
++            }
++        }
++    }
++    if (s->fifo_len == 0 && !is_read) {
++        s->status |= FTSDC_STATUS_FIFO_URUN;
++    } else if (s->fifo_len > 0 && is_read) {
++        s->status |= FTSDC_STATUS_FIFO_ORUN;
++    }
++    if (s->datacnt == 0) {
++        if (s->fifo_len == 0) {
++            s->datactrl &= ~FTSDC_DATA_ENABLE;
++            LOG("Data engine idle\n");
++        }
++        s->status |= FTSDC_STATUS_DATAEND;
++        s->status |= FTSDC_STATUS_DATABLOCKEND;
++        LOG("Transfer Complete\n");
++    }
++}
++
++static uint64_t
++atfsdc010_read(void *opaque, hwaddr offset, unsigned size)
++{
++    uint64_t rz = 0;
++    ATFSDC010State *s = opaque;
++
++    switch (offset) {
++    case 0x00: /* Command */
++        rz = s->cmd;
++        break;
++    case 0x04: /* Argument */
++        rz = s->cmdarg;
++        break;
++    case 0x08: /* Response0 */
++        rz = s->response[0];
++        break;
++    case 0x0c: /* Response1 */
++        rz = s->response[1];
++        break;
++    case 0x10: /* Response2 */
++        rz = s->response[2];
++        break;
++    case 0x14: /* Response3 */
++        rz = s->response[3];
++        break;
++    case 0x18: /* RespCmd */
++        rz = s->respcmd;
++        break;
++    case 0x1c: /* DataCtrl */
++        rz = s->datactrl;
++        break;
++    case 0x20: /* DataTimer */
++        rz = s->datatimer;
++        break;
++    case 0x24: /* DataLength */
++        rz = s->datalength;
++        break;
++    case 0x28: /* Status */
++        rz = s->status;
++        break;
++    case 0x2c: /* Clear Write Only */
++        rz = 0;
++        break;
++    case 0x30: /* Mask */
++        rz = s->mask;
++        break;
++    case 0x34: /* Power Control */
++        rz = s->power;
++        break;
++    case 0x38: /* Clock Control*/
++        rz = s->clock;
++        break;
++    case 0x3c: /* Bus Width */
++        rz = s->buswidth;
++        break;
++    case 0x40: /* Data Window */
++        if (s->fifo_len == 0) {
++            LOGGE("%s: Unexpected FIFO read\n", __func__);
++        } else {
++            uint32_t value;
++            value = atfsdc010_fifo_pop(s);
++            atfsdc010_fifo_run(s);
++            atfsdc010_update(s);
++            rz = value;
++        }
++        break;
++    case 0x44: /* MMC interrupt response time register */
++        rz = s->mmc_irq_resptime;
++        break;
++    case 0x48: /* general purpose output */
++        rz = s->gpo;
++        break;
++    case 0x6c: /* SDIO control register 1 */
++        rz = s->sdio_ctrl1;
++        break;
++    case 0x70: /* SDIO control register 2 */
++        rz = s->sdio_ctrl2;
++        break;
++    case 0x74: /* SDIO status register */
++        rz = s->sdio_status;
++        break;
++    case 0x9c: /* Feature */
++        rz = s->feature;
++        break;
++    case 0xa0: /* Revision */
++        rz = s->revision;
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: Bad offset %x\n", __func__, (int)offset);
++    }
++
++    LOG("%s:  offset %08lx, value %08lx\n", __func__, offset, rz);
++    return rz;
++}
++
++static void
++atfsdc010_write(void *opaque, hwaddr offset,
++             uint64_t value, unsigned size)
++{
++    LOG("%s: offset %08lx, value %08lx\n", __func__, offset, value);
++    ATFSDC010State *s = (ATFSDC010State *)opaque;
++
++    switch (offset) {
++    case 0x00: /* Command */
++        s->cmd = value;
++        if (s->cmd & FTSDC_CMD_SDCRST) {
++            atfsdc010_reset_cmd(s);
++        } else if (s->cmd & FTSDC_CMD_ENABLE) {
++            atfsdc010_send_command(s);
++            atfsdc010_fifo_run(s);
++            /* The command has completed one way or the other.  */
++            s->cmd &= ~FTSDC_CMD_ENABLE;
++        }
++        break;
++    case 0x04: /* Argument */
++        s->cmdarg = value;
++        break;
++    case 0x1c: /* DataCtrl */
++        s->datactrl = value & 0x7f;
++        if (value & FTSDC_DATA_ENABLE) {
++            if (value & FTSDC_DATA_WRITE) {
++                s->status |= FTSDC_STATUS_FIFO_URUN;
++            }
++            s->datacnt = s->datalength;
++            atfsdc010_fifo_run(s);
++        }
++        break;
++    case 0x20: /* DataTimer */
++        s->datatimer = value;
++        break;
++    case 0x24: /* DataLength */
++        s->datalength = value;
++        break;
++    case 0x2c: /* Clear */
++        s->status &= ~(value & 0x7ff);
++        break;
++    case 0x30: /* Mask */
++        s->mask = value & 0x7ff;
++        break;
++    case 0x34: /* Power */
++        s->power = value & 0x1f;
++        break;
++    case 0x38: /* Clock */
++        s->clock = value & 0x1ff;
++        break;
++    case 0x3c: /* Bus width */
++        s->buswidth = value & 0x7;
++        break;
++    case 0x40: /* Data Window */
++        if (s->datacnt == 0) {
++            LOGGE("%s: Unexpected FIFO write\n", __func__);
++        } else {
++            /* we don't need to send value actually */
++            atfsdc010_fifo_push(s, value);
++            atfsdc010_fifo_run(s);
++        }
++        break;
++    case 0x44: /* MMC interrupt response time register */
++        s->mmc_irq_resptime = value & 0xff;
++        break;
++    case 0x48: /* general purpose output */
++        s->gpo = value & 0xf;
++        break;
++    case 0x6c: /* SDIO control register 1 */
++        s->sdio_ctrl1 = value;
++        /* TODO: SDIO functions */
++        break;
++    case 0x70: /* SDIO control register 2 */
++        s->sdio_ctrl2 = value & 0x3;
++        /* TODO: SDIO functions */
++        break;
++    case 0x74: /* SDIO status register (RO) */
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad addr %"HWADDR_PRIx"\n",
++                      __func__, offset);
++    }
++    atfsdc010_update(s);
++}
++
++static void atfsdc010_set_readonly(DeviceState *dev, bool level)
++{
++    ATFSDC010State *s = (ATFSDC010State *)dev;
++
++    qemu_set_irq(s->card_readonly, level);
++}
++
++static void atfsdc010_set_inserted(DeviceState *dev, bool level)
++{
++    ATFSDC010State *s = (ATFSDC010State *)dev;
++
++    qemu_set_irq(s->card_inserted, level);
++}
++
++static void
++atfsdc010_reset(DeviceState *d)
++{
++    ATFSDC010State *s = ATFSDC010(d);
++
++    s->power = 0x10;
++    s->clock = 0x1ff;
++    s->buswidth = 0x9; /* or 0x1 */
++    s->mmc_irq_resptime = 0x42;
++    s->cmdarg = 0;
++    s->cmd = 0;
++    s->datatimer = 0;
++    s->datalength = 0;
++    s->respcmd = 0;
++    s->response[0] = 0;
++    s->response[1] = 0;
++    s->response[2] = 0;
++    s->response[3] = 0;
++    s->datatimer = 0;
++    s->datactrl = 0;
++    s->datacnt = 0;
++    s->status = 0;
++    s->mask = 0x400;
++    s->feature = 4;
++    s->revision = ATFSDC_REVISION;
++
++    atfsdc010_set_inserted(DEVICE(s), sdbus_get_inserted(&s->sdbus));
++    atfsdc010_set_readonly(DEVICE(s), sdbus_get_readonly(&s->sdbus));
++}
++
++static void
++atfsdc010_realize(DeviceState *dev, Error **errp)
++{
++    DeviceState *card;
++    DriveInfo *dinfo;
++
++    /* FIXME use a qdev drive property instead of drive_get_next() */
++    card = qdev_new(TYPE_SD_CARD);
++    dinfo = drive_get(IF_SD, 0, 0);
++    qdev_prop_set_drive_err(card, "drive", blk_by_legacy_dinfo(dinfo),
++                            &error_fatal);
++    qdev_realize_and_unref(card,
++                           qdev_get_child_bus(dev, "sd-bus"),
++                           &error_fatal);
++}
++
++static const VMStateDescription vmstate_atfsdc010 = {
++    .name = TYPE_ATFSDC010,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (VMStateField[]) {
++        /* TODO */
++        VMSTATE_END_OF_LIST()
++    }
++};
++
++static void
++atfsdc010_class_init(ObjectClass *klass, void *data)
++{
++    DeviceClass *k = DEVICE_CLASS(klass);
++
++    k->vmsd = &vmstate_atfsdc010;
++    k->reset = atfsdc010_reset;
++    /* Reason: init() method uses drive_get_next() */
++    k->user_creatable = false;
++    k->realize = atfsdc010_realize;
++}
++
++static const MemoryRegionOps atfsdc010_ops = {
++    .read = atfsdc010_read,
++    .write = atfsdc010_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++};
++
++static void
++atfsdc010_init(Object *obj)
++{
++    ATFSDC010State *s = ATFSDC010(obj);
++    DeviceState *dev = DEVICE(obj);
++    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
++
++    memory_region_init_io(&s->mmio, obj, &atfsdc010_ops, s,
++                            TYPE_ATFSDC010, 0x100);
++    sysbus_init_mmio(sbd, &s->mmio);
++    sysbus_init_irq(sbd, &s->irq);
++    qdev_init_gpio_out_named(dev, &s->card_readonly, "card-read-only", 1);
++    qdev_init_gpio_out_named(dev, &s->card_inserted, "card-inserted", 1);
++
++    qbus_init(&s->sdbus, sizeof(s->sdbus), TYPE_ATFSDC010_BUS, dev, "sd-bus");
++}
++
++static const TypeInfo atfsdc010_info = {
++    .name          = TYPE_ATFSDC010,
++    .parent        = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(ATFSDC010State),
++    .instance_init = atfsdc010_init,
++    .class_init    = atfsdc010_class_init,
++};
++
++static void atfsdc010_bus_class_init(ObjectClass *klass, void *data)
++{
++    SDBusClass *sbc = SD_BUS_CLASS(klass);
++
++    sbc->set_inserted = atfsdc010_set_inserted;
++    sbc->set_readonly = atfsdc010_set_readonly;
++}
++
++static const TypeInfo atfsdc010_bus_info = {
++    .name = TYPE_ATFSDC010_BUS,
++    .parent = TYPE_SD_BUS,
++    .instance_size = sizeof(SDBus),
++    .class_init = atfsdc010_bus_class_init,
++};
++
++static void atfsdc010_register_types(void)
++{
++    type_register_static(&atfsdc010_info);
++    type_register_static(&atfsdc010_bus_info);
++}
++
++type_init(atfsdc010_register_types)
++
++/*
++ * Create SDC device.
++ */
++DeviceState *atfsdc010_create(hwaddr addr, qemu_irq irq)
++{
++    DeviceState *dev;
++
++    dev = sysbus_create_varargs(TYPE_ATFSDC010, addr, irq, NULL);
++
++    return dev;
++}
+diff --git a/hw/sd/meson.build b/hw/sd/meson.build
+index abfac9e461..64bc0c2db9 100644
+--- a/hw/sd/meson.build
++++ b/hw/sd/meson.build
+@@ -11,3 +11,4 @@ system_ss.add(when: 'CONFIG_ASPEED_SOC', if_true: files('aspeed_sdhci.c'))
+ system_ss.add(when: 'CONFIG_ALLWINNER_H3', if_true: files('allwinner-sdhost.c'))
+ system_ss.add(when: 'CONFIG_NPCM7XX', if_true: files('npcm7xx_sdhci.c'))
+ system_ss.add(when: 'CONFIG_CADENCE_SDHCI', if_true: files('cadence_sdhci.c'))
++system_ss.add(when: 'CONFIG_ATFSDC010', if_true: files('atfsdc010.c'))
+diff --git a/include/hw/riscv/andes_ae350.h b/include/hw/riscv/andes_ae350.h
+index e36ffe12d1..52ab10bd14 100644
+--- a/include/hw/riscv/andes_ae350.h
++++ b/include/hw/riscv/andes_ae350.h
+@@ -26,6 +26,7 @@
+ 
+ #include "hw/dma/atcdmac300.h"
+ #include "hw/net/atfmac100.h"
++#include "hw/sd/atfsdc010.h"
+ 
+ #define ANDES_CPUS_MAX 4
+ 
+diff --git a/include/hw/sd/atfsdc010.h b/include/hw/sd/atfsdc010.h
+new file mode 100644
+index 0000000000..6103836ee4
+--- /dev/null
++++ b/include/hw/sd/atfsdc010.h
+@@ -0,0 +1,66 @@
++/*
++ * Andes Secure Digital (SD) host controller, ATFSDC010.
++ *
++ * Copyright (c) 2018 Andes Tech. Corp.
++ *
++ * This work is licensed under the terms of the GNU GPL, version 2 or later.
++ * See the COPYING file in the top-level directory.
++ */
++
++#ifndef HW_ATFSDC010_H
++#define HW_ATFSDC010_H
++
++#include "hw/sysbus.h"
++#include "hw/sd/sd.h"
++
++#define TYPE_ATFSDC010 "atfsdc010"
++#define ATFSDC010(obj) \
++        OBJECT_CHECK(ATFSDC010State, (obj), TYPE_ATFSDC010)
++
++#define TYPE_ATFSDC010_BUS "atfsdc010-bus"
++
++#define ATFSDC_REVISION     0x00030107
++#define ATFSDC010_FIFO_LEN  16
++
++typedef struct {
++    SysBusDevice parent_obj;
++
++    MemoryRegion mmio;
++    SDBus sdbus;
++
++    uint32_t cmd;
++    uint32_t cmdarg;
++    uint32_t response[4];
++    uint32_t respcmd;
++    uint32_t datactrl;
++    uint32_t datatimer;
++    uint32_t datalength;
++    uint32_t status;
++          /* clear register */
++    uint32_t mask;
++    uint32_t power;
++    uint32_t clock;
++    uint32_t buswidth;
++          /* data window */
++    uint32_t mmc_irq_resptime;
++    uint32_t gpo;
++    uint32_t sdio_ctrl1;
++    uint32_t sdio_ctrl2;
++    uint32_t sdio_status;
++    uint32_t feature;
++    uint32_t revision;
++
++    uint32_t base;
++    uint32_t datacnt;
++    int fifo_pos;
++    int fifo_len;
++    uint32_t fifo[ATFSDC010_FIFO_LEN];
++    qemu_irq irq;
++    /* GPIO outputs for 'card is readonly' and 'card inserted' */
++    qemu_irq card_readonly;
++    qemu_irq card_inserted;
++} ATFSDC010State;
++
++DeviceState *atfsdc010_create(hwaddr addr, qemu_irq irq);
++
++#endif
+-- 
+2.34.1
+

@@ -1,0 +1,42 @@
+From 7959e020400b834612b4274b78879fff33d2da8b Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 6 May 2024 16:49:48 +0800
+Subject: [PATCH 234/241] target/riscv: Raise an exception when CoDense insn
+ finds a 16-bit insn.
+
+The Andes Codense will check the insn which is fetched from insn table.
+If the insn is 16-bit encoding, an illegal instruction exception is raised.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/insn_trans/trans_xandescodenseops.c.inc | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/insn_trans/trans_xandescodenseops.c.inc b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+index 52442a6888..10e192e6ce 100644
+--- a/target/riscv/insn_trans/trans_xandescodenseops.c.inc
++++ b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+@@ -134,6 +134,11 @@ static bool andes_v5_gen_codense_exec_it(DisasContext *ctx,
+         insn = cpu_ldl_code(env, vaddr);
+     }
+ 
++    /* 16-bit instruction is not allowed in the instruction table */
++    if ((insn & 0x3) != 0x3) {
++        gen_exception_illegal(ctx);
++    }
++
+     /*
+      * Execute(insn)
+      * do as the replaced instruction, even exceptions,
+@@ -149,7 +154,7 @@ static bool andes_v5_gen_codense_exec_it(DisasContext *ctx,
+         imm = next_pc - ctx->base.pc_next;
+         gen_jal(ctx, rd, imm);
+     } else {
+-        /* JARL done as SPEC already */
++        /* JALR done as SPEC already */
+         /* presume ctx->pc_succ_insn not changed in any ISA extension */
+         return decode_opc_andes(env, ctx, insn);
+     }
+-- 
+2.34.1
+

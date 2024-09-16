@@ -1,0 +1,141 @@
+From 960e562b27ceee235f93f382493c7d2d8adfd21c Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Wed, 21 Feb 2024 09:11:03 +0800
+Subject: [PATCH 206/241] gdbstub: Fix and enhance 'nds read_acedesc' command
+ feature
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ gdbstub/gdbstub.c | 43 +++++++++++++++++++++----------------------
+ 1 file changed, 21 insertions(+), 22 deletions(-)
+
+diff --git a/gdbstub/gdbstub.c b/gdbstub/gdbstub.c
+index bcf74f78f2..4e4af6b6b4 100644
+--- a/gdbstub/gdbstub.c
++++ b/gdbstub/gdbstub.c
+@@ -1412,12 +1412,13 @@ static void handle_v_kill(GArray *params, void *user_ctx)
+ }
+ 
+ #ifndef CONFIG_USER_ONLY
+-static int gdb_vfile_packet(char const *packet, int packet_size)
++static int gdb_vfile_packet(const char *packet, int packet_size)
+ {
+-    char const *parse;
++    const char *parse;
+     int fd;
+     int ret;
+-    int offset;
++    uint32_t offset;
++    uint32_t count;
+     char *pathname;
+     int pathname_len;
+     char reply[16];
+@@ -1444,14 +1445,14 @@ static int gdb_vfile_packet(char const *packet, int packet_size)
+         pathname[pathname_len] = 0;
+ 
+         parse = separator + 1;
+-        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&flags);
++        ret = qemu_strtoi(parse, &parse, 16, &flags);
+         if (ret < 0) {
+             return -1;
+         }
+         if (*(parse++) != ',') {
+             return -1;
+         }
+-        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&mode);
++        ret = qemu_strtoui(parse, &parse, 16, &mode);
+         if (ret < 0) {
+             return -1;
+         }
+@@ -1474,7 +1475,7 @@ static int gdb_vfile_packet(char const *packet, int packet_size)
+             return -1;
+         }
+ 
+-        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&fd);
++        ret = qemu_strtoi(parse, &parse, 16, &fd);
+         if (ret < 0) {
+             return -1;
+         }
+@@ -1497,7 +1498,7 @@ static int gdb_vfile_packet(char const *packet, int packet_size)
+             return -1;
+         }
+ 
+-        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&fd);
++        ret = qemu_strtoi(parse, &parse, 16, &fd);
+         if (ret < 0) {
+             return -1;
+         }
+@@ -1509,15 +1510,13 @@ static int gdb_vfile_packet(char const *packet, int packet_size)
+         return 0;
+ 
+     } else if (strncmp(packet, "pread:", 6) == 0) {
+-        int count;
+-        char *read_buffer;
+         parse = packet + 6;
+ 
+         if (*parse == '\0') {
+             return -1;
+         }
+ 
+-        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&fd);
++        ret = qemu_strtoi(parse, &parse, 16, &fd);
+         if (ret < 0) {
+             return -1;
+         }
+@@ -1525,7 +1524,7 @@ static int gdb_vfile_packet(char const *packet, int packet_size)
+             return -1;
+         }
+ 
+-        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&count);
++        ret = qemu_strtoui(parse, &parse, 16, &count);
+         if (ret < 0) {
+             return -1;
+         }
+@@ -1533,33 +1532,33 @@ static int gdb_vfile_packet(char const *packet, int packet_size)
+             return -1;
+         }
+ 
+-        ret = qemu_strtoul(parse, &parse, 16, (unsigned long *)&offset);
++        ret = qemu_strtoui(parse, &parse, 16, &offset);
+         if (ret < 0) {
+             return -1;
+         }
+ 
+-        read_buffer = malloc(count);
++        g_autofree char *read_buffer = g_try_malloc(count);
++        if (read_buffer == NULL) {
++            return -1;
++        }
++
+         ret = pread(fd, read_buffer, count, offset);
+ 
+-        char *reply2 = malloc(16 + ret * 2); /* payload and escape characters */
+         if (ret == -1) {
+-            snprintf(reply2, 16, "F-1,%x", errno);
+-            gdb_put_packet(reply2);
++            snprintf(reply, 16, "F-1,%x", errno);
++            gdb_put_packet(reply);
+         } else {
+-            snprintf(reply2, 16, "F%x;", ret);
+-            g_string_assign(gdbserver_state.str_buf, reply2);
++            snprintf(reply, 16, "F%x;", ret);
++            g_string_assign(gdbserver_state.str_buf, reply);
+             if (ret > 0) {
+                 gdb_memtox(gdbserver_state.str_buf, read_buffer, ret);
+                 gdb_put_packet_binary(gdbserver_state.str_buf->str,
+                                       gdbserver_state.str_buf->len, false);
+             } else {
+-                gdb_put_packet(reply2);
++                gdb_put_packet(reply);
+             }
+         }
+ 
+-        free(read_buffer);
+-        free(reply2);
+-
+         return 0;
+ 
+     }
+-- 
+2.34.1
+

@@ -1,0 +1,65 @@
+From 0e9929490fe4c4cd95f5f0d3087f8f5010b711b9 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Thu, 25 Jan 2024 10:43:00 +0800
+Subject: [PATCH 191/241] target/riscv: Do not ignore dmode field when trigger
+ type is disabled
+
+Refer to RISC-V debug specification version 1.0, when the trigger type
+is disabled, the remaining bits in this register, except for dmode, are
+ignored. Therefore, we should honor dmode field when user write the
+value of tdata1 into disabled trigger.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index bca6ee21a7..405ec370fd 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -88,6 +88,19 @@ static inline target_ulong extract_trigger_type(CPURISCVState *env,
+     }
+ }
+ 
++static inline bool extract_tdata1_dmode(CPURISCVState *env, target_ulong tdata1)
++{
++    switch (riscv_cpu_mxl(env)) {
++    case MXL_RV32:
++        return extract32(tdata1, 27, 1);
++    case MXL_RV64:
++    case MXL_RV128:
++        return extract64(tdata1, 59, 1);
++    default:
++        g_assert_not_reached();
++    }
++}
++
+ static inline target_ulong get_trigger_type(CPURISCVState *env,
+                                             target_ulong trigger_index)
+ {
+@@ -1090,6 +1103,7 @@ target_ulong tdata_csr_read(CPURISCVState *env, int tdata_index)
+ void tdata_csr_write(CPURISCVState *env, int tdata_index, target_ulong val)
+ {
+     int trigger_type;
++    bool dmode;
+ 
+     if (tdata_index == TDATA1 && val == 0) {
+         /* Write 0 to tdata1 disables the trigger. */
+@@ -1127,6 +1141,13 @@ void tdata_csr_write(CPURISCVState *env, int tdata_index, target_ulong val)
+         break;
+     case TRIGGER_TYPE_DISABLED:
+         switch (tdata_index) {
++        case TDATA1:
++            /* Bits are ignored except for dmode field. */
++            dmode = extract_tdata1_dmode(env, val);
++            env->tdata1[env->trigger_cur] = build_tdata1(env,
++                                                         TRIGGER_TYPE_DISABLED,
++                                                         dmode, 0);
++            break;
+         case TDATA2:
+             if (val != env->tdata2[env->trigger_cur]) {
+                 env->tdata2[env->trigger_cur] = val;
+-- 
+2.34.1
+

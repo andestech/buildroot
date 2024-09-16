@@ -1,0 +1,85 @@
+From bcd2f6db6a139599289a49a9c1e181c3af6afec3 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Thu, 24 Aug 2023 15:42:18 +0800
+Subject: [PATCH 071/241] atcsmu: Make smu have a named path under soc
+
+Other device can use the named path to modify smu register.
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/andes_ae350.c          |  5 ++++-
+ hw/riscv/andes_atcsmu.c         | 10 ++++------
+ include/hw/riscv/andes_atcsmu.h |  6 +++---
+ 3 files changed, 11 insertions(+), 10 deletions(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index acd6768865..1da3f9bfb3 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -393,7 +393,7 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     }
+ 
+     /* SMU */
+-    andes_atcsmu_create(memmap[ANDES_AE350_SMU].base,
++    andes_atcsmu_create(&s->atcsmu, memmap[ANDES_AE350_SMU].base,
+                         memmap[ANDES_AE350_SMU].size);
+ 
+     /* SMC */
+@@ -481,6 +481,9 @@ static void andes_ae350_soc_instance_init(Object *obj)
+     object_initialize_child(obj, "atfmac100", &s->atfmac100,
+                                 TYPE_ATFMAC100);
+ 
++    object_initialize_child(obj, "atcsmu", &s->atcsmu,
++                            TYPE_ANDES_ATCSMU);
++
+     object_initialize_child(obj, "cpus", &s->cpus, TYPE_RISCV_HART_ARRAY);
+     object_property_set_str(OBJECT(&s->cpus), "cpu-type",
+                             machine->cpu_type, &error_abort);
+diff --git a/hw/riscv/andes_atcsmu.c b/hw/riscv/andes_atcsmu.c
+index a3ea336406..96ed594564 100644
+--- a/hw/riscv/andes_atcsmu.c
++++ b/hw/riscv/andes_atcsmu.c
+@@ -214,13 +214,11 @@ type_init(andes_atcsmu_register_types)
+ /*
+  * Create ATCSMU device.
+  */
+-DeviceState*
+-andes_atcsmu_create(hwaddr addr, hwaddr size)
++void
++andes_atcsmu_create(AndesATCSMUState *dev, hwaddr addr, hwaddr size)
+ {
+-    DeviceState *dev = qdev_new(TYPE_ANDES_ATCSMU);
+-    qdev_prop_set_uint32(dev, "smu-base-addr", addr);
+-    qdev_prop_set_uint32(dev, "smu-base-size", size);
++    qdev_prop_set_uint32(DEVICE(dev), "smu-base-addr", addr);
++    qdev_prop_set_uint32(DEVICE(dev), "smu-base-size", size);
+     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, addr);
+-    return dev;
+ }
+diff --git a/include/hw/riscv/andes_atcsmu.h b/include/hw/riscv/andes_atcsmu.h
+index b77e9a4359..ae73ffff4e 100644
+--- a/include/hw/riscv/andes_atcsmu.h
++++ b/include/hw/riscv/andes_atcsmu.h
+@@ -39,7 +39,7 @@ typedef struct AndesATCSMUState {
+     uint32_t smu_base_addr;
+     uint32_t smu_base_size;
+     uint32_t scratch;
+-    pcs_registers pcs_regs[8];
++    pcs_registers pcs_regs[4];
+ } AndesATCSMUState;
+ 
+ #define ATCSMU_WRSR         0x10
+@@ -77,7 +77,7 @@ typedef struct AndesATCSMUState {
+ #define SMUCMD_POWEROFF     0x5a
+ #define SMUCMD_STANDBY      0x55
+ 
+-DeviceState *
+-andes_atcsmu_create(hwaddr addr, hwaddr size);
++void
++andes_atcsmu_create(AndesATCSMUState *dev, hwaddr addr, hwaddr size);
+ 
+ #endif
+-- 
+2.34.1
+

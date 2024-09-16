@@ -1,0 +1,28 @@
+From c22271599c3699e34ebf3c4b993c395d5a667b9c Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Mon, 29 Jan 2024 13:45:15 +0800
+Subject: [PATCH 198/241] target/riscv: Add checking riscv_timebase_freq value
+ which is coming from readconfig
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/pmu.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/pmu.c b/target/riscv/pmu.c
+index 6f0973ec64..4c10c27f08 100644
+--- a/target/riscv/pmu.c
++++ b/target/riscv/pmu.c
+@@ -553,6 +553,8 @@ void riscv_pmu_init(RISCVCPU *cpu, Error **errp)
+ 
+     uint64_t val;
+     if (andes_config_number(ANDES_CONFIG_ID_CPU, "freq", &val)) {
+-        riscv_timebase_freq = val;
++        if (riscv_timebase_freq) {
++            riscv_timebase_freq = val;
++        }
+     }
+ }
+-- 
+2.34.1
+

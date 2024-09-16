@@ -1,0 +1,101 @@
+From 771d87b6f0d4ca9918eac1f3a0328ff92d73649d Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 20 Mar 2024 10:33:23 +0800
+Subject: [PATCH 216/241] target/riscv: Fix HSP bugs.
+
+1. The write mask of mhsp_ctl should be adjusted according to priv mode.
+2. If an overflow/underflow exception occurs, should clean both
+   OVF_EN bit and UDF_EN bit.
+3. If an overflow/underflow exception occurs, the sp should not be updated.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/andes_helper.c |  6 ++++--
+ target/riscv/csr_andes.c    | 13 ++++++++++++-
+ target/riscv/csr_andes.h    |  1 -
+ target/riscv/translate.c    |  9 +++++++++
+ 4 files changed, 25 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/andes_helper.c b/target/riscv/andes_helper.c
+index 9e3772d3d1..e98c341f9e 100644
+--- a/target/riscv/andes_helper.c
++++ b/target/riscv/andes_helper.c
+@@ -184,7 +184,8 @@ void helper_andes_v5_hsp_check(CPURISCVState *env, target_ulong val)
+             if ((mhsp_ctl & MASK_MHSP_CTL_OVF_EN) != 0) {
+                 /* overflow mode */
+                 if (val < msp_bound) {
+-                    mhsp_ctl = set_field(mhsp_ctl, MASK_MHSP_CTL_OVF_EN, 0);
++                    mhsp_ctl = set_field(mhsp_ctl,
++                        MASK_MHSP_CTL_OVF_EN | MASK_MHSP_CTL_UDF_EN, 0);
+                     csr_ops[CSR_MHSP_CTL].write(env, CSR_MHSP_CTL, mhsp_ctl);
+                     riscv_raise_exception(env, RISCV_EXCP_ANDES_STACK_OVERFLOW,
+                                           GETPC());
+@@ -193,7 +194,8 @@ void helper_andes_v5_hsp_check(CPURISCVState *env, target_ulong val)
+             if ((mhsp_ctl & MASK_MHSP_CTL_UDF_EN) != 0) {
+                 /* underflow mode */
+                 if (val > msp_base) {
+-                    mhsp_ctl = set_field(mhsp_ctl, MASK_MHSP_CTL_UDF_EN, 0);
++                    mhsp_ctl = set_field(mhsp_ctl,
++                        MASK_MHSP_CTL_OVF_EN | MASK_MHSP_CTL_UDF_EN, 0);
+                     csr_ops[CSR_MHSP_CTL].write(env, CSR_MHSP_CTL, mhsp_ctl);
+                     riscv_raise_exception(env, RISCV_EXCP_ANDES_STACK_UNDERFLOW,
+                                           GETPC());
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 40320e9d6a..539415ceca 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -512,7 +512,18 @@ static RISCVException write_mpft_ctl(CPURISCVState *env, int csrno,
+ static RISCVException write_mhsp_ctl(CPURISCVState *env, int csrno,
+                                      target_ulong val)
+ {
+-    env->andes_csr.csrno[CSR_MHSP_CTL] = val & WRITE_MASK_CSR_MHSP_CTL;
++    target_ulong wmask = MASK_MHSP_CTL_OVF_EN | MASK_MHSP_CTL_UDF_EN |
++                         MASK_MHSP_CTL_SCHM;
++    if (riscv_has_ext(env, RVU)) {
++        wmask |= MASK_MHSP_CTL_U;
++    }
++    if (riscv_has_ext(env, RVS)) {
++        wmask |= MASK_MHSP_CTL_S;
++    }
++    if (riscv_has_ext(env, RVM)) {
++        wmask |= MASK_MHSP_CTL_M;
++    }
++    env->andes_csr.csrno[CSR_MHSP_CTL] = val & wmask;
+     return RISCV_EXCP_NONE;
+ }
+ 
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 836eda7eaf..ef1799c584 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -349,7 +349,6 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define WRITE_MASK_CSR_UITB_32              0xFFFFFFFC
+ #define WRITE_MASK_CSR_UITB_64              0xFFFFFFFFFFFFFFFC
+ #define WRITE_MASK_CSR_MPFT_CTL             0x1F0
+-#define WRITE_MASK_CSR_MHSP_CTL             0x3F
+ #define WRITE_MASK_CSR_COUNTER              0x7D
+ #define WRITE_MASK_CSR_HPMEVENT             0x1FF
+ #define WRITE_MASK_CSR_SLIE                 0x10F0000
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index b730091d44..0e47d903d7 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -366,6 +366,15 @@ static TCGv dest_gpr(DisasContext *ctx, int reg_num)
+     if (reg_num == 0 || get_olen(ctx) < TARGET_LONG_BITS) {
+         return tcg_temp_new();
+     }
++    /*
++     * andes hardware stack protection(hsp) will check any sp update.
++     * if an overflow or underflow exception occurs, sp should NOT be updated.
++     * so we retrun a temp variable to make sure the update will NOT occur
++     * before gen_set_gpr().
++     */
++    if (reg_num == 2 && ctx->cfg_ptr->ext_XAndesV5Ops) {
++        return tcg_temp_new();
++    }
+     return cpu_gpr[reg_num];
+ }
+ 
+-- 
+2.34.1
+

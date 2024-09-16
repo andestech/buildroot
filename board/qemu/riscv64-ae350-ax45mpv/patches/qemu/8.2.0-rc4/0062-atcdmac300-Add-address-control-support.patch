@@ -1,0 +1,77 @@
+From 3d6dcdc59646b4ab8d331a1e7a32c2d1749d8577 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Tue, 22 Aug 2023 16:49:58 +0800
+Subject: [PATCH 062/241] atcdmac300: Add address control support
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/dma/atcdmac300.c         | 18 ++++++++++++++----
+ include/hw/dma/atcdmac300.h |  4 +++-
+ 2 files changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/hw/dma/atcdmac300.c b/hw/dma/atcdmac300.c
+index d22269ab7d..87824f6922 100644
+--- a/hw/dma/atcdmac300.c
++++ b/hw/dma/atcdmac300.c
+@@ -87,7 +87,8 @@ static void atcdmac300_write(void *opaque, hwaddr offset, uint64_t value,
+     int ch = 0;
+     uint64_t buf[ATCDMAC300_MAX_BURST_SIZE];
+     int64_t remain_size, copy_size;
+-    uint64_t src_addr, dst_addr, src_width, burst_size;
++    uint64_t src_addr, dst_addr, src_width, burst_size,
++             src_addr_ctl, dst_addr_ctl;
+ 
+     LOG("@@@ atcdmac300_write()=0x%lx, value=0x%lx\n", offset, value);
+ 
+@@ -116,6 +117,10 @@ static void atcdmac300_write(void *opaque, hwaddr offset, uint64_t value,
+                             & CHAN_CTL_SRC_BURST_SZ_MASK;
+             src_addr = (s->chan[ch].ChnSrcAddrH << 32) | s->chan[ch].ChnSrcAddr;
+             dst_addr = (s->chan[ch].ChnDstAddrH << 32) | s->chan[ch].ChnDstAddr;
++            src_addr_ctl = (s->chan[ch].ChnCtrl >> CHAN_CTL_SRC_ADDR_CTL)
++                            & CHAN_CTL_SRC_ADDR_CTL_MASK;
++            dst_addr_ctl = (s->chan[ch].ChnCtrl >> CHAN_CTL_DST_ADDR_CTL)
++                            & CHAN_CTL_DST_ADDR_CTL_MASK;
+ 
+             src_width = (1 << src_width);
+             burst_size = (1 << burst_size);
+@@ -138,13 +143,18 @@ static void atcdmac300_write(void *opaque, hwaddr offset, uint64_t value,
+ 
+                     remain_size -= copy_size;
+ 
+-                    if (!cpu_physical_memory_is_io(src_addr)) {
++                    if (src_addr_ctl == 0) {
+                         src_addr += copy_size;
+                     }
+-
+-                    if (!cpu_physical_memory_is_io(dst_addr)) {
++                    if (src_addr_ctl == 1) {
++                        src_addr -= copy_size;
++                    }
++                    if (dst_addr_ctl == 0) {
+                         dst_addr += copy_size;
+                     }
++                    if (dst_addr_ctl == 1) {
++                        dst_addr -= copy_size;
++                    }
+                 }
+             }
+ 
+diff --git a/include/hw/dma/atcdmac300.h b/include/hw/dma/atcdmac300.h
+index 27607186c7..8ae14aecdd 100644
+--- a/include/hw/dma/atcdmac300.h
++++ b/include/hw/dma/atcdmac300.h
+@@ -73,8 +73,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(ATCDMAC300State, ATCDMAC300)
+ #define CHAN_CTL_ENABLE                 0
+ 
+ #define CHAN_CTL_SRC_WIDTH_MASK         0x7
+-#define CHAN_CTL_DST_WIDTH_MASK         0xf
++#define CHAN_CTL_DST_WIDTH_MASK         0x7
+ #define CHAN_CTL_SRC_BURST_SZ_MASK      0xf
++#define CHAN_CTL_SRC_ADDR_CTL_MASK      0x3
++#define CHAN_CTL_DST_ADDR_CTL_MASK      0x3
+ 
+ #define ATCDMAC300_CHAN_CTL             0x40
+ #define ATCDMAC300_CHAN_TRAN_SZ         0x44
+-- 
+2.34.1
+

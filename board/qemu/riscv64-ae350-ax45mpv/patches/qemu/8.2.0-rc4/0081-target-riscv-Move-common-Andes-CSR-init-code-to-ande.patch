@@ -1,0 +1,184 @@
+From 1ff6ce5f2b0f5c4f8e1f12ac24d59b85baa7e42b Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 13 Sep 2023 10:21:42 +0800
+Subject: [PATCH 081/241] target/riscv: Move common Andes CSR init code to
+ andes_csr_reset_common(). (#61)
+
+To sync the initial values of Andes CSRs and the reset value of Andes
+CSRs, we move the related initial code to the cpu reset hold function.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/61
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c       | 49 +++++++++++++++++++++-------------------
+ target/riscv/cpu.h       |  1 +
+ target/riscv/csr_andes.c | 14 ------------
+ target/riscv/csr_andes.h |  3 +++
+ 4 files changed, 30 insertions(+), 37 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index ddcaf70592..3699c76786 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -540,17 +540,6 @@ static void andes_cpu_lm_realize(DeviceState *dev)
+     env->mask_dlm->ops = &local_mem_ops;
+     env->mask_dlm->opaque = env->mask_dlm;
+ 
+-    int ilmsz = 31 - __builtin_clz(env->ilm_size) - 9;
+-    int dlmsz = 31 - __builtin_clz(env->dlm_size) - 9;
+-
+-    /* initial local memory csr */
+-    env->andes_csr.csrno[CSR_MICM_CFG] |= (1UL << V5_MICM_CFG_ILMB) |
+-                                     (ilmsz << V5_MICM_CFG_ILMSZ);
+-    env->andes_csr.csrno[CSR_MDCM_CFG] |= (1UL << V5_MDCM_CFG_DLMB) |
+-                                     (dlmsz << V5_MDCM_CFG_DLMSZ);
+-
+-    env->andes_csr.csrno[CSR_MILMB] = env->ilm_base | env->ilm_default_enable;
+-    env->andes_csr.csrno[CSR_MDLMB] = env->dlm_base | env->dlm_default_enable;
+     if (env->ilm_default_enable) {
+         memory_region_add_subregion_overlap(env->cpu_as_root, env->ilm_base,
+                                     env->mask_ilm, 1);
+@@ -699,9 +688,7 @@ static void rv128_base_cpu_init(Object *obj)
+ #endif
+ }
+ 
+-typedef void (*fp_csr_init_fn)(AndesCsr *);
+-
+-static void rv64_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init)
++static void rv64_andes_common_cpu_init(Object *obj, fp_spec_csr_init_fn spec_csr_init)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+@@ -718,10 +705,8 @@ static void rv64_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+ #endif
+ 
+     /* Setup Andes Custom CSR */
++    env->andes_spec_csr_init = spec_csr_init;
+     andes_csr_init(&env->andes_csr);
+-    if (spec_csr_init != NULL) {
+-        spec_csr_init(&env->andes_csr);
+-    }
+     andes_vec_init(&env->andes_vec);
+ 
+ #ifndef CONFIG_USER_ONLY
+@@ -1016,10 +1001,8 @@ static void rv32_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+ #endif
+ 
+     /* Setup Andes Custom CSR */
++    env->andes_spec_csr_init = spec_csr_init;
+     andes_csr_init(&env->andes_csr);
+-    if (spec_csr_init != NULL) {
+-        spec_csr_init(&env->andes_csr);
+-    }
+     andes_vec_init(&env->andes_vec);
+ 
+ #ifndef CONFIG_USER_ONLY
+@@ -1314,15 +1297,38 @@ static void andes_csr_reset_common(CPURISCVState *env)
+     env->andes_csr.csrno[CSR_UITB] = 0;
+     env->andes_csr.csrno[CSR_MMSC_CFG] = (1UL << V5_MMSC_CFG_ECD) |
+                                          (1UL << V5_MMSC_CFG_LMSLVP)|
++                                         (1UL << V5_MMSC_CFG_CCTLCSR)|
+                                          (1UL << V5_MMSC_CFG_PPMA);
+     env->andes_csr.csrno[CSR_MMISC_CTL] = (1UL << V5_MMISC_CTL_BRPE) |
+                                           (1UL << V5_MMISC_CTL_MSA_OR_UNA);
+     env->andes_csr.csrno[CSR_MCACHE_CTL] =
+                     (1UL << V5_MCACHE_CTL_IC_FIRST_WORD) |
+                     (1UL << V5_MCACHE_CTL_DC_FIRST_WORD);
++    env->andes_csr.csrno[CSR_MICM_CFG] = (3 << V5_MICM_CFG_ISZ);
++    env->andes_csr.csrno[CSR_MDCM_CFG] = (3 << V5_MDCM_CFG_DSZ);
++
++    /* initial local memory csr */
++    int ilmsz = 31 - __builtin_clz(env->ilm_size) - 9;
++    int dlmsz = 31 - __builtin_clz(env->dlm_size) - 9;
++
++    env->andes_csr.csrno[CSR_MICM_CFG] = (3 << V5_MICM_CFG_ISZ) |
++                                         (1UL << V5_MICM_CFG_ILMB) |
++                                         (ilmsz << V5_MICM_CFG_ILMSZ);
++    env->andes_csr.csrno[CSR_MDCM_CFG] = (3 << V5_MDCM_CFG_DSZ) |
++                                         (1UL << V5_MDCM_CFG_DLMB) |
++                                         (dlmsz << V5_MDCM_CFG_DLMSZ);
++
++    env->andes_csr.csrno[CSR_MILMB] = env->ilm_base | env->ilm_default_enable;
++    env->andes_csr.csrno[CSR_MDLMB] = env->dlm_base | env->dlm_default_enable;
++
+     /* all-one reset value */
+     env->andes_csr.csrno[CSR_MSP_BOUND] = ~((target_ulong)0);
+     env->andes_csr.csrno[CSR_MSP_BASE] = ~((target_ulong)0);
++
++    // spec_csr_init() may overwrite previous CSR values
++    if (env->andes_spec_csr_init != NULL) {
++        env->andes_spec_csr_init(&env->andes_csr);
++    }
+ }
+ #endif
+ 
+@@ -1386,9 +1392,6 @@ static void riscv_cpu_reset_hold(Object *obj)
+     }
+     env->pmp_state.num_rules = 0;
+ 
+-    env->andes_csr.csrno[CSR_MILMB] = env->ilm_base | env->ilm_default_enable;
+-    env->andes_csr.csrno[CSR_MDLMB] = env->dlm_base | env->dlm_default_enable;
+-
+     bool locked = false;
+     if (!qemu_mutex_iothread_locked()) {
+         locked = true;
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index 1f38957590..3e1da7233a 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -420,6 +420,7 @@ struct CPUArchState {
+ 
+     /* Add Vender CSR */
+     AndesCsr andes_csr;
++    fp_spec_csr_init_fn andes_spec_csr_init;
+ 
+     /* Andes vectored-plic */
+     AndesVec andes_vec;
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 3c3c4df1f9..9d4828fa8f 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -691,20 +691,6 @@ void andes_csr_init(AndesCsr *andes_csr)
+             riscv_set_csr_ops(i, &andes_csr_ops[i]);
+         }
+     }
+-
+-    /* Initilaize Andes CSRs default value */
+-    andes_csr->csrno[CSR_UITB] = 0;
+-    andes_csr->csrno[CSR_MMSC_CFG] =    (1UL << V5_MMSC_CFG_ECD) |
+-                                        (1UL << V5_MMSC_CFG_LMSLVP) |
+-                                        (1UL << V5_MMSC_CFG_PPMA);
+-    andes_csr->csrno[CSR_MMISC_CTL] =   (1UL << V5_MMISC_CTL_BRPE) |
+-                                        (1UL << V5_MMISC_CTL_MSA_OR_UNA);
+-    andes_csr->csrno[CSR_MCACHE_CTL] =  (1UL << V5_MCACHE_CTL_IC_FIRST_WORD) |
+-                                        (1UL << V5_MCACHE_CTL_DC_FIRST_WORD);
+-    andes_csr->csrno[CSR_MSP_BOUND] =   ~((target_ulong)0);  // all-one reset value
+-    andes_csr->csrno[CSR_MSP_BASE] =    ~((target_ulong)0);
+-    andes_csr->csrno[CSR_MICM_CFG] = (3 << V5_MICM_CFG_ISZ);
+-    andes_csr->csrno[CSR_MDCM_CFG] = (3 << V5_MDCM_CFG_DSZ);
+ }
+ 
+ void andes_vec_init(AndesVec *andes_vec)
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 1bb02a5870..67942b765e 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -14,9 +14,12 @@ typedef struct AndesVec {
+     int vectored_irq_s;
+ } AndesVec;
+ 
++typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
++
+ /* mmsc_cfg */
+ #define V5_MMSC_CFG_ECD                     3
+ #define V5_MMSC_CFG_LMSLVP                  14
++#define V5_MMSC_CFG_CCTLCSR                 16
+ #define V5_MMSC_CFG_PPMA                    30
+ #define V5_MMSC_CFG_L2C                     46
+ #define V5_MMSC_CFG2_L2C                    14
+-- 
+2.34.1
+

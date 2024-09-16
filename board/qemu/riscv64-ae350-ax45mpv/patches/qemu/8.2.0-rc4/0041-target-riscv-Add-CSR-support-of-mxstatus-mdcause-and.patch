@@ -1,0 +1,235 @@
+From 25e47ed3e046aa3033150092b35b17c0676f0745 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Thu, 17 Aug 2023 16:51:43 +0800
+Subject: [PATCH 041/241] target/riscv: Add CSR support of mxstatus, mdcause,
+ and sdcause.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c       | 78 ++++++++++++++++++++++++++--------
+ target/riscv/csr_andes.h       |  9 ++++
+ target/riscv/csr_andes_nx45v.c | 53 +++++++++++++++++++++--
+ 3 files changed, 120 insertions(+), 20 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 79bdc80458..fe20a5ed55 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -131,6 +131,17 @@ static RISCVException veccfg(CPURISCVState *env, int csrno)
+     return RISCV_EXCP_ILLEGAL_INST;
+ }
+ 
++static RISCVException bf16cvt(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (riscv_has_ext(env, RVV)) {
++        if (get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_BF16CVT) == 1) {
++            return RISCV_EXCP_NONE;
++        }
++    }
++    return RISCV_EXCP_ILLEGAL_INST;
++}
++
+ static RISCVException pmnds(CPURISCVState *env, int csrno)
+ {
+     AndesCsr *csr = &env->andes_csr;
+@@ -286,6 +297,36 @@ static RISCVException write_mcounter(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException write_mxstatus(CPURISCVState *env, int csrno,
++                                     target_ulong val)
++{
++    env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_MXSTATUS;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_smdcause(CPURISCVState *env, int csrno,
++                                     target_ulong val)
++{
++    bool interrupt = false;
++    target_ulong mcause;
++    csr_ops[CSR_MCAUSE].read(env, CSR_MCAUSE, &mcause);
++
++    if (riscv_cpu_mxl(env) == MXL_RV32) {
++        interrupt = get_field(mcause, MASK_MCAUSE_INTERRUPT_32);
++    }
++    else {
++        interrupt = get_field(mcause, MASK_MCAUSE_INTERRUPT_64);
++    }
++
++    if (interrupt) {
++        env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_MDCAUSE;
++    }
++    else {
++        env->andes_csr.csrno[csrno] = val;
++    }
++    return RISCV_EXCP_NONE;
++}
++
+ static RISCVException read_scounter(CPURISCVState *env, int csrno,
+                                     target_ulong *val)
+ {
+@@ -498,25 +539,27 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+ 
+     /* Hardware Stack Protection & Recording */
+     [CSR_MHSP_CTL]     = { "mhsp_ctl",            hsp, read_csr,
+-                                                       write_mhsp_ctl     },
+-    [CSR_MSP_BOUND]    = { "msp_bound",           hsp, read_csr, write_csr},
+-    [CSR_MSP_BASE]     = { "msp_base",            hsp, read_csr, write_csr},
+-    [CSR_MXSTATUS]     = { "mxstatus",            any, read_csr, write_csr},
+-    [CSR_MDCAUSE]      = { "mdcause",             any, read_csr, write_csr},
+-    [CSR_MSLIDELEG]    = { "mslideleg",           any, read_csr, write_csr},
+-    [CSR_MSAVESTATUS]  = { "msavestatus",         any, read_csr, write_csr},
+-    [CSR_MSAVEEPC1]    = { "msaveepc1",           any, read_csr, write_csr},
+-    [CSR_MSAVECAUSE1]  = { "msavecause1",         any, read_csr, write_csr},
+-    [CSR_MSAVEEPC2]    = { "msaveepc2",           any, read_csr, write_csr},
+-    [CSR_MSAVECAUSE2]  = { "msavecause2",         any, read_csr, write_csr},
+-    [CSR_MSAVEDCAUSE1] = { "msavedcause1",        any, read_csr, write_csr},
+-    [CSR_MSAVEDCAUSE2] = { "msavedcause2",        any, read_csr, write_csr},
++                                                       write_mhsp_ctl         },
++    [CSR_MSP_BOUND]    = { "msp_bound",           hsp, read_csr, write_csr    },
++    [CSR_MSP_BASE]     = { "msp_base",            hsp, read_csr, write_csr    },
++    [CSR_MXSTATUS]     = { "mxstatus",            any, read_csr,
++                                                       write_mxstatus         },
++    [CSR_MDCAUSE]      = { "mdcause",             any, read_csr,
++                                                       write_smdcause         },
++    [CSR_MSLIDELEG]    = { "mslideleg",           any, read_csr, write_csr    },
++    [CSR_MSAVESTATUS]  = { "msavestatus",         any, read_csr, write_csr    },
++    [CSR_MSAVEEPC1]    = { "msaveepc1",           any, read_csr, write_csr    },
++    [CSR_MSAVECAUSE1]  = { "msavecause1",         any, read_csr, write_csr    },
++    [CSR_MSAVEEPC2]    = { "msaveepc2",           any, read_csr, write_csr    },
++    [CSR_MSAVECAUSE2]  = { "msavecause2",         any, read_csr, write_csr    },
++    [CSR_MSAVEDCAUSE1] = { "msavedcause1",        any, read_csr, write_csr    },
++    [CSR_MSAVEDCAUSE2] = { "msavedcause2",        any, read_csr, write_csr    },
+ 
+     /* Control CSRs */
+     [CSR_MPFT_CTL]  = { "mpft_ctl",               pft, read_csr,
+-                                                       write_mpft_ctl     },
+-    [CSR_MMISC_CTL] = { "mmisc_ctl",              any, read_csr, write_csr},
+-    [CSR_MCLK_CTL]  = { "mclk_ctl",               any, read_csr, write_csr},
++                                                       write_mpft_ctl         },
++    [CSR_MMISC_CTL] = { "mmisc_ctl",              any, read_csr, write_csr    },
++    [CSR_MCLK_CTL]  = { "mclk_ctl",               bf16cvt, read_csr, write_csr},
+ 
+     /* Counter related CSRs */
+     [CSR_MCOUNTERWEN]    = { "mcounterwen",       pmnds, read_csr,
+@@ -572,7 +615,8 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     /* Supervisor trap registers */
+     [CSR_SLIE]    = { "slie",                     smode, read_csr, write_sliep},
+     [CSR_SLIP]    = { "slip",                     smode, read_csr, write_sliep},
+-    [CSR_SDCAUSE] = { "sdcause",                  smode, read_csr, write_csr  },
++    [CSR_SDCAUSE] = { "sdcause",                  smode, read_csr,
++                                                         write_smdcause       },
+ 
+     /* Supervisor counter registers */
+     [CSR_SCOUNTERINTEN]  = { "scounterinten",     pmnds, read_scounter,
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index a307588b65..61d8b24f8c 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -95,6 +95,12 @@ typedef struct AndesVec {
+ #define MASK_MMSC_CFG_2_CORE_PCLUS          (0x0F << 16)
+ #define MASK_MMSC_CFG_2_RVARCH              (0x01 << 20)
+ 
++/* mcause */
++#define MASK_MCAUSE_EXCEPTION_CODE_32       (~MASK_MCAUSE_INTERRUPT_32)
++#define MASK_MCAUSE_INTERRUPT_32            (1 << 31)
++#define MASK_MCAUSE_EXCEPTION_CODE_64       (~MASK_MCAUSE_INTERRUPT_64)
++#define MASK_MCAUSE_INTERRUPT_64            ((uint64_t)1 << 63)
++
+ #define WRITE_MASK_CSR_MECC_CODE            0xFF
+ #define WRITE_MASK_CSR_UITB_32              0xFFFFFFFC
+ #define WRITE_MASK_CSR_UITB_64              0xFFFFFFFFFFFFFFFC
+@@ -109,6 +115,9 @@ typedef struct AndesVec {
+ #define WRITE_MASK_CSR_MFIOB_64             0xFFFFFFFFFFFFFC3F
+ #define WRITE_MASK_CSR_UCODE                0x1
+ #define WRITE_MASK_CSR_MVEC_CFG             0x3FFFF
++#define WRITE_MASK_CSR_MXSTATUS             0x3FF
++#define WRITE_MASK_CSR_MDCAUSE              0x7F
++#define WRITE_MASK_CSR_SDCAUSE              0x7F
+ 
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+diff --git a/target/riscv/csr_andes_nx45v.c b/target/riscv/csr_andes_nx45v.c
+index 86f6ffc75f..cbcb99554a 100644
+--- a/target/riscv/csr_andes_nx45v.c
++++ b/target/riscv/csr_andes_nx45v.c
+@@ -3,9 +3,14 @@
+ #include "csr_andes.h"
+ 
+ 
+-#define MASK_MMSC_CFG_L2CMP_CFG    ((uint64_t)0x1 << 45)
+-#define MASK_MMSC_CFG_L2C          ((uint64_t)0x1 << 46)
+-#define MASK_MMSC_CFG_IOCP         ((uint64_t)0x1 << 47)
++#define MASK_MMSC_CFG_L2CMP_CFG          ((uint64_t)0x1 << 45)
++#define MASK_MMSC_CFG_L2C                ((uint64_t)0x1 << 46)
++#define MASK_MMSC_CFG_IOCP               ((uint64_t)0x1 << 47)
++
++#define WRITE_MASK_CSR_MXSTATUS_NX45V        0x3F
++#define WRITE_MASK_CSR_MDCAUSE_EXCP_NX45V    0x7
++#define WRITE_MASK_CSR_MDCAUSE_INT_NX45V     0x67
++
+ 
+ static RISCVException read_mmsc_cfg_nx45v(CPURISCVState *env, int csrno,
+                                           target_ulong *val)
+@@ -29,6 +34,42 @@ static RISCVException read_mmsc_cfg_nx45v(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException write_mclk_ctl_nx45v(CPURISCVState *env, int csrno,
++                                           target_ulong val)
++{
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_mxstatus_nx45v(CPURISCVState *env, int csrno,
++                                           target_ulong val)
++{
++    env->andes_csr.csrno[CSR_MXSTATUS] = val & WRITE_MASK_CSR_MXSTATUS_NX45V;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_smdcause_nx45v(CPURISCVState *env, int csrno,
++                                           target_ulong val)
++{
++    bool interrupt = false;
++    target_ulong mcause;
++    csr_ops[CSR_MCAUSE].read(env, CSR_MCAUSE, &mcause);
++
++    if (riscv_cpu_mxl(env) == MXL_RV32) {
++        interrupt = get_field(mcause, MASK_MCAUSE_INTERRUPT_32);
++    }
++    else {
++        interrupt = get_field(mcause, MASK_MCAUSE_INTERRUPT_64);
++    }
++
++    if (interrupt) {
++        env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_MDCAUSE_EXCP_NX45V;
++    }
++    else {
++        env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_MDCAUSE_INT_NX45V;
++    }
++    return RISCV_EXCP_NONE;
++}
++
+ void andes_spec_csr_init_nx45v(AndesCsr *andes_csr)
+ {
+     uint64_t mmsc_init_val = MASK_MMSC_CFG_ECD   | MASK_MMSC_CFG_PFT
+@@ -40,6 +81,12 @@ void andes_spec_csr_init_nx45v(AndesCsr *andes_csr)
+                            | MASK_MMSC_CFG_VL4
+                            | MASK_MMSC_CFG_VECCFG;
+     andes_csr->csrno[CSR_MMSC_CFG] = (target_ulong)mmsc_init_val;
++    andes_csr->csrno[CSR_MCLK_CTL] = 0;
++    andes_csr->csrno[CSR_MXSTATUS] = 0;
+ 
+     andes_csr_ops[CSR_MMSC_CFG].read = read_mmsc_cfg_nx45v;
++    andes_csr_ops[CSR_MCLK_CTL].write = write_mclk_ctl_nx45v;
++    andes_csr_ops[CSR_MXSTATUS].write = write_mxstatus_nx45v;
++    andes_csr_ops[CSR_MDCAUSE].write = write_smdcause_nx45v;
++    andes_csr_ops[CSR_SDCAUSE].write = write_smdcause_nx45v;
+ }
+\ No newline at end of file
+-- 
+2.34.1
+

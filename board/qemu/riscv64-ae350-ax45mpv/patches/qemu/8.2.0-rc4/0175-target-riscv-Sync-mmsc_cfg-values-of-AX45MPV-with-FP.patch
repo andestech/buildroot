@@ -1,0 +1,28 @@
+From 71c8d4a85310521ee3b85679191182c5670edb54 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 15 Jan 2024 17:11:22 +0800
+Subject: [PATCH 175/241] target/riscv: Sync mmsc_cfg values of AX45MPV with
+ FPGA. (#106)
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index ce4076d8ec..32a49c9f0b 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -793,6 +793,9 @@ static void rv64_andes_ax45mpv_cpu_init(Object *obj)
+     cfg->vext_spec = g_strdup("v1.0");
+     cfg->vlen  = 1024;
+     cfg->elen  = 64;
++
++    cfg->ext_zfh = true;
++    env->andes_csr.csrno[CSR_MMSC_CFG] = 0x801079174005b038;
+ }
+ 
+ static void rv64_andes_ax65_cpu_init(Object *obj)
+-- 
+2.34.1
+

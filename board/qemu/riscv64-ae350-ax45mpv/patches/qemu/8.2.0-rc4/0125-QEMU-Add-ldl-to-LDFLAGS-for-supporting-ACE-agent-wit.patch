@@ -1,0 +1,28 @@
+From 8722c1073569bbda81e0d9762768b41169ff1379 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 30 Nov 2023 13:28:51 +0800
+Subject: [PATCH 125/241] QEMU: Add '-ldl' to LDFLAGS for supporting ACE agent
+ with compiling by older gcc
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ meson.build | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/meson.build b/meson.build
+index 6c77d9687d..9014257804 100644
+--- a/meson.build
++++ b/meson.build
+@@ -433,6 +433,9 @@ if get_option('fuzzing')
+   endif
+ endif
+ 
++#For Andes ACE support since uses dysyn/dlopen, older gcc needs this flag
++qemu_ldflags += ['-ldl']
++
+ add_global_arguments(qemu_common_flags, native: false, language: all_languages)
+ add_global_link_arguments(qemu_ldflags, native: false, language: all_languages)
+ 
+-- 
+2.34.1
+

@@ -1,0 +1,134 @@
+From 3005fe878360a78a09a6f1a23a8a923997f49804 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Tue, 21 May 2024 09:04:11 +0800
+Subject: [PATCH 237/241] target/riscv: Fixed the hart_id assumption that is
+ made in the PLMT. (#143)
+
+Signed-off-by: Murali Dixit <muralid@meta.com>
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/143
+Reviewed-by: Foxes Cheng-Hung Hung <foxes687@andestech.com>
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ hw/riscv/andes_ae350.c        |  3 ++-
+ hw/timer/andes_plmt.c         |  9 ++++++---
+ include/hw/timer/andes_plmt.h | 26 ++++++++++++++++++++++----
+ 3 files changed, 30 insertions(+), 8 deletions(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 099e7953ab..e73ef23445 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -392,7 +392,8 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+                       machine->smp.cpus,
+                       ANDES_PLMT_TIME_BASE,
+                       ANDES_PLMT_TIMECMP_BASE,
+-                      ANDES_PLMT_TIMEBASE_FREQ);
++                      ANDES_PLMT_TIMEBASE_FREQ,
++                      ANDES_PLMT_HART_BASE);
+ 
+     plic_hart_config =
+         init_hart_config(ANDES_PLIC_HART_CONFIG, machine->smp.cpus);
+diff --git a/hw/timer/andes_plmt.c b/hw/timer/andes_plmt.c
+index ce4cb22d0d..fe97f851f2 100644
+--- a/hw/timer/andes_plmt.c
++++ b/hw/timer/andes_plmt.c
+@@ -97,7 +97,7 @@ andes_plmt_read(void *opaque, hwaddr addr, unsigned size)
+     if ((addr >= (plmt->timecmp_base)) &&
+         (addr < (plmt->timecmp_base + (plmt->num_harts << 3)))) {
+         /* %8=0:timecmp_lo, %8=4:timecmp_hi */
+-        size_t hartid = (addr - plmt->timecmp_base) >> 3;
++        size_t hartid = plmt->hart_base + ((addr - plmt->timecmp_base) >> 3);
+         CPUState *cpu = qemu_get_cpu(hartid);
+         CPURISCVState *env = cpu_env(cpu);
+         if (!env) {
+@@ -132,7 +132,7 @@ andes_plmt_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+     if ((addr >= (plmt->timecmp_base)) &&
+         (addr < (plmt->timecmp_base + (plmt->num_harts << 3)))) {
+         /* %8=0:timecmp_lo, %8=4:timecmp_hi */
+-        size_t hartid = (addr - plmt->timecmp_base) >> 3;
++        size_t hartid = plmt->hart_base + ((addr - plmt->timecmp_base) >> 3);
+         CPUState *cpu = qemu_get_cpu(hartid);
+         CPURISCVState *env = cpu_env(cpu);
+         if (!env) {
+@@ -179,6 +179,7 @@ static Property andes_plmt_properties[] = {
+     DEFINE_PROP_UINT32("timecmp-base", AndesPLMTState, timecmp_base, 0),
+     DEFINE_PROP_UINT32("aperture-size", AndesPLMTState, aperture_size, 0),
+     DEFINE_PROP_UINT32("timebase-freq", AndesPLMTState, timebase_freq, 0),
++    DEFINE_PROP_UINT32("hart-base", AndesPLMTState, hart_base, 0),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+@@ -223,7 +224,8 @@ type_init(andes_plmt_register_types)
+  */
+ DeviceState*
+ andes_plmt_create(hwaddr addr, hwaddr size, uint32_t num_harts,
+-    uint32_t time_base, uint32_t timecmp_base, uint32_t timebase_freq)
++    uint32_t time_base, uint32_t timecmp_base, uint32_t timebase_freq,
++    uint32_t hart_base)
+ {
+     int i;
+     DeviceState *dev = qdev_new(TYPE_ANDES_PLMT);
+@@ -234,6 +236,7 @@ andes_plmt_create(hwaddr addr, hwaddr size, uint32_t num_harts,
+     qdev_prop_set_uint32(dev, "timecmp-base", timecmp_base);
+     qdev_prop_set_uint32(dev, "aperture-size", size);
+     qdev_prop_set_uint32(dev, "timebase-freq", timebase_freq);
++    qdev_prop_set_uint32(dev, "hart-base", hart_base);
+     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+ 
+     for (i = 0; i < num_harts; i++) {
+diff --git a/include/hw/timer/andes_plmt.h b/include/hw/timer/andes_plmt.h
+index 2e2858573b..2177adcbd1 100644
+--- a/include/hw/timer/andes_plmt.h
++++ b/include/hw/timer/andes_plmt.h
+@@ -19,23 +19,41 @@
+ #ifndef HW_ANDES_PLMT_H
+ #define HW_ANDES_PLMT_H
+ 
+-#include "hw/intc/riscv_aclint.h"
+-
+ #define TYPE_ANDES_PLMT "riscv.andes.plmt"
+ 
+-#define AndesPLMTState RISCVAclintMTimerState
+ #define ANDES_PLMT(obj) \
+     OBJECT_CHECK(AndesPLMTState, (obj), TYPE_ANDES_PLMT)
+ 
++typedef struct AndesPLMTState {
++    /*< private >*/
++    SysBusDevice parent_obj;
++    uint64_t time_delta;
++    uint64_t *timecmp;
++    QEMUTimer **timers;
++
++    /*< public >*/
++    MemoryRegion mmio;
++    uint32_t hartid_base;
++    uint32_t num_harts;
++    uint32_t timecmp_base;
++    uint32_t time_base;
++    uint32_t aperture_size;
++    uint32_t timebase_freq;
++    uint32_t hart_base;
++    qemu_irq *timer_irqs;
++} AndesPLMTState;
++
+ DeviceState *
+ andes_plmt_create(hwaddr addr, hwaddr size, uint32_t num_harts,
+-    uint32_t time_base, uint32_t timecmp_base, uint32_t timebase_freq);
++                  uint32_t time_base, uint32_t timecmp_base,
++                  uint32_t timebase_freq, uint32_t hart_base);
+ 
+ enum {
+     ANDES_PLMT_TIME_BASE = 0,
+     ANDES_PLMT_TIMECMP_BASE = 8,
+     ANDES_PLMT_MMIO_SIZE = 0x100000,
+     ANDES_PLMT_TIMEBASE_FREQ = 0x3938700, /* 60MHZ */
++    ANDES_PLMT_HART_BASE = 0,
+ };
+ 
+ #endif
+-- 
+2.34.1
+

@@ -1,0 +1,33 @@
+From 6a8e914ec80761e8bc5638c645d843ea0869a715 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 7 Feb 2024 14:28:01 +0800
+Subject: [PATCH 203/241] target/riscv: Initializie UXL/SXL of mstatus only
+ when the U/S mode is implemented.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 129d0fac8d..9c24659ce1 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1547,8 +1547,12 @@ static void riscv_cpu_reset_hold(Object *obj)
+          * The reset status of SXL/UXL is undefined, but mstatus is WARL
+          * and we must ensure that the value after init is valid for read.
+          */
+-        env->mstatus = set_field(env->mstatus, MSTATUS64_SXL, env->misa_mxl);
+-        env->mstatus = set_field(env->mstatus, MSTATUS64_UXL, env->misa_mxl);
++        if (riscv_has_ext(env, RVS)) {
++            env->mstatus = set_field(env->mstatus, MSTATUS64_SXL, env->misa_mxl);
++        }
++        if (riscv_has_ext(env, RVU)) {
++            env->mstatus = set_field(env->mstatus, MSTATUS64_UXL, env->misa_mxl);
++        }
+         if (riscv_has_ext(env, RVH)) {
+             env->vsstatus = set_field(env->vsstatus,
+                                       MSTATUS64_SXL, env->misa_mxl);
+-- 
+2.34.1
+

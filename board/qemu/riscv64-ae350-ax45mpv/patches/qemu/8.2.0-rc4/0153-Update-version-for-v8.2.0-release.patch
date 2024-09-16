@@ -1,0 +1,20 @@
+From 21ca7650a8e905ec90837154d6cbbb04e190f2ab Mon Sep 17 00:00:00 2001
+From: Stefan Hajnoczi <stefanha@redhat.com>
+Date: Tue, 19 Dec 2023 09:44:49 -0500
+Subject: [PATCH 153/241] Update version for v8.2.0 release
+
+Signed-off-by: Stefan Hajnoczi <stefanha@redhat.com>
+---
+ VERSION | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/VERSION b/VERSION
+index b7b9592dbd..fbb9ea12de 100644
+--- a/VERSION
++++ b/VERSION
+@@ -1 +1 @@
+-8.1.94
++8.2.0
+-- 
+2.34.1
+

@@ -1,0 +1,53 @@
+From 14a10586cee073e9850ea5dfb02246f999994d20 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 29 Apr 2024 15:45:54 +0800
+Subject: [PATCH 228/241] target/riscv: Fix the check of vectored PLIC external
+ interrupts. (#140)
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/140
+Reviewed-by: Ethan Zhan-Yang Chen <ethan84@andestech.com>
+Reviewed-by: Alvin Che-Chia Chang <alvinga@andestech.com>
+Reviewed-by: Foxes Hung <foxes687@andestech.com>
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 6a93b30f36..9ff9fdab85 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -1021,13 +1021,13 @@ void andes_cpu_do_interrupt_post(CPUState *cs)
+      *       interrupt pending conditions
+      */
+     if (csr->csrno[CSR_MMISC_CTL] & (1UL << V5_MMISC_CTL_VEC_PLIC)) {
+-        int interrupt = env->mcause >> ((sizeof(env->mcause) << 3) - 1);
+         /*
+          * Only in interrupt need to process pc with mtvec since
+          * this case should get handler PC by mtvec with source ID
+          */
+-        if (interrupt) {
+-            if (env->priv == PRV_M) {
++        if (env->priv == PRV_M) {
++            /* check the MSB of mcause */
++            if (env->mcause >> ((sizeof(env->mcause) << 3) - 1)) {
+                 int irq_id = vec->vectored_irq_m;
+                 vec->vectored_irq_m = 0;
+                 target_ulong base = env->mtvec;
+@@ -1043,7 +1043,10 @@ void andes_cpu_do_interrupt_post(CPUState *cs)
+                     riscv_cpu_update_mip(env, MIP_MEIP, 0);
+                 }
+                 return;
+-            } else if (env->priv == PRV_S) {
++            }
++        } else if (env->priv == PRV_M) {
++            /* check the MSB of scause */
++            if (env->scause >> ((sizeof(env->scause) << 3) - 1)) {
+                 int irq_id = vec->vectored_irq_s;
+                 vec->vectored_irq_s = 0;
+                 target_ulong base = env->stvec;
+-- 
+2.34.1
+

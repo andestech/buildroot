@@ -1,0 +1,90 @@
+From f5f83015b1d138ffed56dec1b7933d959d6c7b35 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 4 Aug 2023 16:00:26 +0800
+Subject: [PATCH 030/241] target/riscv: Add CSR availability check: mhsp_ctl,
+ msp_bound, msp_base,               mpft_ctl, uitb
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c | 43 +++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 38 insertions(+), 5 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 6cbe8bdeec..ee70030489 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -29,6 +29,39 @@ static RISCVException ecc(CPURISCVState *env, int csrno)
+     }
+ }
+ 
++static RISCVException ecd(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_ECD) == 0) {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++    else {
++        return RISCV_EXCP_NONE;
++    }
++}
++
++static RISCVException pft(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_PFT) == 0) {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++    else {
++        return RISCV_EXCP_NONE;
++    }
++}
++
++static RISCVException hsp(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_HSP) == 0) {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++    else {
++        return RISCV_EXCP_NONE;
++    }
++}
++
+ static RISCVException write_mcache_ctl(CPURISCVState *env,
+                                        int csrno,
+                                        target_ulong val)
+@@ -181,10 +214,10 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_MFIOB]          = { "mfiob",             any, read_csr, write_csr},
+ 
+     /* Hardware Stack Protection & Recording */
+-    [CSR_MHSP_CTL]     = { "mhsp_ctl",            any, read_csr,
++    [CSR_MHSP_CTL]     = { "mhsp_ctl",            hsp, read_csr,
+                                                        write_mhsp_ctl     },
+-    [CSR_MSP_BOUND]    = { "msp_bound",           any, read_csr, write_csr},
+-    [CSR_MSP_BASE]     = { "msp_base",            any, read_csr, write_csr},
++    [CSR_MSP_BOUND]    = { "msp_bound",           hsp, read_csr, write_csr},
++    [CSR_MSP_BASE]     = { "msp_base",            hsp, read_csr, write_csr},
+     [CSR_MXSTATUS]     = { "mxstatus",            any, read_csr, write_csr},
+     [CSR_MDCAUSE]      = { "mdcause",             any, read_csr, write_csr},
+     [CSR_MSLIDELEG]    = { "mslideleg",           any, read_csr, write_csr},
+@@ -197,7 +230,7 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_MSAVEDCAUSE2] = { "msavedcause2",        any, read_csr, write_csr},
+ 
+     /* Control CSRs */
+-    [CSR_MPFT_CTL]  = { "mpft_ctl",               any, read_csr,
++    [CSR_MPFT_CTL]  = { "mpft_ctl",               pft, read_csr,
+                                                        write_mpft_ctl     },
+     [CSR_MMISC_CTL] = { "mmisc_ctl",              any, read_csr, write_csr},
+     [CSR_MCLK_CTL]  = { "mclk_ctl",               any, read_csr, write_csr},
+@@ -270,7 +303,7 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+ 
+     /* =================== AndeStar V5 user mode CSRs =================== */
+     /* User mode control registers */
+-    [CSR_UITB]           = { "uitb",              any, read_csr, write_uitb},
++    [CSR_UITB]           = { "uitb",              ecd, read_csr, write_uitb},
+     [CSR_UCODE]          = { "ucode",             any, read_csr, write_csr},
+     [CSR_UDCAUSE]        = { "udcause",           any, read_csr, write_csr},
+     [CSR_UCCTLBEGINADDR] = { "ucctlbeginaddr",    any, read_csr, write_csr},
+-- 
+2.34.1
+

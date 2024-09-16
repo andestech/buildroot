@@ -1,0 +1,32 @@
+From 5bd5eb4ad861b0938fc8a5db67b650c63d91e197 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Tue, 27 Feb 2024 15:03:37 +0800
+Subject: [PATCH 210/241] hw: dma: atcdmac300: De-assert the DMA IRQ signal
+ when no interrupt
+
+When all the bits of DMA interrupt status register are zero, we should
+de-assert the DMA IRQ signal which is connected with the interrupt
+controller. Otherwise, back-to-back interrupts will be triggered.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ hw/dma/atcdmac300.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/hw/dma/atcdmac300.c b/hw/dma/atcdmac300.c
+index fccc1ada25..329b72e722 100644
+--- a/hw/dma/atcdmac300.c
++++ b/hw/dma/atcdmac300.c
+@@ -102,6 +102,9 @@ static void atcdmac300_write(void *opaque, hwaddr offset, uint64_t value,
+     case ATCDMAC300_INT_STATUS:
+         /* Write 1 to clear */
+         s->IntStatus &= ~value;
++        if (!s->IntStatus) {
++            qemu_irq_lower(s->irq);
++        }
+         break;
+     case ATCDMAC300_DMAC_CTRL:
+         atcdmac300_dma_reset(s);
+-- 
+2.34.1
+

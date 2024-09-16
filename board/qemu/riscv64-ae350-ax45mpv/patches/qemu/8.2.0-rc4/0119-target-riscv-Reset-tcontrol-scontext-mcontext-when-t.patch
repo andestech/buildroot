@@ -1,0 +1,29 @@
+From 663baa3e5c3914c30d75fd2e3ad27b40ede0ad28 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Mon, 20 Nov 2023 15:31:08 +0800
+Subject: [PATCH 119/241] target/riscv: Reset tcontrol/scontext/mcontext when
+ trigger init
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index 7e79515bcc..ed5d7478f8 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -1194,5 +1194,10 @@ void riscv_trigger_reset_hold(CPURISCVState *env)
+         env->cpu_breakpoint[i] = NULL;
+         env->cpu_watchpoint[i] = NULL;
+         timer_del(env->itrigger_timer[i]);
++        env->itrigger_timer[i] = timer_new_ns(QEMU_CLOCK_VIRTUAL,
++                                              riscv_itrigger_timer_cb, env);
++        env->tcontrol = 0;
++        env->scontext = 0;
++        env->mcontext = 0;
+     }
+ }
+-- 
+2.34.1
+

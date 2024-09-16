@@ -1,0 +1,253 @@
+From f5f182d8c79bf544e8d6fc9d8abb80a6ef36acba Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 15 Sep 2023 17:10:50 +0800
+Subject: [PATCH 082/241] target/riscv: Fixes git rebase with v8.1.0 issues
+ hw/watchdog: Fixed git rebase with v8.1.0 issue
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ hw/watchdog/meson.build                       |  2 +-
+ target/riscv/cpu.c                            |  5 ++---
+ target/riscv/cpu_cfg.h                        |  1 -
+ target/riscv/cpu_helper.c                     | 22 +------------------
+ .../insn_trans/trans_xandescodenseops.c.inc   |  8 +++----
+ .../riscv/insn_trans/trans_xandesv5ops.c.inc  |  6 +++--
+ target/riscv/meson.build                      |  2 +-
+ target/riscv/pmp.c                            | 15 +++++++++++++
+ target/riscv/translate.c                      | 15 +++++--------
+ 9 files changed, 34 insertions(+), 42 deletions(-)
+
+diff --git a/hw/watchdog/meson.build b/hw/watchdog/meson.build
+index 5cb5cb9ed3..999ef14b35 100644
+--- a/hw/watchdog/meson.build
++++ b/hw/watchdog/meson.build
+@@ -8,4 +8,4 @@ system_ss.add(when: 'CONFIG_ASPEED_SOC', if_true: files('wdt_aspeed.c'))
+ system_ss.add(when: 'CONFIG_WDT_IMX2', if_true: files('wdt_imx2.c'))
+ system_ss.add(when: 'CONFIG_WDT_SBSA', if_true: files('sbsa_gwdt.c'))
+ specific_ss.add(when: 'CONFIG_PSERIES', if_true: files('spapr_watchdog.c'))
+-softmmu_ss.add(when: 'CONFIG_ATCWDT200', if_true: files('atcwdt200.c'))
++system_ss.add(when: 'CONFIG_ATCWDT200', if_true: files('atcwdt200.c'))
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 3699c76786..dd2c70145e 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -698,7 +698,7 @@ static void rv64_andes_common_cpu_init(Object *obj, fp_spec_csr_init_fn spec_csr
+     }
+     riscv_cpu_add_user_properties(obj);
+     register_andes_cpu_props(obj);
+-    set_priv_version(env, PRIV_VERSION_1_12_0);
++    env->priv_ver = PRIV_VERSION_1_12_0;
+ 
+ #ifndef CONFIG_USER_ONLY
+     set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_SV48);
+@@ -772,7 +772,6 @@ static void rv64_andes_ax45mpv_cpu_init(Object *obj)
+     cfg->ext_zbs = true;
+ 
+     /* Vector */
+-    cfg->ext_v = true;
+     cfg->vext_spec = g_strdup("v1.0");
+     cfg->vlen  = 1024;
+     cfg->elen  = 64;
+@@ -994,7 +993,7 @@ static void rv32_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+     }
+     riscv_cpu_add_user_properties(obj);
+     register_andes_cpu_props(obj);
+-    set_priv_version(env, PRIV_VERSION_1_12_0);
++    env->priv_ver = PRIV_VERSION_1_12_0;
+ 
+ #ifndef CONFIG_USER_ONLY
+     set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_SV32);
+diff --git a/target/riscv/cpu_cfg.h b/target/riscv/cpu_cfg.h
+index 1cfe4746b0..9681d4231f 100644
+--- a/target/riscv/cpu_cfg.h
++++ b/target/riscv/cpu_cfg.h
+@@ -133,7 +133,6 @@ struct RISCVCPUConfig {
+     bool ext_xtheadmempair;
+     bool ext_xtheadsync;
+     bool ext_XVentanaCondOps;
+-    bool ext_XVentanaCondOps;
+     bool ext_XAndesV5Ops;
+     bool ext_XAndesCodenseOps;
+ 
+diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
+index 27c47fe8e4..38a47dac2a 100644
+--- a/target/riscv/cpu_helper.c
++++ b/target/riscv/cpu_helper.c
+@@ -766,27 +766,7 @@ static int get_physical_address_pmp(CPURISCVState *env, int *prot, hwaddr addr,
+     }
+ 
+     *prot = pmp_priv_to_page_prot(pmp_priv);
+-    if (tlb_size != NULL) {
+-        target_ulong tlb_sa = addr & ~(TARGET_PAGE_SIZE - 1);
+-        target_ulong tlb_ea = tlb_sa + TARGET_PAGE_SIZE - 1;
+-        if (pmp_index != MAX_RISCV_PMPS) {
+-            *tlb_size = pmp_get_tlb_size(env, pmp_index, tlb_sa, tlb_ea);
+-        } else if (env->andes_csr.csrno[CSR_MILMB] & 0x1) {
+-            if (env->ilm_base <= tlb_sa &&
+-                env->ilm_base + env->ilm_size - 1 >= tlb_ea) {
+-                *tlb_size = TARGET_PAGE_SIZE;
+-            } else {
+-                *tlb_size = 1;
+-            }
+-        } else if (env->andes_csr.csrno[CSR_MDLMB] & 0x1) {
+-            if (env->dlm_base <= tlb_sa &&
+-                env->dlm_base + env->dlm_size - 1 >= tlb_ea) {
+-                *tlb_size = TARGET_PAGE_SIZE;
+-            } else {
+-                *tlb_size = 1;
+-            }
+-        }
+-    }
++
+     return TRANSLATE_SUCCESS;
+ }
+ 
+diff --git a/target/riscv/insn_trans/trans_xandescodenseops.c.inc b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+index df90eab780..5a329cf9cc 100644
+--- a/target/riscv/insn_trans/trans_xandescodenseops.c.inc
++++ b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+@@ -14,7 +14,7 @@ static void decode_opc_andes(CPURISCVState *env,
+      * that are tested in-order until a decoder matches onto the opcode.
+      */
+     static const struct {
+-        bool (*guard_func)(DisasContext *);
++        bool (*guard_func)(const RISCVCPUConfig *);
+         bool (*decode_func)(DisasContext *, uint32_t);
+     } decoders[] = {
+         { always_true_p,  decode_insn32 },
+@@ -23,7 +23,7 @@ static void decode_opc_andes(CPURISCVState *env,
+     };
+ 
+     static const struct {
+-        bool (*guard_func)(DisasContext *);
++        bool (*guard_func)(const RISCVCPUConfig *);
+         bool (*decode_func)(DisasContext *, uint16_t);
+     } decoders_16[] = {
+         { always_true_p,  decode_insn16 },
+@@ -39,7 +39,7 @@ static void decode_opc_andes(CPURISCVState *env,
+             ctx->opcode = opcode16;
+ 
+             for (size_t i = 0; i < ARRAY_SIZE(decoders_16); ++i) {
+-                if (decoders_16[i].guard_func(ctx) &&
++                if (decoders_16[i].guard_func(ctx->cfg_ptr) &&
+                     decoders_16[i].decode_func(ctx, opcode16)) {
+                     return;
+                 }
+@@ -48,7 +48,7 @@ static void decode_opc_andes(CPURISCVState *env,
+     } else {
+         ctx->opcode = opcode;
+         for (size_t i = 0; i < ARRAY_SIZE(decoders); ++i) {
+-            if (decoders[i].guard_func(ctx) &&
++            if (decoders[i].guard_func(ctx->cfg_ptr) &&
+                 decoders[i].decode_func(ctx, opcode)) {
+                 return;
+             }
+diff --git a/target/riscv/insn_trans/trans_xandesv5ops.c.inc b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+index 77d25beb14..c58bea9833 100644
+--- a/target/riscv/insn_trans/trans_xandesv5ops.c.inc
++++ b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+@@ -76,11 +76,13 @@ static void andes_v5_gen_branch_tcgv(DisasContext *ctx, uint32_t opc,
+         return;
+     }
+ 
+-    gen_goto_tb(ctx, 1, ctx->pc_succ_insn);
++    gen_goto_tb(ctx, 1, ctx->cur_insn_len);
+     gen_set_label(label); /* branch taken */
+     if (!has_ext(ctx, RVC) && ((ctx->base.pc_next + imm) & 0x3)) {
+         /* misaligned */
+-        gen_exception_inst_addr_mis(ctx);
++        TCGv target_pc = tcg_temp_new();
++        gen_pc_plus_diff(target_pc, ctx, imm);
++        gen_exception_inst_addr_mis(ctx, target_pc);
+     } else {
+         gen_goto_tb(ctx, 0, ctx->base.pc_next + imm);
+     }
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index 25896d0414..7034b7d43d 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -25,7 +25,7 @@ riscv_ss.add(files(
+   'm128_helper.c',
+   'crypto_helper.c',
+   'vcrypto_helper.c'
+-  'zce_helper.c'
++  'zce_helper.c',
+   'andes_helper.c',
+   'csr_andes.c',
+   'csr_andes_nx45v.c'
+diff --git a/target/riscv/pmp.c b/target/riscv/pmp.c
+index 162e88a90a..814ddd06c6 100644
+--- a/target/riscv/pmp.c
++++ b/target/riscv/pmp.c
+@@ -667,6 +667,21 @@ target_ulong pmp_get_tlb_size(CPURISCVState *env, target_ulong addr)
+         }
+     }
+ 
++    if (env->andes_csr.csrno[CSR_MILMB] & 0x1) {
++        if (env->ilm_base <= tlb_sa &&
++            env->ilm_base + env->ilm_size - 1 >= tlb_ea) {
++            return TARGET_PAGE_SIZE;
++        } else {
++            return 1;
++        }
++    } else if (env->andes_csr.csrno[CSR_MDLMB] & 0x1) {
++        if (env->dlm_base <= tlb_sa &&
++            env->dlm_base + env->dlm_size - 1 >= tlb_ea) {
++            return  TARGET_PAGE_SIZE;
++        } else {
++            return 1;
++        }
++    }
+     /*
+      * If no PMP entry matches the TLB page, the TLB page will also not be
+      * split into regions with different permissions by PMP so we set the size
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index 77cec14b90..39b8497c91 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -1079,13 +1079,6 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+     return cpu_ldl_code(env, pc);
+ }
+ 
+-/* Include the auto-generated decoder for 16 bit insn */
+-#include "decode-insn16.c.inc"
+-/* Include decoders for factored-out extensions */
+-#include "decode-XVentanaCondOps.c.inc"
+-#include "decode-XAndesV5Ops.c.inc"
+-#include "decode-XAndesCodenseOps.c.inc"
+-
+ /* Include insn module translation function */
+ #include "insn_trans/trans_rvi.c.inc"
+ #include "insn_trans/trans_rvm.c.inc"
+@@ -1115,6 +1108,10 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+ 
+ /* Include decoders for factored-out extensions */
+ #include "decode-XVentanaCondOps.c.inc"
++
++/* Include AndeStar V5 extensions */
++#include "decode-XAndesV5Ops.c.inc"
++#include "decode-XAndesCodenseOps.c.inc"
+ #include "insn_trans/trans_xandesv5ops.c.inc"
+ #include "insn_trans/trans_xandescodenseops.c.inc"
+ 
+@@ -1143,7 +1140,7 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
+     };
+ 
+     static const struct {
+-        bool (*guard_func)(DisasContext *);
++        bool (*guard_func)(const RISCVCPUConfig *);
+         bool (*decode_func)(DisasContext *, uint16_t);
+     } decoders_16[] = {
+         { always_true_p,  decode_insn16 },
+@@ -1160,7 +1157,7 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
+             ctx->opcode = opcode;
+ 
+             for (size_t i = 0; i < ARRAY_SIZE(decoders_16); ++i) {
+-                if (decoders_16[i].guard_func(ctx) &&
++                if (decoders_16[i].guard_func(ctx->cfg_ptr) &&
+                     decoders_16[i].decode_func(ctx, opcode)) {
+                     return;
+                 }
+-- 
+2.34.1
+

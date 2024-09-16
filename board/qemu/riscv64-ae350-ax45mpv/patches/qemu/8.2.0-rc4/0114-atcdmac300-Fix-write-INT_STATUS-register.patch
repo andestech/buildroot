@@ -1,0 +1,28 @@
+From 2fb1febca9d63b951b4c73176bb0daa1884ddb5f Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Wed, 22 Nov 2023 14:16:23 +0800
+Subject: [PATCH 114/241] atcdmac300: Fix write INT_STATUS register
+
+This register should be w1c per bit
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/dma/atcdmac300.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hw/dma/atcdmac300.c b/hw/dma/atcdmac300.c
+index fbb5683f4f..fccc1ada25 100644
+--- a/hw/dma/atcdmac300.c
++++ b/hw/dma/atcdmac300.c
+@@ -101,7 +101,7 @@ static void atcdmac300_write(void *opaque, hwaddr offset, uint64_t value,
+     switch (offset) {
+     case ATCDMAC300_INT_STATUS:
+         /* Write 1 to clear */
+-        s->IntStatus = 0;
++        s->IntStatus &= ~value;
+         break;
+     case ATCDMAC300_DMAC_CTRL:
+         atcdmac300_dma_reset(s);
+-- 
+2.34.1
+

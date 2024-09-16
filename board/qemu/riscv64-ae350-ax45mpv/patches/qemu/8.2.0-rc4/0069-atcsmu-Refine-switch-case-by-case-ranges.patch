@@ -1,0 +1,237 @@
+From 2b383fa518a485950bf97578e96aa9d4fbb8ae3a Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Thu, 31 Aug 2023 14:26:18 +0800
+Subject: [PATCH 069/241] atcsmu: Refine switch case by case ranges
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/andes_atcsmu.c | 182 ++++++++++------------------------------
+ 1 file changed, 44 insertions(+), 138 deletions(-)
+
+diff --git a/hw/riscv/andes_atcsmu.c b/hw/riscv/andes_atcsmu.c
+index 989f205fab..a3ea336406 100644
+--- a/hw/riscv/andes_atcsmu.c
++++ b/hw/riscv/andes_atcsmu.c
+@@ -76,6 +76,7 @@ static uint64_t
+ andes_atcsmu_read(void *opaque, hwaddr addr, unsigned size)
+ {
+     AndesATCSMUState *smu = ANDES_ATCSMU(opaque);
++    unsigned int idx;
+     switch (addr) {
+     case ATCSMU_WRSR:
+         return smu->wrsr;
+@@ -83,77 +84,29 @@ andes_atcsmu_read(void *opaque, hwaddr addr, unsigned size)
+     case ATCSMU_SCRATCH:
+         return smu->scratch;
+         break;
+-    case ATCSMU_HART0_RESET_VECTOR_LO:
+-        return reset_vector_read(0, 0);
+-        break;
+-    case ATCSMU_HART1_RESET_VECTOR_LO:
+-        return reset_vector_read(1, 0);
+-        break;
+-    case ATCSMU_HART2_RESET_VECTOR_LO:
+-        return reset_vector_read(2, 0);
+-        break;
+-    case ATCSMU_HART3_RESET_VECTOR_LO:
+-        return reset_vector_read(3, 0);
+-        break;
+-    case ATCSMU_HART4_RESET_VECTOR_LO:
+-        return reset_vector_read(4, 0);
+-        break;
+-    case ATCSMU_HART5_RESET_VECTOR_LO:
+-        return reset_vector_read(5, 0);
+-        break;
+-    case ATCSMU_HART6_RESET_VECTOR_LO:
+-        return reset_vector_read(6, 0);
+-        break;
+-    case ATCSMU_HART7_RESET_VECTOR_LO:
+-        return reset_vector_read(7, 0);
+-        break;
+-    case ATCSMU_HART0_RESET_VECTOR_HI:
+-        return reset_vector_read(0, 1);
+-        break;
+-    case ATCSMU_HART1_RESET_VECTOR_HI:
+-        return reset_vector_read(1, 1);
+-        break;
+-    case ATCSMU_HART2_RESET_VECTOR_HI:
+-        return reset_vector_read(2, 1);
+-        break;
+-    case ATCSMU_HART3_RESET_VECTOR_HI:
+-        return reset_vector_read(3, 1);
+-        break;
+-    case ATCSMU_HART4_RESET_VECTOR_HI:
+-        return reset_vector_read(4, 1);
+-        break;
+-    case ATCSMU_HART5_RESET_VECTOR_HI:
+-        return reset_vector_read(5, 1);
+-        break;
+-    case ATCSMU_HART6_RESET_VECTOR_HI:
+-        return reset_vector_read(6, 1);
+-        break;
+-    case ATCSMU_HART7_RESET_VECTOR_HI:
+-        return reset_vector_read(7, 1);
+-        break;
+-    case ATCSMU_PCS3_SCRATCH:
+-        return smu->pcs_regs[0].pcs_scratch;
+-        break;
+-    case ATCSMU_PCS4_SCRATCH:
+-        return smu->pcs_regs[1].pcs_scratch;
+-        break;
+-    case ATCSMU_PCS5_SCRATCH:
+-        return smu->pcs_regs[2].pcs_scratch;
+-        break;
+-    case ATCSMU_PCS6_SCRATCH:
+-        return smu->pcs_regs[3].pcs_scratch;
+-        break;
+-    case ATCSMU_PCS7_SCRATCH:
+-        return smu->pcs_regs[4].pcs_scratch;
+-        break;
+-    case ATCSMU_PCS8_SCRATCH:
+-        return smu->pcs_regs[5].pcs_scratch;
++    case ATCSMU_HART0_RESET_VECTOR_LO ... ATCSMU_HART3_RESET_VECTOR_HI:
++        if (addr < ATCSMU_HART0_RESET_VECTOR_HI) {
++            idx = (addr - ATCSMU_HART0_RESET_VECTOR_LO) >> 2;
++            return reset_vector_read(idx, 0);
++        } else {
++            idx = (addr - ATCSMU_HART0_RESET_VECTOR_HI) >> 2;
++            return reset_vector_read(idx, 1);
++        }
+         break;
+-    case ATCSMU_PCS9_SCRATCH:
+-        return smu->pcs_regs[6].pcs_scratch;
++    case ATCSMU_HART4_RESET_VECTOR_LO ... ATCSMU_HART7_RESET_VECTOR_HI:
++        if (addr < ATCSMU_HART4_RESET_VECTOR_HI) {
++            idx = ((addr - ATCSMU_HART4_RESET_VECTOR_LO) >> 2) + 4;
++            return reset_vector_read(idx, 0);
++        } else {
++            idx = ((addr - ATCSMU_HART4_RESET_VECTOR_HI) >> 2) + 4;
++            return reset_vector_read(idx, 1);
++        }
+         break;
+-    case ATCSMU_PCS10_SCRATCH:
+-        return smu->pcs_regs[7].pcs_scratch;
++    case ATCSMU_PCS3_SCRATCH ... ATCSMU_PCS10_SCRATCH:
++        idx = (addr - ATCSMU_PCS3_SCRATCH) >> 5;
++        if ((addr & 0x1f) == 0x4) {
++            return smu->pcs_regs[idx].pcs_scratch;
++        }
+         break;
+     default:
+         LOGGE("%s: Bad addr %x\n", __func__, (int)addr);
+@@ -165,6 +118,7 @@ static void
+ andes_atcsmu_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+ {
+     AndesATCSMUState *smu = ANDES_ATCSMU(opaque);
++    unsigned int idx;
+     switch (addr) {
+     case ATCSMU_WRSR:
+         smu->wrsr &= ~value;
+@@ -172,53 +126,23 @@ andes_atcsmu_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+     case ATCSMU_SCRATCH:
+         smu->scratch = value;
+         break;
+-    case ATCSMU_HART0_RESET_VECTOR_LO:
+-        reset_vector_write(0, value, 0);
+-        break;
+-    case ATCSMU_HART1_RESET_VECTOR_LO:
+-        reset_vector_write(1, value, 0);
+-        break;
+-    case ATCSMU_HART2_RESET_VECTOR_LO:
+-        reset_vector_write(2, value, 0);
+-        break;
+-    case ATCSMU_HART3_RESET_VECTOR_LO:
+-        reset_vector_write(3, value, 0);
+-        break;
+-    case ATCSMU_HART4_RESET_VECTOR_LO:
+-        reset_vector_write(4, value, 0);
+-        break;
+-    case ATCSMU_HART5_RESET_VECTOR_LO:
+-        reset_vector_write(5, value, 0);
+-        break;
+-    case ATCSMU_HART6_RESET_VECTOR_LO:
+-        reset_vector_write(6, value, 0);
+-        break;
+-    case ATCSMU_HART7_RESET_VECTOR_LO:
+-        reset_vector_write(7, value, 0);
+-        break;
+-    case ATCSMU_HART0_RESET_VECTOR_HI:
+-        reset_vector_write(0, value, 1);
+-        break;
+-    case ATCSMU_HART1_RESET_VECTOR_HI:
+-        reset_vector_write(1, value, 1);
+-        break;
+-    case ATCSMU_HART2_RESET_VECTOR_HI:
+-        reset_vector_write(2, value, 1);
+-        break;
+-    case ATCSMU_HART3_RESET_VECTOR_HI:
+-        reset_vector_write(3, value, 1);
+-        break;
+-    case ATCSMU_HART4_RESET_VECTOR_HI:
+-        reset_vector_write(4, value, 1);
+-        break;
+-    case ATCSMU_HART5_RESET_VECTOR_HI:
+-        reset_vector_write(5, value, 1);
+-        break;
+-    case ATCSMU_HART6_RESET_VECTOR_HI:
+-        reset_vector_write(6, value, 1);
++    case ATCSMU_HART0_RESET_VECTOR_LO ... ATCSMU_HART3_RESET_VECTOR_HI:
++        if (addr < ATCSMU_HART0_RESET_VECTOR_HI) {
++            idx = (addr - ATCSMU_HART0_RESET_VECTOR_LO) >> 2;
++            reset_vector_write(idx, value, 0);
++        } else {
++            idx = (addr - ATCSMU_HART0_RESET_VECTOR_HI) >> 2;
++            reset_vector_write(idx, value, 1);
++        }
+         break;
+-    case ATCSMU_HART7_RESET_VECTOR_HI:
+-        reset_vector_write(7, value, 1);
++    case ATCSMU_HART4_RESET_VECTOR_LO ... ATCSMU_HART7_RESET_VECTOR_HI:
++        if (addr < ATCSMU_HART4_RESET_VECTOR_HI) {
++            idx = ((addr - ATCSMU_HART4_RESET_VECTOR_LO) >> 2) + 4;
++            reset_vector_write(idx, value, 0);
++        } else {
++            idx = ((addr - ATCSMU_HART4_RESET_VECTOR_HI) >> 2) + 4;
++            reset_vector_write(idx, value, 1);
++        }
+         break;
+     case ATCSMU_SMUCR:
+         switch (value) {
+@@ -231,29 +155,11 @@ andes_atcsmu_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+             break;
+         }
+         break;
+-    case ATCSMU_PCS3_SCRATCH:
+-        smu->pcs_regs[0].pcs_scratch = value;
+-        break;
+-    case ATCSMU_PCS4_SCRATCH:
+-        smu->pcs_regs[1].pcs_scratch = value;
+-        break;
+-    case ATCSMU_PCS5_SCRATCH:
+-        smu->pcs_regs[2].pcs_scratch = value;
+-        break;
+-    case ATCSMU_PCS6_SCRATCH:
+-        smu->pcs_regs[3].pcs_scratch = value;
+-        break;
+-    case ATCSMU_PCS7_SCRATCH:
+-        smu->pcs_regs[4].pcs_scratch = value;
+-        break;
+-    case ATCSMU_PCS8_SCRATCH:
+-        smu->pcs_regs[5].pcs_scratch = value;
+-        break;
+-    case ATCSMU_PCS9_SCRATCH:
+-        smu->pcs_regs[6].pcs_scratch = value;
+-        break;
+-    case ATCSMU_PCS10_SCRATCH:
+-        smu->pcs_regs[7].pcs_scratch = value;
++    case ATCSMU_PCS3_SCRATCH ... ATCSMU_PCS10_SCRATCH:
++        idx = (addr - ATCSMU_PCS3_SCRATCH) >> 5;
++        if ((addr & 0x1f) == 0x4) {
++            smu->pcs_regs[idx].pcs_scratch = value;
++        }
+         break;
+     default:
+         LOGGE("%s: Bad addr %x (value %x)\n", __func__, (int)addr, (int)value);
+-- 
+2.34.1
+

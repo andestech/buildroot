@@ -1,0 +1,32 @@
+From 42ea187604a3bf899174b3d263de5511f372d153 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Mon, 20 Nov 2023 15:39:38 +0800
+Subject: [PATCH 120/241] target/riscv: Remove Debug CSR overriding in
+ csr_andes.c
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/csr_andes.c | 7 -------
+ 1 file changed, 7 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 9ff712503e..19b3c321ab 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -883,13 +883,6 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_PMAADDR14] = { "pmaaddr14",              ppma, read_csr, write_csr},
+     [CSR_PMAADDR15] = { "pmaaddr15",              ppma, read_csr, write_csr},
+ 
+-    /* Debug/Trace Registers (shared with Debug Mode) */
+-    [CSR_TSELECT] = { "tselect",                  any, read_csr, write_csr},
+-    [CSR_TDATA1]  = { "tdata1",                   any, read_csr, write_csr},
+-    [CSR_TDATA2]  = { "tdata2",                   any, read_csr, write_csr},
+-    [CSR_TDATA3]  = { "tdata3",                   any, read_csr, write_csr},
+-    [CSR_TINFO]   = { "tinfo",                    any, read_csr, write_csr},
+-
+     /* ================ AndeStar V5 supervisor mode CSRs ================ */
+     /* Supervisor trap registers */
+     [CSR_SLIE]    = { "slie",                     smode, read_csr, write_slie},
+-- 
+2.34.1
+

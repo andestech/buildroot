@@ -1,0 +1,62 @@
+From 4ca67bc9a5f09145c7dbda3777cec534895de0c9 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 15 Mar 2024 13:22:23 +0800
+Subject: [PATCH 215/241] target/riscv: Add cpu property 'XAndesBiuAddrWidth'.
+
+This property controls the mask of all pmpaddr CSRs.
+A user can assign it by cmdline option like:
+    '-cpu andes-nx45v,xandesbiuaddrwidth=56'
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c     | 1 +
+ target/riscv/cpu_cfg.h | 1 +
+ target/riscv/pmp.c     | 8 +++++++-
+ 3 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 7cad8bc1af..335655f355 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -2401,6 +2401,7 @@ static Property andes_cpu_property[] = {
+     DEFINE_PROP_STRING("xandesaceextlibpath", RISCVCPU,
+                        cfg.XAndesAceExtLibPath),
+     DEFINE_PROP_STRING("xandesacelibdbg", RISCVCPU, cfg.XAndesAceLibDbg),
++    DEFINE_PROP_UINT16("xandesbiuaddrwidth", RISCVCPU, cfg.XAndesBiuAddrWidth, 64),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+diff --git a/target/riscv/cpu_cfg.h b/target/riscv/cpu_cfg.h
+index d5f8600a78..0d58235284 100644
+--- a/target/riscv/cpu_cfg.h
++++ b/target/riscv/cpu_cfg.h
+@@ -146,6 +146,7 @@ struct RISCVCPUConfig {
+     char *XAndesAceLib;
+     char *XAndesAceExtLibPath;
+     char *XAndesAceLibDbg;
++    uint16_t XAndesBiuAddrWidth;
+     uint16_t vlen;
+     uint16_t elen;
+     uint16_t cbom_blocksize;
+diff --git a/target/riscv/pmp.c b/target/riscv/pmp.c
+index d6e6b441f0..2bdbd4b19e 100644
+--- a/target/riscv/pmp.c
++++ b/target/riscv/pmp.c
+@@ -534,7 +534,13 @@ void pmpaddr_csr_write(CPURISCVState *env, uint32_t addr_index,
+ 
+         if (!pmp_is_locked(env, addr_index)) {
+             if (env->pmp_state.pmp[addr_index].addr_reg != val) {
+-                env->pmp_state.pmp[addr_index].addr_reg = val;
++                ArchCPU *archcpu = env_archcpu(env);
++                if (archcpu->cfg.ext_XAndesV5Ops) {
++                    env->pmp_state.pmp[addr_index].addr_reg = val &
++                        ((1ULL << (archcpu->cfg.XAndesBiuAddrWidth - 2)) - 1);
++                } else {
++                    env->pmp_state.pmp[addr_index].addr_reg = val;
++                }
+                 pmp_update_rule_addr(env, addr_index);
+                 if (is_next_cfg_tor) {
+                     pmp_update_rule_addr(env, addr_index + 1);
+-- 
+2.34.1
+

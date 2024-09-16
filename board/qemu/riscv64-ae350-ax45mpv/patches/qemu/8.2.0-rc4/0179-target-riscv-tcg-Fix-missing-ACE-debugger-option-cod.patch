@@ -1,0 +1,40 @@
+From c20019f588b524cc3687689d82685dab331d62cb Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Mon, 22 Jan 2024 11:49:02 +0800
+Subject: [PATCH 179/241] target/riscv/tcg: Fix missing ACE debugger option
+ code
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/tcg/tcg-cpu.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/target/riscv/tcg/tcg-cpu.c b/target/riscv/tcg/tcg-cpu.c
+index 30fd6d2543..0a7124591e 100644
+--- a/target/riscv/tcg/tcg-cpu.c
++++ b/target/riscv/tcg/tcg-cpu.c
+@@ -622,6 +622,7 @@ void riscv_cpu_validate_set_extensions(RISCVCPU *cpu, Error **errp)
+ 
+ /* Andes ACE */
+ #include "andes_ace_helper.h"
++#include "gdbstub/andes_ace_gdb.h"
+ static void riscv_cpu_validate_andes_ace(RISCVCPU *cpu, Error **errp)
+ {
+     CPURISCVState *env = &cpu->env;
+@@ -656,6 +657,13 @@ static void riscv_cpu_validate_andes_ace(RISCVCPU *cpu, Error **errp)
+                 return;
+             }
+         }
++        if (cpu->cfg.XAndesAceLibDbg != NULL) {
++            if (gdb_ace_load_lib(cpu->cfg.XAndesAceLibDbg)) {
++                error_setg(errp, "xandesacelibdbg '%s' load/register failed",
++                           cpu->cfg.XAndesAceLibDbg);
++                return;
++            }
++        }
+     }
+ }
+ 
+-- 
+2.34.1
+

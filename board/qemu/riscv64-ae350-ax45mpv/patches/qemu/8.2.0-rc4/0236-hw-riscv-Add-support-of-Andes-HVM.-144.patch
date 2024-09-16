@@ -1,0 +1,195 @@
+From 201991044c904824514b0d9e59b2eaa6ad16699e Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Tue, 21 May 2024 09:01:12 +0800
+Subject: [PATCH 236/241] hw/riscv: Add support of Andes HVM. (#144)
+
+target/riscv: Add support of Andes HVM CSRs.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+Signed-off-by: Foxes Cheng-Hung Hung <foxes687@andestech.com>
+
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/144
+Reviewed-by: Foxes Cheng-Hung Hung <foxes687@andestech.com>
+Reviewed-by: Ethan Zhan-Yang Chen <ethan84@andestech.com>
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ hw/riscv/andes_ae350.c         | 11 ++++++++++
+ include/hw/riscv/andes_ae350.h |  7 ++++++
+ target/riscv/andes_cpu_bits.h  |  2 ++
+ target/riscv/cpu.c             | 39 ++++++++++++++++++++++++++++++++++
+ target/riscv/csr_andes.c       |  2 ++
+ target/riscv/csr_andes.h       |  6 ++++++
+ 6 files changed, 67 insertions(+)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 06b8574e11..099e7953ab 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -642,6 +642,7 @@ static void andes_ae350_machine_init(MachineState *machine)
+     MemoryRegion *main_mem = g_new(MemoryRegion, 1);
+     MemoryRegion *mask_rom = g_new(MemoryRegion, 1);
+     MemoryRegion *mask_nor = g_new(MemoryRegion, 1);
++    MemoryRegion *mask_hvm = g_new(MemoryRegion, 1);
+     MemoryRegion *mask_l2c = g_new(MemoryRegion, 1);
+     target_ulong start_addr = memmap[ANDES_AE350_DRAM].base;
+     target_ulong firmware_end_addr, kernel_start_addr;
+@@ -672,6 +673,12 @@ static void andes_ae350_machine_init(MachineState *machine)
+     memory_region_add_subregion(system_memory, memmap[ANDES_AE350_NOR].base,
+                                 mask_nor);
+ 
++    /* HVM */
++    memory_region_init_ram(mask_hvm, NULL, "riscv.andes.ae350.hvm",
++                           1 << bs->soc.hvm_size_pow_2, &error_fatal);
++    memory_region_add_subregion(system_memory, bs->soc.hvm_base,
++                                mask_hvm);
++
+     /* L2C */
+     memory_region_init_ram(mask_l2c, NULL, "riscv.andes.ae350.l2c",
+                            memmap[ANDES_AE350_L2C].size, &error_fatal);
+@@ -802,6 +809,10 @@ static Property andes_ae350_soc_property[] = {
+                      ilm_default_enable, false),
+     DEFINE_PROP_BOOL("dlm_default_enable", AndesAe350SocState,
+                      dlm_default_enable, false),
++    DEFINE_PROP_UINT64("hvm_base", AndesAe350SocState, hvm_base,
++                       ANDES_HVM_BASE_DEFAULT),
++    DEFINE_PROP_UINT64("hvm_size_pow_2", AndesAe350SocState, hvm_size_pow_2,
++                       ANDES_HVM_SIZE_POW_2_DEFAULT),
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+diff --git a/include/hw/riscv/andes_ae350.h b/include/hw/riscv/andes_ae350.h
+index 31497e5d3e..75986a5562 100644
+--- a/include/hw/riscv/andes_ae350.h
++++ b/include/hw/riscv/andes_ae350.h
+@@ -55,6 +55,9 @@ typedef struct AndesAe350SocState {
+     bool ilm_default_enable;
+     bool dlm_default_enable;
+ 
++    uint64_t hvm_base;
++    uint64_t hvm_size_pow_2;
++
+ } AndesAe350SocState;
+ 
+ #define TYPE_ANDES_AE350_MACHINE MACHINE_TYPE_NAME("andes_ae350")
+@@ -128,6 +131,10 @@ enum {
+ #define ANDES_LM_SIZE_MIN 0x400
+ #define ANDES_LM_SIZE_MAX 0x20000000
+ 
++/* HVM defalut configs */
++#define ANDES_HVM_BASE_DEFAULT       0x90000000
++#define ANDES_HVM_SIZE_POW_2_DEFAULT 0x0
++
+ #if defined(TARGET_RISCV32)
+ #define VIRT_CPU TYPE_RISCV_CPU_BASE32
+ #elif defined(TARGET_RISCV64)
+diff --git a/target/riscv/andes_cpu_bits.h b/target/riscv/andes_cpu_bits.h
+index 16cbeb5214..3d18b0e149 100644
+--- a/target/riscv/andes_cpu_bits.h
++++ b/target/riscv/andes_cpu_bits.h
+@@ -16,6 +16,8 @@
+ #define CSR_MRVARCH_CFG         0xfca
+ #define CSR_MRVARCH_CFG2        0xfcb
+ #define CSR_MCCACHE_CTL_BASE    0xfcf
++#define CSR_MHVM_CFG            0xfd0
++#define CSR_MHVMB               0xfd1
+ 
+ /* Crash Debug CSRs */
+ #define CSR_MCRASH_STATESAVE    0xfc8
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 514a295760..09b6ff4aad 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -28,6 +28,9 @@
+ #include "exec/exec-all.h"
+ #include "qapi/error.h"
+ #include "qapi/visitor.h"
++#include "qapi/qmp/qobject.h"
++#include "qapi/qmp/qnum.h"
++#include "qom/qom-qobject.h"
+ #include "qemu/error-report.h"
+ #include "hw/qdev-properties.h"
+ #include "migration/vmstate.h"
+@@ -437,6 +440,30 @@ static void andes_set_mmsc_cfg_l2c(AndesCsr *andes_csr)
+ }
+ 
+ #ifndef CONFIG_USER_ONLY
++static QObject *get_prop_qobj_from_soc(const char *name)
++{
++    Object *soc = object_resolve_path("/machine/soc", NULL);
++    if (soc == NULL) {
++        return NULL;
++    }
++
++    Error *err = NULL;
++    QObject *prop_qobj = object_property_get_qobject(soc, name, &err);
++    return prop_qobj;
++}
++
++static bool get_uint64_from_soc_prop(const char *name, uint64_t *val)
++{
++    QObject *prop_qobj = get_prop_qobj_from_soc(name);
++    QNum *qnum = qobject_to(QNum, prop_qobj);
++    if (qnum == NULL) {
++        return false;
++    }
++
++    *val = qnum->u.u64;
++    return true;
++}
++
+ static uint64_t memory_region_local_mem_read(void *opaque,
+                                               hwaddr addr, unsigned size)
+ {
+@@ -1525,6 +1552,18 @@ static void andes_csr_reset_common(CPURISCVState *env)
+     env->andes_csr.csrno[CSR_MDCM_CFG] = (3 << V5_MDCM_CFG_DSZ);
+ 
+ #ifndef CONFIG_USER_ONLY
++    uint64_t hvm_base;
++    uint64_t hvm_size_pow_2;
++    if (get_uint64_from_soc_prop("hvm_base", &hvm_base)) {
++        env->andes_csr.csrno[CSR_MHVMB] = hvm_base;
++    } else {
++        env->andes_csr.csrno[CSR_MHVMB] = 0;
++    }
++    env->andes_csr.csrno[CSR_MHVM_CFG] &= ~MASK_MHVM_CFG_SZ;
++    if (get_uint64_from_soc_prop("hvm_size_pow_2", &hvm_size_pow_2)) {
++        env->andes_csr.csrno[CSR_MHVM_CFG] |= hvm_size_pow_2 & MASK_MHVM_CFG_SZ;
++    }
++
+     int ilmsz = 0, dlmsz = 0;
+     /*
+      * Initialize local memory csr for LM size > 0. LMB csr is not exist if
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 62367c65f3..f85a80b51f 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -1079,6 +1079,8 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_MRVARCH_CFG]       = { "mrvarch_cfg",       rvarch,  read_csr },
+     [CSR_MRVARCH_CFG2]      = { "mrvarch_cfg2",      rvarch2, read_csr },
+     [CSR_MCCACHE_CTL_BASE]  = { "mccache_ctl_base",  ccache,  read_csr },
++    [CSR_MHVM_CFG]          = { "mhvm_cfg",          any,     read_csr },
++    [CSR_MHVMB]             = { "mhvmb",             any,     read_csr },
+ 
+     /* Crash Debug CSRs */
+     [CSR_MCRASH_STATESAVE]  = { "mcrash_statesave",  any, read_csr },
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index a670ee47c4..256c8911b7 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -327,6 +327,12 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define MASK_MSLIDELEG_IMECCDMR             (0x1 << 19)
+ #define MASK_MSLIDELEG_ACEERR               (0x1 << 24)
+ 
++/* mhvm_cfg */
++#define MASK_MHVM_CFG_SZ                    (0x3F)
++#define MASK_MHVM_CFG_BANK                  (0x1  << 8)
++#define MASK_MHVM_CFG_BSEL                  (0x1F << 16)
++#define MASK_MHVM_CFG_SUBP                  (0x1  << 24)
++
+ /* counters */
+ #define MASK_COUNTER_CY                     (0x1)
+ #define MASK_COUNTER_TM                     (0x1 << 1)
+-- 
+2.34.1
+

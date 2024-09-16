@@ -1,0 +1,235 @@
+From c0284abf45a7e1e7a703b05ceff06f56d41313ad Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 18 Aug 2023 16:11:33 +0800
+Subject: [PATCH 044/241] target/riscv: Add CSR support of mrvarch_cfg.        
+       Add mmsc_cfg2 usage.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/andes_cpu_bits.h  |  1 +
+ target/riscv/csr_andes.c       | 55 ++++++++++++++++++++++++++++----
+ target/riscv/csr_andes.h       | 58 ++++++++++++++++++++++++----------
+ target/riscv/csr_andes_nx45v.c | 20 ++++++++++++
+ 4 files changed, 110 insertions(+), 24 deletions(-)
+
+diff --git a/target/riscv/andes_cpu_bits.h b/target/riscv/andes_cpu_bits.h
+index 7ba67d998d..7242dfab3f 100644
+--- a/target/riscv/andes_cpu_bits.h
++++ b/target/riscv/andes_cpu_bits.h
+@@ -12,6 +12,7 @@
+ #define CSR_MMSC_CFG            0xfc2
+ #define CSR_MMSC_CFG2           0xfc3
+ #define CSR_MVEC_CFG            0xfc7
++#define CSR_MRVARCH_CFG         0xfca
+ 
+ /* Crash Debug CSRs */
+ #define CSR_MCRASH_STATESAVE    0xfc8
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 54443fee23..9f3b5aed58 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -120,11 +120,41 @@ static RISCVException fio(CPURISCVState *env, int csrno)
+     }
+ }
+ 
++static RISCVException rvarch(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    bool rvarchbit;
++
++    if (riscv_cpu_mxl(env) == MXL_RV32) {
++        rvarchbit = get_field(csr->csrno[CSR_MMSC_CFG2], MASK_MMSC_CFG2_RVARCH);
++    }
++    else {
++        rvarchbit = get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_RVARCH);
++    }
++
++    if (rvarchbit) {
++        return RISCV_EXCP_NONE;
++    }
++    else {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++}
++
+ static RISCVException veccfg(CPURISCVState *env, int csrno)
+ {
+     AndesCsr *csr = &env->andes_csr;
++    bool veccfgbit;
++
+     if (riscv_has_ext(env, RVV)) {
+-        if (get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_VECCFG) == 1) {
++        if (riscv_cpu_mxl(env) == MXL_RV32) {
++            veccfgbit = get_field(csr->csrno[CSR_MMSC_CFG2],
++                                  MASK_MMSC_CFG2_VECCFG);
++        }
++        else {
++            veccfgbit = get_field(csr->csrno[CSR_MMSC_CFG],
++                                  MASK_MMSC_CFG_RVARCH);
++        }
++        if (veccfgbit) {
+             return RISCV_EXCP_NONE;
+         }
+     }
+@@ -134,8 +164,18 @@ static RISCVException veccfg(CPURISCVState *env, int csrno)
+ static RISCVException bf16cvt(CPURISCVState *env, int csrno)
+ {
+     AndesCsr *csr = &env->andes_csr;
++    bool bf16bit;
++
+     if (riscv_has_ext(env, RVV)) {
+-        if (get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_BF16CVT) == 1) {
++        if (riscv_cpu_mxl(env) == MXL_RV32) {
++            bf16bit = get_field(csr->csrno[CSR_MMSC_CFG2],
++                                MASK_MMSC_CFG2_BF16CVT);
++        }
++        else {
++            bf16bit = get_field(csr->csrno[CSR_MMSC_CFG],
++                                  MASK_MMSC_CFG_BF16CVT);
++        }
++        if (bf16bit) {
+             return RISCV_EXCP_NONE;
+         }
+     }
+@@ -549,11 +589,12 @@ void andes_cpu_do_interrupt_post(CPUState *cs)
+ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     /* ================== AndeStar V5 machine mode CSRs ================== */
+     /* Configuration Registers */
+-    [CSR_MICM_CFG]  = { "micm_cfg",          any,    read_csr },
+-    [CSR_MDCM_CFG]  = { "mdcm_cfg",          any,    read_csr },
+-    [CSR_MMSC_CFG]  = { "mmsc_cfg",          any,    read_csr },
+-    [CSR_MMSC_CFG2] = { "mmsc_cfg2",         any,    read_csr },
+-    [CSR_MVEC_CFG]  = { "mvec_cfg",          veccfg, read_csr },
++    [CSR_MICM_CFG]     = { "micm_cfg",          any,    read_csr },
++    [CSR_MDCM_CFG]     = { "mdcm_cfg",          any,    read_csr },
++    [CSR_MMSC_CFG]     = { "mmsc_cfg",          any,    read_csr },
++    [CSR_MMSC_CFG2]    = { "mmsc_cfg2",         any,    read_csr },
++    [CSR_MVEC_CFG]     = { "mvec_cfg",          veccfg, read_csr },
++    [CSR_MRVARCH_CFG]  = { "mrvarch_cfg",       rvarch, read_csr },
+ 
+     /* Crash Debug CSRs */
+     [CSR_MCRASH_STATESAVE]  = { "mcrash_statesave",  any, read_csr },
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 8568ce3fe7..e2db3d164d 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -77,23 +77,23 @@ typedef struct AndesVec {
+ #define MASK_MMSC_CFG_CORE_PCLUS            ((uint64_t)0x0F << 48)
+ #define MASK_MMSC_CFG_RVARCH                ((uint64_t)0x01 << 52)
+ 
+-/* mmsc_cfg_2 */
+-#define MASK_MMSC_CFG_2_BF16CVT             (0x01)
+-#define MASK_MMSC_CFG_2_ZFH                 (0x01 << 1)
+-#define MASK_MMSC_CFG_2_VL4                 (0x01 << 2)
+-#define MASK_MMSC_CFG_2_CRASHSAVE           (0x01 << 3)
+-#define MASK_MMSC_CFG_2_VECCFG              (0x01 << 4)
+-#define MASK_MMSC_CFG_2_FINV                (0x01 << 5)
+-#define MASK_MMSC_CFG_2_PP16                (0x01 << 6)
+-#define MASK_MMSC_CFG_2_VSIH                (0x01 << 8)
+-#define MASK_MMSC_CFG_2_ECDV                (0x03 << 9)
+-#define MASK_MMSC_CFG_2_VDOT                (0x01 << 11)
+-#define MASK_MMSC_CFG_2_VPFH                (0x01 << 12)
+-#define MASK_MMSC_CFG_2_CCACHEMP_CFG        (0x01 << 13)
+-#define MASK_MMSC_CFG_2_CCACHE              (0x01 << 14)
+-#define MASK_MMSC_CFG_2_IO_COHP             (0x01 << 15)
+-#define MASK_MMSC_CFG_2_CORE_PCLUS          (0x0F << 16)
+-#define MASK_MMSC_CFG_2_RVARCH              (0x01 << 20)
++/* mmsc_cfg2 */
++#define MASK_MMSC_CFG2_BF16CVT              (0x01)
++#define MASK_MMSC_CFG2_ZFH                  (0x01 << 1)
++#define MASK_MMSC_CFG2_VL4                  (0x01 << 2)
++#define MASK_MMSC_CFG2_CRASHSAVE            (0x01 << 3)
++#define MASK_MMSC_CFG2_VECCFG               (0x01 << 4)
++#define MASK_MMSC_CFG2_FINV                 (0x01 << 5)
++#define MASK_MMSC_CFG2_PP16                 (0x01 << 6)
++#define MASK_MMSC_CFG2_VSIH                 (0x01 << 8)
++#define MASK_MMSC_CFG2_ECDV                 (0x03 << 9)
++#define MASK_MMSC_CFG2_VDOT                 (0x01 << 11)
++#define MASK_MMSC_CFG2_VPFH                 (0x01 << 12)
++#define MASK_MMSC_CFG2_CCACHEMP_CFG         (0x01 << 13)
++#define MASK_MMSC_CFG2_CCACHE               (0x01 << 14)
++#define MASK_MMSC_CFG2_IO_COHP              (0x01 << 15)
++#define MASK_MMSC_CFG2_CORE_PCLUS           (0x0F << 16)
++#define MASK_MMSC_CFG2_RVARCH               (0x01 << 20)
+ 
+ /* mcause */
+ #define MASK_MCAUSE_EXCEPTION_CODE_32       (~MASK_MCAUSE_INTERRUPT_32)
+@@ -115,6 +115,30 @@ typedef struct AndesVec {
+ #define MASK_MMISC_CTL_VCGL3_EN             (0x1 << 12)
+ #define MASK_MMISC_CTL_LDX0NXP              (0x1 << 13)
+ 
++/* mrvarch_cfg */
++#define MASK_MRVARCH_CFG_ZBA                (0x1)
++#define MASK_MRVARCH_CFG_ZBB                (0x1 << 1)
++#define MASK_MRVARCH_CFG_ZBC                (0x1 << 2)
++#define MASK_MRVARCH_CFG_ZBS                (0x1 << 3)
++#define MASK_MRVARCH_CFG_SMEPMP             (0x1 << 4)
++#define MASK_MRVARCH_CFG_SVINVAL            (0x1 << 5)
++#define MASK_MRVARCH_CFG_SMSTATEEN          (0x1 << 6)
++#define MASK_MRVARCH_CFG_SSCOFPMF           (0x1 << 7)
++#define MASK_MRVARCH_CFG_SSTC               (0x1 << 8)
++#define MASK_MRVARCH_CFG_ZICBOM             (0x1 << 9)
++#define MASK_MRVARCH_CFG_ZICBOP             (0x1 << 10)
++#define MASK_MRVARCH_CFG_ZICBOZ             (0x1 << 11)
++#define MASK_MRVARCH_CFG_ZBK                (0x1 << 12)
++#define MASK_MRVARCH_CFG_ZKN                (0x1 << 13)
++#define MASK_MRVARCH_CFG_ZKS                (0x1 << 14)
++#define MASK_MRVARCH_CFG_ZKT                (0x1 << 15)
++#define MASK_MRVARCH_CFG_ZKR                (0x1 << 16)
++#define MASK_MRVARCH_CFG_SM_VERSION         (0x7 << 17)
++#define MASK_MRVARCH_CFG_SS_VERSION         (0x7 << 20)
++#define MASK_MRVARCH_CFG_SVPBMT             (0x1 << 23)
++#define MASK_MRVARCH_CFG_SVNAPOT            (0x1 << 24)
++#define MASK_MRVARCH_CFG_ZIHINTPAUSE        (0x1 << 25)
++
+ #define WRITE_MASK_CSR_MECC_CODE            0xFF
+ #define WRITE_MASK_CSR_UITB_32              0xFFFFFFFC
+ #define WRITE_MASK_CSR_UITB_64              0xFFFFFFFFFFFFFFFC
+diff --git a/target/riscv/csr_andes_nx45v.c b/target/riscv/csr_andes_nx45v.c
+index 98e4982647..945d6516e7 100644
+--- a/target/riscv/csr_andes_nx45v.c
++++ b/target/riscv/csr_andes_nx45v.c
+@@ -6,6 +6,11 @@
+ #define MASK_MMSC_CFG_L2CMP_CFG          ((uint64_t)0x1 << 45)
+ #define MASK_MMSC_CFG_L2C                ((uint64_t)0x1 << 46)
+ #define MASK_MMSC_CFG_IOCP               ((uint64_t)0x1 << 47)
++#define MASK_MRVARCH_CFG_ZFBFMIN         ((uint64_t)0x1 << 32)
++#define MASK_MRVARCH_CFG_ZVFBFMIN        ((uint64_t)0x1 << 33)
++#define MASK_MRVARCH_CFG_ZVFBFWMA        ((uint64_t)0x1 << 34)
++#define MASK_MRVARCH_CFG_ZVQMAC          ((uint64_t)0x1 << 35)
++#define MASK_MRVARCH_CFG_ZVLSSEG         ((uint64_t)0x1 << 36)
+ 
+ #define WRITE_MASK_CSR_MXSTATUS_NX45V        0x3F
+ #define WRITE_MASK_CSR_MDCAUSE_EXCP_NX45V    0x7
+@@ -34,6 +39,20 @@ static RISCVException read_mmsc_cfg_nx45v(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException read_mrvarch_cfg_nx45v(CPURISCVState *env, int csrno,
++                                             target_ulong *val)
++{
++    static uint64_t mask = MASK_MRVARCH_CFG_ZBA      | MASK_MRVARCH_CFG_ZBB
++                         | MASK_MRVARCH_CFG_ZBC      | MASK_MRVARCH_CFG_ZBS
++                         | MASK_MRVARCH_CFG_ZFBFMIN
++                         | MASK_MRVARCH_CFG_ZVFBFMIN
++                         | MASK_MRVARCH_CFG_ZVFBFWMA | MASK_MRVARCH_CFG_ZVQMAC
++                         | MASK_MRVARCH_CFG_ZVLSSEG;
++
++    *val = env->andes_csr.csrno[CSR_MRVARCH_CFG] & (target_ulong)mask;
++    return RISCV_EXCP_NONE;
++}
++
+ static RISCVException write_mclk_ctl_nx45v(CPURISCVState *env, int csrno,
+                                            target_ulong val)
+ {
+@@ -97,6 +116,7 @@ void andes_spec_csr_init_nx45v(AndesCsr *andes_csr)
+     andes_csr->csrno[CSR_MMISC_CTL] = 0x48;
+ 
+     andes_csr_ops[CSR_MMSC_CFG].read = read_mmsc_cfg_nx45v;
++    andes_csr_ops[CSR_MRVARCH_CFG].read = read_mrvarch_cfg_nx45v;
+     andes_csr_ops[CSR_MCLK_CTL].write = write_mclk_ctl_nx45v;
+     andes_csr_ops[CSR_MXSTATUS].write = write_mxstatus_nx45v;
+     andes_csr_ops[CSR_MDCAUSE].write = write_smdcause_nx45v;
+-- 
+2.34.1
+

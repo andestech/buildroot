@@ -1,0 +1,140 @@
+From 65dbf5abd101a306af9425de4d3858faacab5a2e Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 14 Aug 2023 17:28:23 +0800
+Subject: [PATCH 037/241] target/riscv: Sync initial values of marchid and
+ mimpid.               Add CSR support of mppib.               Fix mask of
+ uitb.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c       |  6 ++---
+ target/riscv/csr_andes.c | 49 ++++++++++++++++++++++++++++++++--------
+ target/riscv/csr_andes.h |  8 ++++---
+ 3 files changed, 47 insertions(+), 16 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 25d3e694ba..02ac6fe0ba 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -736,9 +736,9 @@ static void rv64_andes_nx45v_cpu_init(Object *obj)
+     set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_MBARE);
+ #endif
+ 
+-    /* Set CPU ID & Product ID */
+-    cfg->marchid = 0x8045;
+-    cfg->mimpid = 0x1700;
++    /* Set CPU ID & Implementation ID */
++    cfg->marchid = (uint64_t)0x1 << 63 | 0x8045;
++    cfg->mimpid = 0x1;
+ }
+ #else
+ static void rv32_base_cpu_init(Object *obj)
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 6f1195748c..1feab66016 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -71,6 +71,17 @@ static RISCVException hsp(CPURISCVState *env, int csrno)
+     }
+ }
+ 
++static RISCVException ppi(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_PPI) == 0) {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++    else {
++        return RISCV_EXCP_NONE;
++    }
++}
++
+ static RISCVException pmnds(CPURISCVState *env, int csrno)
+ {
+     AndesCsr *csr = &env->andes_csr;
+@@ -162,6 +173,24 @@ static RISCVException write_uitb(CPURISCVState *env, int csrno,
+     }
+ }
+ 
++static RISCVException write_mppib(CPURISCVState *env, int csrno,
++                                  target_ulong val)
++{
++    switch(riscv_cpu_mxl(env))
++    {
++        case MXL_RV32:
++            env->andes_csr.csrno[CSR_MPPIB] = val & WRITE_MASK_CSR_MPPIB_32;
++            return RISCV_EXCP_NONE;
++            break;
++        case MXL_RV64:
++            env->andes_csr.csrno[CSR_MPPIB] = val & WRITE_MASK_CSR_MPPIB_64;
++            return RISCV_EXCP_NONE;
++            break;
++        default:
++            return RISCV_EXCP_ILLEGAL_INST;
++    }
++}
++
+ static RISCVException write_mpft_ctl(CPURISCVState *env, int csrno,
+                                      target_ulong val)
+ {
+@@ -379,19 +408,19 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_MSTATUS_CRASHSAVE] = { "mstatus_crashsave", any, read_csr },
+ 
+     /* Memory CSRs */
+-    [CSR_MILMB]          = { "milmb",             any, read_csr, write_csr},
+-    [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_csr},
++    [CSR_MILMB]          = { "milmb",             any, read_csr, write_csr  },
++    [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_csr  },
+     [CSR_MECC_CODE]      = { "mecc_code",         ecc, read_csr,
+-                                                       write_mecc_code    },
++                                                       write_mecc_code      },
+     [CSR_MNVEC]          = { "mnvec",             any, read_csr,
+-                                                       write_all_ignore   },
++                                                       write_all_ignore     },
+     [CSR_MCACHE_CTL]     = { "mcache_ctl",        any, read_csr,
+-                                                       write_mcache_ctl   },
+-    [CSR_MCCTLBEGINADDR] = { "mcctlbeginaddr",    any, read_csr, write_csr},
+-    [CSR_MCCTLCOMMAND]   = { "mcctlcommand",      any, read_csr, write_csr},
+-    [CSR_MCCTLDATA]      = { "mcctldata",         any, read_csr, write_csr},
+-    [CSR_MPPIB]          = { "mppib",             any, read_csr, write_csr},
+-    [CSR_MFIOB]          = { "mfiob",             any, read_csr, write_csr},
++                                                       write_mcache_ctl     },
++    [CSR_MCCTLBEGINADDR] = { "mcctlbeginaddr",    any, read_csr, write_csr  },
++    [CSR_MCCTLCOMMAND]   = { "mcctlcommand",      any, read_csr, write_csr  },
++    [CSR_MCCTLDATA]      = { "mcctldata",         any, read_csr, write_csr  },
++    [CSR_MPPIB]          = { "mppib",             ppi, read_csr, write_mppib},
++    [CSR_MFIOB]          = { "mfiob",             any, read_csr, write_csr  },
+ 
+     /* Hardware Stack Protection & Recording */
+     [CSR_MHSP_CTL]     = { "mhsp_ctl",            hsp, read_csr,
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 6b89beed61..9f17d56dcf 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -96,13 +96,15 @@ typedef struct AndesVec {
+ #define MASK_MMSC_CFG_2_RVARCH              (0x01 << 20)
+ 
+ #define WRITE_MASK_CSR_MECC_CODE            0xFF
+-#define WRITE_MASK_CSR_UITB_32              0xFFFC
+-#define WRITE_MASK_CSR_UITB_64              0xFFFFFFFC
++#define WRITE_MASK_CSR_UITB_32              0xFFFFFFFC
++#define WRITE_MASK_CSR_UITB_64              0xFFFFFFFFFFFFFFFC
+ #define WRITE_MASK_CSR_MPFT_CTL             0x1F0
+ #define WRITE_MASK_CSR_MHSP_CTL             0x3F
+ #define WRITE_MASK_CSR_COUNTER              0x7D
+ #define WRITE_MASK_CSR_HPMEVENT             0x1FF
+ #define WRITE_MASK_CSR_SLIEP                0x10F0000
++#define WRITE_MASK_CSR_MPPIB_32             0xFFFFFC3F
++#define WRITE_MASK_CSR_MPPIB_64             0xFFFFFFFFFFFFFC3F
+ 
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+@@ -110,4 +112,4 @@ void andes_cpu_do_interrupt_post(CPUState *cpu);
+ 
+ void andes_spec_csr_init_nx45v(AndesCsr *);
+ 
+-#endif /* RISCV_CSR_ANDES_INC_H */
++#endif /* RISCV_CSR_ANDES_INC_H */
+\ No newline at end of file
+-- 
+2.34.1
+

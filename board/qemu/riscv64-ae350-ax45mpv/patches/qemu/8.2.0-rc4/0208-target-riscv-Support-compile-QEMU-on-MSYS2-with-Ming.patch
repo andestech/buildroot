@@ -1,0 +1,269 @@
+From 4edc44d4e579b20d7cb35ab09f51ca0085b4506d Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Wed, 21 Feb 2024 09:33:27 +0800
+Subject: [PATCH 208/241] target/riscv: Support compile QEMU on MSYS2 with
+ MingW W32 platform
+
+Below folders was also modified
+gdbstub/
+hw/riscv/
+hw/timer/
+hw/rtc/
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ gdbstub/andes_ace_gdb.c.inc |  8 ++++++++
+ gdbstub/gdbstub.c           | 10 ++++++++--
+ hw/riscv/andes_ae350.c      | 18 +++++++++---------
+ hw/rtc/atcrtc100.c          |  4 ++--
+ hw/timer/andes_plmt.c       |  2 +-
+ hw/timer/atcpit100.c        |  8 ++++----
+ target/riscv/andes_helper.c |  2 +-
+ target/riscv/cpu.c          |  2 +-
+ 8 files changed, 34 insertions(+), 20 deletions(-)
+
+diff --git a/gdbstub/andes_ace_gdb.c.inc b/gdbstub/andes_ace_gdb.c.inc
+index 3338c415ed..c9fdcb755a 100644
+--- a/gdbstub/andes_ace_gdb.c.inc
++++ b/gdbstub/andes_ace_gdb.c.inc
+@@ -7,7 +7,9 @@
+ #ifndef _ANDES_ACE_GDB_
+ #define _ANDES_ACE_GDB_
+ #include <dlfcn.h>
++#ifndef WIN32
+ #include <sys/utsname.h>
++#endif
+ #include "gdbstub/andes_ace_gdb.h"
+ #include "qemu/qemu-print.h"
+ 
+@@ -74,6 +76,7 @@ int32_t gdb_ace_get_file_name_for_gdb(unsigned char *platform, char *soname)
+     int32_t ret = 0;
+ 
+     if (ace_lib_for_gdb) {
++#ifndef WIN32
+         struct utsname os;
+         if (uname(&os) == 0) {
+             const char *str;
+@@ -83,6 +86,11 @@ int32_t gdb_ace_get_file_name_for_gdb(unsigned char *platform, char *soname)
+                 str = ace_lib_for_gdb;
+             } else
+                 return -1;
++#else
++	{
++            const char *str;
++            str = ace_lib_for_gdb;
++#endif
+ 
+             /* use size as filename to do fopen */
+             sprintf(soname, "%u", *ace_lib_for_gdb_len);
+diff --git a/gdbstub/gdbstub.c b/gdbstub/gdbstub.c
+index 4e4af6b6b4..6bdbe0de6c 100644
+--- a/gdbstub/gdbstub.c
++++ b/gdbstub/gdbstub.c
+@@ -1452,7 +1452,7 @@ static int gdb_vfile_packet(const char *packet, int packet_size)
+         if (*(parse++) != ',') {
+             return -1;
+         }
+-        ret = qemu_strtoui(parse, &parse, 16, &mode);
++        ret = qemu_strtoui(parse, &parse, 16, (unsigned int *)&mode);
+         if (ret < 0) {
+             return -1;
+         }
+@@ -1542,8 +1542,14 @@ static int gdb_vfile_packet(const char *packet, int packet_size)
+             return -1;
+         }
+ 
++#ifndef WIN32
+         ret = pread(fd, read_buffer, count, offset);
+-
++#else
++        ret = lseek(fd, offset, SEEK_SET);
++        if (ret != -1) {
++            ret = read(fd, read_buffer, count);
++	}
++#endif
+         if (ret == -1) {
+             snprintf(reply, 16, "F-1,%x", errno);
+             gdb_put_packet(reply);
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 37d5c7066b..1581fdc665 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -190,7 +190,7 @@ create_fdt(AndesAe350BoardState *bs, const struct MemmapEntry *memmap,
+     /* create plic */
+     plic_phandle = phandle++;
+     plic_addr = memmap[ANDES_AE350_PLIC].base;
+-    plic_name = g_strdup_printf("/soc/interrupt-controller@%lx", plic_addr);
++    plic_name = g_strdup_printf("/soc/interrupt-controller@%lx", (long)plic_addr);
+     qemu_fdt_add_subnode(fdt, plic_name);
+     qemu_fdt_setprop_cell(fdt, plic_name,
+         "#address-cells", 0x2);
+@@ -209,7 +209,7 @@ create_fdt(AndesAe350BoardState *bs, const struct MemmapEntry *memmap,
+ 
+     /* create plicsw */
+     plicsw_addr = memmap[ANDES_AE350_PLICSW].base;
+-    plicsw_name = g_strdup_printf("/soc/interrupt-controller@%lx", plicsw_addr);
++    plicsw_name = g_strdup_printf("/soc/interrupt-controller@%lx", (long)plicsw_addr);
+     qemu_fdt_add_subnode(fdt, plicsw_name);
+     qemu_fdt_setprop_cell(fdt, plicsw_name,
+         "#address-cells", 0x2);
+@@ -227,7 +227,7 @@ create_fdt(AndesAe350BoardState *bs, const struct MemmapEntry *memmap,
+ 
+     /* create plmt */
+     plmt_addr = memmap[ANDES_AE350_PLMT].base;
+-    plmt_name = g_strdup_printf("/soc/plmt0@%lx", plmt_addr);
++    plmt_name = g_strdup_printf("/soc/plmt0@%lx", (long)plmt_addr);
+     qemu_fdt_add_subnode(fdt, plmt_name);
+     qemu_fdt_setprop_string(fdt, plmt_name, "compatible", "riscv,plmt0");
+     qemu_fdt_setprop(fdt, plmt_name, "interrupts-extended",
+@@ -237,7 +237,7 @@ create_fdt(AndesAe350BoardState *bs, const struct MemmapEntry *memmap,
+     g_free(plmt_name);
+     g_free(plmt_irq_ext);
+ 
+-    uart_name = g_strdup_printf("/serial@%lx", memmap[ANDES_AE350_UART1].base);
++    uart_name = g_strdup_printf("/serial@%lx", (long)memmap[ANDES_AE350_UART1].base);
+     qemu_fdt_add_subnode(fdt, uart_name);
+     qemu_fdt_setprop_string(fdt, uart_name, "compatible", "ns16550a");
+     qemu_fdt_setprop_cells(fdt, uart_name, "reg",
+@@ -250,7 +250,7 @@ create_fdt(AndesAe350BoardState *bs, const struct MemmapEntry *memmap,
+     qemu_fdt_setprop_cells(fdt, uart_name, "interrupts",
+                             ANDES_AE350_UART1_IRQ, 0x4);
+ 
+-    uart_name = g_strdup_printf("/serial@%lx", memmap[ANDES_AE350_UART2].base);
++    uart_name = g_strdup_printf("/serial@%lx", (long)memmap[ANDES_AE350_UART2].base);
+     qemu_fdt_add_subnode(fdt, uart_name);
+     qemu_fdt_setprop_string(fdt, uart_name, "compatible", "ns16550a");
+     qemu_fdt_setprop_cells(fdt, uart_name, "reg",
+@@ -271,7 +271,7 @@ create_fdt(AndesAe350BoardState *bs, const struct MemmapEntry *memmap,
+ 
+     for (i = 0; i < ANDES_AE350_VIRTIO_COUNT; i++) {
+         virtio_name = g_strdup_printf("/virtio_mmio@%lx",
+-            (memmap[ANDES_AE350_VIRTIO].base +
++            (long)(memmap[ANDES_AE350_VIRTIO].base +
+                 (i * memmap[ANDES_AE350_VIRTIO].size)));
+         qemu_fdt_add_subnode(fdt, virtio_name);
+         qemu_fdt_setprop_string(fdt, virtio_name, "compatible", "virtio,mmio");
+@@ -329,7 +329,7 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+             error_report("Cannot set instruction local memory base to 0x%lx. "
+                          "It must be aligned to instruction local memory size "
+                          "0x%x.",
+-                         s->ilm_base, s->ilm_size);
++                         (long)s->ilm_base, s->ilm_size);
+             exit(1);
+         }
+     }
+@@ -345,7 +345,7 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+         if (s->dlm_base & (s->dlm_size - 1)) {
+             error_report("Cannot set data local memory base to 0x%lx. "
+                          "It must be aligned to data local memory size 0x%x.",
+-                          s->dlm_base, s->dlm_size);
++                          (long)s->dlm_base, s->dlm_size);
+             exit(1);
+         }
+     }
+@@ -653,7 +653,7 @@ static void andes_ae350_machine_init(MachineState *machine)
+     /* Check ram size is validate */
+     if (machine->ram_size > memmap[ANDES_AE350_DRAM].size) {
+         error_report("Cannot model more than %ldGB RAM",
+-            memmap[ANDES_AE350_DRAM].size / (1024 * 1024 * 1024));
++            (long)memmap[ANDES_AE350_DRAM].size / (1024 * 1024 * 1024));
+         exit(1);
+     }
+ 
+diff --git a/hw/rtc/atcrtc100.c b/hw/rtc/atcrtc100.c
+index e4f95545f5..b8456d9b72 100644
+--- a/hw/rtc/atcrtc100.c
++++ b/hw/rtc/atcrtc100.c
+@@ -300,8 +300,8 @@ atcrtc100_timer_cb(void *opaque)
+                        - s->ref_rtc_start_ns;
+     struct tm curr_tm = ns2tm(curr_ns);
+     timer_mod(s->rtc_timer, next_half_second_ns(curr_ns) + s->ref_rtc_start_ns);
+-    uint period_level = 0;
+-    uint alarm_level = 0;
++    unsigned int period_level = 0;
++    unsigned int alarm_level = 0;
+     if (s->ctrl & (1 << CTRL_HSEC)) {
+         period_level |= 1;
+         s->st |= (1 << ST_HSEC);
+diff --git a/hw/timer/andes_plmt.c b/hw/timer/andes_plmt.c
+index e1c03f59f6..ce4cb22d0d 100644
+--- a/hw/timer/andes_plmt.c
++++ b/hw/timer/andes_plmt.c
+@@ -138,7 +138,7 @@ andes_plmt_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+         if (!env) {
+             error_report("plmt: invalid timecmp hartid: %zu", hartid);
+         } else if ((addr & 0x7) == 0) {
+-            uint64_t timecmp_hi = (unsigned long)plmt->timecmp[hartid] >> 32;
++            uint64_t timecmp_hi = plmt->timecmp[hartid] >> 32;
+             andes_plmt_write_timecmp(plmt, RISCV_CPU(cpu),
+                                      (timecmp_hi << 32) |
+                                      (value & (unsigned long)0xFFFFFFFF),
+diff --git a/hw/timer/atcpit100.c b/hw/timer/atcpit100.c
+index ee2128bfd0..a8bf8b4e33 100644
+--- a/hw/timer/atcpit100.c
++++ b/hw/timer/atcpit100.c
+@@ -104,7 +104,7 @@ enable_ptimer(ptimer_state *ptimer, uint64_t reload, uint32_t freq)
+ static void
+ atcpit100_update_irq(Atcpit100State *s)
+ {
+-    uint level = !!(s->int_en & s->int_st);
++    unsigned int level = !!(s->int_en & s->int_st);
+ 
+     LOG("%s: level %d\n", __func__, level);
+     qemu_set_irq(s->irq, level);
+@@ -115,7 +115,7 @@ calculate_timer_count(Atcpit100Channel *ch)
+ {
+     uint32_t count;
+     Atcpit100Timer *t = ch->timers;
+-    uint mode = CHANNEL_MODE(ch->control);
++    unsigned int mode = CHANNEL_MODE(ch->control);
+ 
+     switch (mode) {
+     case 0: /* reserved */
+@@ -154,7 +154,7 @@ static void
+ update_single_channel_enable(Atcpit100Channel *ch, uint32_t toggles)
+ {
+     LOG("%s: CH %d, toggles 0x%1x\n", __func__, ch->id, toggles);
+-    uint ch_no, tmr_no, mask, mode, enables;
++    unsigned int ch_no, tmr_no, mask, mode, enables;
+     uint32_t freq, reload;
+     Atcpit100State *s;
+     Atcpit100Timer *t;
+@@ -266,7 +266,7 @@ static inline void
+ atcpit100_update_channel_enable(Atcpit100State *s, uint64_t value)
+ {
+     LOG("%s:\n", __func__);
+-    uint ch_no;
++    unsigned int ch_no;
+     uint32_t toggle = s->ch_en ^ value;
+     Atcpit100Channel *ch = s->channels;
+ 
+diff --git a/target/riscv/andes_helper.c b/target/riscv/andes_helper.c
+index bf2e7c406f..9e3772d3d1 100644
+--- a/target/riscv/andes_helper.c
++++ b/target/riscv/andes_helper.c
+@@ -101,7 +101,7 @@ target_ulong helper_andes_v5_fb_x(target_ulong rs1, target_ulong rs2,
+ {
+     target_ulong rd;
+     uint8_t *pa, *pb;
+-    uint size;
++    unsigned int size;
+ 
+     size = sizeof(target_ulong);
+     pa = (uint8_t *)&rs1;
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index a0d6967dab..c5d017d801 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -432,7 +432,7 @@ static void andes_set_mmsc_cfg_l2c(AndesCsr *andes_csr)
+ #if defined(TARGET_RISCV32)
+     andes_csr->csrno[CSR_MMSC_CFG2] |= (1UL << V5_MMSC_CFG2_L2C);
+ #elif defined(TARGET_RISCV64)
+-    andes_csr->csrno[CSR_MMSC_CFG] |= (1UL << V5_MMSC_CFG_L2C);
++    andes_csr->csrno[CSR_MMSC_CFG] |= (1ULL << V5_MMSC_CFG_L2C);
+ #endif
+ }
+ 
+-- 
+2.34.1
+

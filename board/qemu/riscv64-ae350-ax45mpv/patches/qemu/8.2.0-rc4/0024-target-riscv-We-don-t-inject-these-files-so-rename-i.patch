@@ -1,0 +1,64 @@
+From 4f0f580cb6f76875000c3df5f443dd442b008978 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 31 Jul 2023 17:02:19 +0800
+Subject: [PATCH 024/241] target/riscv: We don't inject these files, so rename
+ it to normal filenames. Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+
+---
+ target/riscv/cpu.h                            | 2 +-
+ target/riscv/{csr_andes.inc.c => csr_andes.c} | 2 +-
+ target/riscv/{csr_andes.inc.h => csr_andes.h} | 0
+ target/riscv/meson.build                      | 2 +-
+ 4 files changed, 3 insertions(+), 3 deletions(-)
+ rename target/riscv/{csr_andes.inc.c => csr_andes.c} (99%)
+ rename target/riscv/{csr_andes.inc.h => csr_andes.h} (100%)
+
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index e4515c1006..3c4fba21f6 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -43,7 +43,7 @@ typedef struct CPUArchState CPURISCVState;
+ #endif
+ 
+ /* Vendor CSR declaration */
+-#include "csr_andes.inc.h"
++#include "csr_andes.h"
+ 
+ #define TCG_GUEST_DEFAULT_MO 0
+ 
+diff --git a/target/riscv/csr_andes.inc.c b/target/riscv/csr_andes.c
+similarity index 99%
+rename from target/riscv/csr_andes.inc.c
+rename to target/riscv/csr_andes.c
+index 5aa1a55fe8..52d96814aa 100644
+--- a/target/riscv/csr_andes.inc.c
++++ b/target/riscv/csr_andes.c
+@@ -10,7 +10,7 @@
+ #include "qemu/main-loop.h"
+ #include "exec/exec-all.h"
+ #include "andes_cpu_bits.h"
+-#include "csr_andes.inc.h"
++#include "csr_andes.h"
+ 
+ static RISCVException any(CPURISCVState *env,
+                           int csrno)
+diff --git a/target/riscv/csr_andes.inc.h b/target/riscv/csr_andes.h
+similarity index 100%
+rename from target/riscv/csr_andes.inc.h
+rename to target/riscv/csr_andes.h
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index 07da4793ed..c8abeac1c2 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -13,7 +13,7 @@ riscv_ss = ss.source_set()
+ riscv_ss.add(gen)
+ riscv_ss.add(files(
+   'andes_helper.c',
+-  'csr_andes.inc.c',
++  'csr_andes.c',
+   'cpu.c',
+   'cpu_helper.c',
+   'csr.c',
+-- 
+2.34.1
+

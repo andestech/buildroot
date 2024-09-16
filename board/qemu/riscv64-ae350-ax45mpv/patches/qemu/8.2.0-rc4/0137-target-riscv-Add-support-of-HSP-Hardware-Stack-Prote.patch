@@ -1,0 +1,197 @@
+From eaf9feab6292c37793448bee1b0ae8973d838d33 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 11 Dec 2023 13:52:06 +0800
+Subject: [PATCH 137/241] target/riscv: Add support of HSP(Hardware Stack
+ Protection and recording). (#89)
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/89
+Reviewed-by: Ethan Zhan-Yang Chen <ethan84@andestech.com>
+Reviewed-by: Alvin Che-Chia Chang <alvinga@andestech.com>
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/andes_helper.c | 55 +++++++++++++++++++++++++++++++++++++
+ target/riscv/andes_helper.h |  1 +
+ target/riscv/cpu.c          |  1 +
+ target/riscv/cpu_bits.h     |  2 ++
+ target/riscv/csr_andes.h    | 18 +++++++++---
+ target/riscv/translate.c    | 12 ++++++++
+ 6 files changed, 85 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/andes_helper.c b/target/riscv/andes_helper.c
+index 3a7002f4e4..8de8817a15 100644
+--- a/target/riscv/andes_helper.c
++++ b/target/riscv/andes_helper.c
+@@ -149,6 +149,61 @@ uint64_t helper_andes_nfcvt_s_bf16(CPURISCVState *env, uint64_t rs2)
+     return nanbox_s(env, bfloat16_to_float32(frs, &env->fp_status));
+ }
+ 
++void helper_andes_v5_hsp_check(CPURISCVState *env, target_ulong val)
++{
++    if (csr_ops[CSR_MHSP_CTL].predicate(env, CSR_MHSP_CTL) == RISCV_EXCP_NONE) {
++        target_ulong mhsp_ctl;
++        csr_ops[CSR_MHSP_CTL].read(env, CSR_MHSP_CTL, &mhsp_ctl);
++
++#ifdef CONFIG_USER_ONLY
++        if ((mhsp_ctl & MASK_MHSP_CTL_U) == 0) {
++            return;
++        }
++#else
++        if ((env->priv == PRV_M && (mhsp_ctl & MASK_MHSP_CTL_M) == 0)
++                || (env->priv == PRV_S && (mhsp_ctl & MASK_MHSP_CTL_S) == 0)
++                || (env->priv == PRV_U && (mhsp_ctl & MASK_MHSP_CTL_U) == 0)) {
++            return;
++        }
++#endif
++
++        target_ulong msp_base;
++        target_ulong msp_bound;
++        csr_ops[CSR_MSP_BASE].read(env, CSR_MSP_BASE, &msp_base);
++        csr_ops[CSR_MSP_BOUND].read(env, CSR_MSP_BOUND, &msp_bound);
++
++        if ((mhsp_ctl & MASK_MHSP_CTL_SCHM) != 0) {
++            if ((mhsp_ctl & MASK_MHSP_CTL_OVF_EN) != 0) {
++                /* recording mode */
++                if (val < msp_bound) {
++                    csr_ops[CSR_MSP_BOUND].write(env, CSR_MSP_BOUND, val);
++                }
++                return;
++            }
++        } else {
++            if ((mhsp_ctl & MASK_MHSP_CTL_OVF_EN) != 0) {
++                /* overflow mode */
++                if (val < msp_bound) {
++                    mhsp_ctl = set_field(mhsp_ctl, MASK_MHSP_CTL_OVF_EN, 0);
++                    csr_ops[CSR_MHSP_CTL].write(env, CSR_MHSP_CTL, mhsp_ctl);
++                    riscv_raise_exception(env, RISCV_EXCP_ANDES_STACK_OVERFLOW,
++                                          GETPC());
++                }
++            }
++            if ((mhsp_ctl & MASK_MHSP_CTL_UDF_EN) != 0) {
++                /* underflow mode */
++                if (val > msp_base) {
++                    mhsp_ctl = set_field(mhsp_ctl, MASK_MHSP_CTL_UDF_EN, 0);
++                    csr_ops[CSR_MHSP_CTL].write(env, CSR_MHSP_CTL, mhsp_ctl);
++                    riscv_raise_exception(env, RISCV_EXCP_ANDES_STACK_UNDERFLOW,
++                                          GETPC());
++                }
++            }
++        }
++    }
++    return;
++}
++
+ #include "andes_ace_helper.h"
+ target_ulong helper_andes_v5_ace(CPURISCVState *env, target_ulong opcode)
+ {
+diff --git a/target/riscv/andes_helper.h b/target/riscv/andes_helper.h
+index 17ad15d84c..0cd337793a 100644
+--- a/target/riscv/andes_helper.h
++++ b/target/riscv/andes_helper.h
+@@ -43,3 +43,4 @@ DEF_HELPER_6(vqmaccsu_vx_h, void, ptr, ptr, tl, ptr, env, i32)
+ DEF_HELPER_6(vqmaccus_vx_b, void, ptr, ptr, tl, ptr, env, i32)
+ DEF_HELPER_6(vqmaccus_vx_h, void, ptr, ptr, tl, ptr, env, i32)
+ DEF_HELPER_FLAGS_2(andes_v5_ace, TCG_CALL_NO_RWG, tl, env, tl)
++DEF_HELPER_FLAGS_2(andes_v5_hsp_check, TCG_CALL_NO_RWG, void, env, tl)
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index eea4a47b3d..451bcce00d 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1323,6 +1323,7 @@ static void andes_csr_reset_common(CPURISCVState *env)
+ 
+     env->andes_csr.csrno[CSR_UITB] = 0;
+     env->andes_csr.csrno[CSR_MMSC_CFG] = (1UL << V5_MMSC_CFG_ECD) |
++                                         (1UL << V5_MMSC_CFG_HSP) |
+                                          (1UL << V5_MMSC_CFG_LMSLVP) |
+                                          (1UL << V5_MMSC_CFG_CCTLCSR) |
+                                          (1UL << V5_MMSC_CFG_PPMA);
+diff --git a/target/riscv/cpu_bits.h b/target/riscv/cpu_bits.h
+index 1970cef3cb..a1f7efcf86 100644
+--- a/target/riscv/cpu_bits.h
++++ b/target/riscv/cpu_bits.h
+@@ -704,6 +704,8 @@ typedef enum RISCVException {
+     RISCV_EXCP_LOAD_GUEST_ACCESS_FAULT = 0x15,
+     RISCV_EXCP_VIRT_INSTRUCTION_FAULT = 0x16,
+     RISCV_EXCP_STORE_GUEST_AMO_ACCESS_FAULT = 0x17,
++    RISCV_EXCP_ANDES_STACK_OVERFLOW = 0x20,
++    RISCV_EXCP_ANDES_STACK_UNDERFLOW = 0x21,
+ } RISCVException;
+ 
+ #define RISCV_EXCP_INT_FLAG                0x80000000
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index ad591c8826..c57b396e77 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -18,6 +18,7 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ 
+ /* mmsc_cfg */
+ #define V5_MMSC_CFG_ECD                     3
++#define V5_MMSC_CFG_HSP                     5
+ #define V5_MMSC_CFG_LMSLVP                  14
+ #define V5_MMSC_CFG_CCTLCSR                 16
+ #define V5_MMSC_CFG_PPMA                    30
+@@ -221,6 +222,19 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define MASK_MRVARCH_CFG2_ZVQMAC            (0x1 << 3)
+ #define MASK_MRVARCH_CFG2_ZVLSSEQ           (0x1 << 4)
+ 
++/* mhsp_ctl */
++#define MASK_MHSP_CTL_OVF_EN                (0x1)
++#define MASK_MHSP_CTL_UDF_EN                (0x1 << 1)
++#define MASK_MHSP_CTL_SCHM                  (0x1 << 2)
++#define MASK_MHSP_CTL_U                     (0x1 << 3)
++#define MASK_MHSP_CTL_S                     (0x1 << 4)
++#define MASK_MHSP_CTL_M                     (0x1 << 5)
++
++/* umisc_ctl */
++#define MASK_UMISC_CTL_FP_MODE              (0x1)
++#define MASK_UMISC_CTL_CMR_CTL              (0x1 << 2)
++
++/* write masks */
+ #define WRITE_MASK_CSR_MECC_CODE_32         0x7F
+ #define WRITE_MASK_CSR_MECC_CODE_64         0xFF
+ #define WRITE_MASK_CSR_UITB_32              0xFFFFFFFC
+@@ -243,10 +257,6 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define WRITE_MASK_CSR_SMISC_CTL            0x30
+ #define WRITE_MASK_CSR_MCACHE_CTL           0x7FFFFF
+ 
+-/* umisc_ctl */
+-#define MASK_UMISC_CTL_FP_MODE              (0x1)
+-#define MASK_UMISC_CTL_CMR_CTL              (0x1 << 2)
+-
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+ void andes_cpu_do_interrupt_post(CPUState *cpu);
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index afe0f88266..6196067041 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -379,6 +379,12 @@ static TCGv dest_gprh(DisasContext *ctx, int reg_num)
+ 
+ static void gen_set_gpr(DisasContext *ctx, int reg_num, TCGv t)
+ {
++    if (ctx->cfg_ptr->ext_XAndesV5Ops == true) {
++        if (reg_num == xSP) {
++            gen_helper_andes_v5_hsp_check(cpu_env, t);
++        }
++    }
++
+     if (reg_num != 0) {
+         switch (get_ol(ctx)) {
+         case MXL_RV32:
+@@ -400,6 +406,12 @@ static void gen_set_gpr(DisasContext *ctx, int reg_num, TCGv t)
+ 
+ static void gen_set_gpri(DisasContext *ctx, int reg_num, target_long imm)
+ {
++    if (ctx->cfg_ptr->ext_XAndesV5Ops == true) {
++        if (reg_num == xSP) {
++            gen_helper_andes_v5_hsp_check(cpu_env, tcg_constant_tl(imm));
++        }
++    }
++
+     if (reg_num != 0) {
+         switch (get_ol(ctx)) {
+         case MXL_RV32:
+-- 
+2.34.1
+

@@ -1,0 +1,143 @@
+From 19edcdef46bb84c50df69dfa86d66c4b004dd045 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Tue, 5 Sep 2023 10:37:45 +0800
+Subject: [PATCH 058/241] target/riscv: local memory is not supported in user
+ emulation
+
+Fix issue#55
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ target/riscv/cpu.c       | 12 ++++++++++++
+ target/riscv/cpu.h       |  3 +++
+ target/riscv/csr_andes.c |  7 +++++++
+ 3 files changed, 22 insertions(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 62de710f79..609bc1fd2c 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -436,6 +436,7 @@ static void andes_set_mmsc_cfg_l2c(AndesCsr *andes_csr)
+ #endif
+ }
+ 
++#ifndef CONFIG_USER_ONLY
+ static uint64_t memory_region_local_mem_read(void *opaque,
+                                               hwaddr addr, unsigned size)
+ {
+@@ -562,6 +563,7 @@ static void andes_cpu_lm_realize(DeviceState *dev)
+                                     env->mask_dlm, 1);
+     }
+ }
++#endif
+ 
+ #if defined(TARGET_RISCV64)
+ static void rv64_base_cpu_init(Object *obj)
+@@ -724,8 +726,11 @@ static void rv64_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+         spec_csr_init(&env->andes_csr);
+     }
+     andes_vec_init(&env->andes_vec);
++
++#ifndef CONFIG_USER_ONLY
+     /* Setup local memory */
+     andes_cpu_lm_init(obj);
++#endif
+ 
+     env->do_interrupt_post = andes_cpu_do_interrupt_post;
+ 
+@@ -1019,8 +1024,11 @@ static void rv32_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+         spec_csr_init(&env->andes_csr);
+     }
+     andes_vec_init(&env->andes_vec);
++
++#ifndef CONFIG_USER_ONLY
+     /* Setup local memory */
+     andes_cpu_lm_init(obj);
++#endif
+ 
+     env->do_interrupt_post = andes_cpu_do_interrupt_post;
+ 
+@@ -1619,7 +1627,9 @@ static void riscv_cpu_realize(DeviceState *dev, Error **errp)
+ #endif
+ 
+     qemu_init_vcpu(cs);
++#ifndef CONFIG_USER_ONLY
+     andes_cpu_lm_realize(dev);
++#endif
+     cpu_reset(cs);
+ 
+     mcc->parent_realize(dev, errp);
+@@ -2054,6 +2064,7 @@ static const gchar *riscv_gdb_arch_name(CPUState *cs)
+ =======
+ static Property andes_cpu_property[] = {
+     /* Defaults for standard extensions */
++#ifndef CONFIG_USER_ONLY
+     DEFINE_PROP_UINT64("ilm_base", RISCVCPU, env.ilm_base, 0),
+     DEFINE_PROP_UINT64("dlm_base", RISCVCPU, env.dlm_base, 0x200000),
+     DEFINE_PROP_UINT32("ilm_size", RISCVCPU, env.ilm_size, 0x200000),
+@@ -2062,6 +2073,7 @@ static Property andes_cpu_property[] = {
+                      false),
+     DEFINE_PROP_BOOL("dlm_default_enable", RISCVCPU, env.dlm_default_enable,
+                      false),
++#endif
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index d4a44d7ddd..1f38957590 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -425,6 +425,7 @@ struct CPUArchState {
+     AndesVec andes_vec;
+     void (*do_interrupt_post)(CPUState *cpu);
+ 
++#ifndef CONFIG_USER_ONLY
+     MemoryRegion *cpu_as_root;
+     MemoryRegion *cpu_as_mem;
+     MemoryRegion *mask_ilm;
+@@ -435,6 +436,8 @@ struct CPUArchState {
+     uint32_t dlm_size;
+     bool ilm_default_enable;
+     bool dlm_default_enable;
++#endif
++
+ };
+ 
+ /*
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 95941f82c6..45291d5e16 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -550,6 +550,7 @@ static RISCVException write_all_ignore(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++#ifndef CONFIG_USER_ONLY
+ static RISCVException write_lmb(CPURISCVState *env,
+                                 int csrno,
+                                 target_ulong val)
+@@ -583,6 +584,7 @@ static RISCVException write_lmb(CPURISCVState *env,
+     }
+     return RISCV_EXCP_NONE;
+ }
++#endif
+ 
+ void andes_csr_init(AndesCsr *andes_csr)
+ {
+@@ -659,8 +661,13 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_MSTATUS_CRASHSAVE] = { "mstatus_crashsave", any, read_csr },
+ 
+     /* Memory CSRs */
++#ifndef CONFIG_USER_ONLY
+     [CSR_MILMB]          = { "milmb",             any, read_csr, write_lmb  },
+     [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_lmb  },
++#else
++    [CSR_MILMB]          = { "milmb",             any, read_csr, write_csr  },
++    [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_csr  },
++#endif
+     [CSR_MECC_CODE]      = { "mecc_code",         ecc, read_csr,
+                                                        write_mecc_code      },
+     [CSR_MNVEC]          = { "mnvec",             any, read_csr,
+-- 
+2.34.1
+

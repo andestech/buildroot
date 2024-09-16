@@ -1,0 +1,27 @@
+From 882aa9b6ce949ae7492f0d491e1449b60bb8528c Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 13 Nov 2023 11:06:01 +0800
+Subject: [PATCH 107/241] target/riscv: Only reset Andes CSRs when uses Andes
+ CPUs that support V5 extension.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index f215874245..37d7a5282f 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -2533,7 +2533,7 @@ static bool is_andes_riscv_cpu_type(Object *obj)
+     for (int i = 0; i < size; i++) {
+         if (strstr(riscv_cpu_type_infos[i].name, "andes") != NULL) {
+             if (object_dynamic_cast(obj, riscv_cpu_type_infos[i].name)) {
+-                return true;
++                return RISCV_CPU(obj)->cfg.ext_XAndesV5Ops;
+             }
+         }
+     }
+-- 
+2.34.1
+

@@ -1,0 +1,951 @@
+From fa89e8f4a2880b0a0357c67f0e37a08496456bce Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Wed, 31 Jan 2024 17:01:25 +0800
+Subject: [PATCH 201/241] gdbstub: Refine ACE debugger relative code
+ target/riscv: Refine ACE and ACE debugger code
+
+This modification focus on ACE and ACE debugger coding style,
+and also move ACE symbols pointer to CPU environment, so now
+we can support maximum CPUs as system.
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ gdbstub/andes_ace_gdb.c.inc                   |  55 +++++----
+ gdbstub/andes_ace_gdb.h                       |  38 +++----
+ gdbstub/system.c                              |   2 +-
+ target/riscv/ace-helper.h                     |  71 +++++-------
+ target/riscv/andes_ace_helper.c.inc           | 107 +++++++++---------
+ target/riscv/andes_ace_helper.h               |  64 ++---------
+ target/riscv/andes_helper.c                   |  10 +-
+ target/riscv/andes_helper.h                   |   2 +-
+ target/riscv/cpu.h                            |   7 ++
+ target/riscv/gdbstub.c                        |  82 ++++++--------
+ target/riscv/insn_trans/trans_xandesace.c.inc |   2 +-
+ target/riscv/tcg/tcg-cpu.c                    |  10 +-
+ 12 files changed, 187 insertions(+), 263 deletions(-)
+
+diff --git a/gdbstub/andes_ace_gdb.c.inc b/gdbstub/andes_ace_gdb.c.inc
+index 288c904ea2..3338c415ed 100644
+--- a/gdbstub/andes_ace_gdb.c.inc
++++ b/gdbstub/andes_ace_gdb.c.inc
+@@ -11,13 +11,13 @@
+ #include "gdbstub/andes_ace_gdb.h"
+ #include "qemu/qemu-print.h"
+ 
+-unsigned *global_acr_reg_count_v5;
+-unsigned *global_acr_type_count_v5;
+-unsigned *global_ace_lib_for_gdb_len_v5;
+-const char *global_ace_lib_for_gdb_v5;
+-ACR_INFO_T_V5 *global_acr_info_list_v5;
+-INSN_CODE_T_V5* (*gen_get_value_code) (char *name, unsigned index);
+-INSN_CODE_T_V5* (*gen_set_value_code) (char *name, unsigned index);
++unsigned *ace_acr_reg_count;
++unsigned *ace_acr_type_count;
++unsigned *ace_lib_for_gdb_len;
++const char *ace_lib_for_gdb;
++AceAcrInfo *ace_acr_info_list;
++AceInsnCode* (*ace_gen_get_value_code) (char *name, unsigned index);
++AceInsnCode* (*ace_gen_set_value_code) (char *name, unsigned index);
+ 
+ int32_t gdb_ace_load_lib(const char *so_name)
+ {
+@@ -26,7 +26,7 @@ int32_t gdb_ace_load_lib(const char *so_name)
+      * Check whether already load ACE debugger library,
+      * we don't support multi-ace and/or multi-ace-dbg
+      */
+-    if (global_ace_lib_for_gdb_v5 != NULL) {
++    if (ace_lib_for_gdb != NULL) {
+         return 0;
+     }
+ 
+@@ -36,16 +36,16 @@ int32_t gdb_ace_load_lib(const char *so_name)
+         return -1;
+     }
+ 
+-    global_ace_lib_for_gdb_v5 =
++    ace_lib_for_gdb =
+         (const char *) dlsym(handle, "ace_lib_for_gdb");
+-    if (global_ace_lib_for_gdb_v5 == NULL) {
++    if (ace_lib_for_gdb == NULL) {
+         qemu_printf("Unable to load symbol ace_lib_for_gdb\n");
+         return -1;
+     }
+ 
+-    global_ace_lib_for_gdb_len_v5 =
++    ace_lib_for_gdb_len =
+         (unsigned *) dlsym(handle, "ace_lib_for_gdb_len");
+-    if (global_ace_lib_for_gdb_len_v5 == NULL) {
++    if (ace_lib_for_gdb_len == NULL) {
+         qemu_printf("Unable to load symbol ace_lib_for_gdb_len\n");
+         return -1;
+     }
+@@ -54,16 +54,16 @@ int32_t gdb_ace_load_lib(const char *so_name)
+      * Below ACR relative symbols can be skip since some .ace file
+      * has no any ACR
+      */
+-    global_acr_reg_count_v5 = (unsigned *) dlsym(handle, "acr_reg_count");
++    ace_acr_reg_count = (unsigned *) dlsym(handle, "acr_reg_count");
+ 
+-    global_acr_type_count_v5 = (unsigned *) dlsym(handle, "acr_type_count");
++    ace_acr_type_count = (unsigned *) dlsym(handle, "acr_type_count");
+ 
+-    gen_get_value_code = dlsym(handle, "gen_get_value_code");
++    ace_gen_get_value_code = dlsym(handle, "gen_get_value_code");
+ 
+-    gen_set_value_code = dlsym(handle, "gen_set_value_code");
++    ace_gen_set_value_code = dlsym(handle, "gen_set_value_code");
+ 
+-    if (global_acr_type_count_v5 && *global_acr_type_count_v5 != 0) {
+-        global_acr_info_list_v5 = (ACR_INFO_T_V5 *) dlsym(handle, "acr_list");
++    if (ace_acr_type_count && *ace_acr_type_count != 0) {
++        ace_acr_info_list = (AceAcrInfo *) dlsym(handle, "acr_list");
+     }
+ 
+     return 0;
+@@ -73,27 +73,27 @@ int32_t gdb_ace_get_file_name_for_gdb(unsigned char *platform, char *soname)
+ {
+     int32_t ret = 0;
+ 
+-    if (global_ace_lib_for_gdb_v5) {
++    if (ace_lib_for_gdb) {
+         struct utsname os;
+         if (uname(&os) == 0) {
+             const char *str;
+ 
+             if (g_strcmp0((const char *)platform, os.sysname) == 0) {
+                 /* Return binary share library.  */
+-                str = global_ace_lib_for_gdb_v5;
++                str = ace_lib_for_gdb;
+             } else
+                 return -1;
+ 
+             /* use size as filename to do fopen */
+-            sprintf(soname, "%u", *global_ace_lib_for_gdb_len_v5);
++            sprintf(soname, "%u", *ace_lib_for_gdb_len);
+ 
+             FILE *fd = fopen(soname, "w");
+             if (fd == NULL) {
+                 ret = -2;
+             } else {
+                 if (fwrite(str, sizeof(char),
+-                    *global_ace_lib_for_gdb_len_v5, fd) !=
+-                    *global_ace_lib_for_gdb_len_v5) {
++                    *ace_lib_for_gdb_len, fd) !=
++                    *ace_lib_for_gdb_len) {
+                     ret = -3;
+                 }
+                 fclose(fd);
+@@ -108,7 +108,6 @@ int32_t gdb_ace_get_file_name_for_gdb(unsigned char *platform, char *soname)
+ 
+ #define NDS_QUERY_TARGET    "SID"
+ #define NDS_QUERY_ENDIAN    "LE"
+-#define NDS_QUERY_CPUID     "0"
+ #define NDS_QUERY_TARGET_CMD    "nds query target"
+ #define NDS_QUERY_ENDIAN_CMD    "nds query endian"
+ #define NDS_QUERY_CPUID_CMD     "nds query cpuid"
+@@ -116,7 +115,7 @@ int32_t gdb_ace_get_file_name_for_gdb(unsigned char *platform, char *soname)
+ #define NDS_VA_CMD              "nds va "
+ #define NDS_OTHER_CMD           "nds "
+ 
+-int gdb_handle_query_rcmd_nds_query(GArray *params, void *user_ctx)
++int gdb_handle_query_rcmd_andes_query(GArray *params, void *user_ctx)
+ {
+     char reply[16];
+     /* nds query target only can be 'SID' or 'OCD' */
+@@ -136,11 +135,11 @@ int gdb_handle_query_rcmd_nds_query(GArray *params, void *user_ctx)
+         gdb_put_strbuf();
+         return 0;
+     }
+-    /* Should return 0 or hartid */
++    /* return hartid as string */
+     if (!g_strcmp0((const char *)gdbserver_state.mem_buf->data,
+         NDS_QUERY_CPUID_CMD)) {
+-        gdb_memtohex(gdbserver_state.str_buf,
+-                     (guint8 *)NDS_QUERY_CPUID, strlen(NDS_QUERY_CPUID));
++        snprintf(reply, sizeof(reply), "%d", gdbserver_state.g_cpu->cpu_index);
++        gdb_memtohex(gdbserver_state.str_buf, (guint8 *)reply, strlen(reply));
+         gdb_put_strbuf();
+         return 0;
+     }
+diff --git a/gdbstub/andes_ace_gdb.h b/gdbstub/andes_ace_gdb.h
+index 36f7ecd3b4..426bebe5a5 100644
+--- a/gdbstub/andes_ace_gdb.h
++++ b/gdbstub/andes_ace_gdb.h
+@@ -7,15 +7,15 @@
+ #ifndef _ANDES_ACE_GDB_H_
+ #define _ANDES_ACE_GDB_H_
+ 
+-/* ACR_info records essential information of ACR and SRAM-type ACM */
+-typedef struct ACR_info_v5 {
++/* AceAcrInfo records essential information of ACR and SRAM-type ACM */
++typedef struct {
+     char name[1024];
+     unsigned width;
+     unsigned num;
+-} ACR_INFO_T_V5;
++} AceAcrInfo;
+ 
+ /*
+- * INSN_TYPE_V5 represents what kind of utility instruction
++ * AceInsnType represents what kind of utility instruction
+  * acr_io1 : ACR utility instruction and exists one GPR for din/dout
+  * acr_io2 : ACR utility instruction and exists two GPRs for din/dout
+  *           (din_high, din_low/dout_high, din_low)
+@@ -26,27 +26,27 @@ typedef struct ACR_info_v5 {
+ typedef enum {
+   acr_io1 = 0, acr_io2 = 1,
+   acm_io1 = 2, acm_io2 = 3
+-} INSN_TYPE_V5;
++} AceInsnType;
+ 
+-typedef struct Util_Insn {
+-  INSN_TYPE_V5 version;
++typedef struct {
++  AceInsnType version;
+   unsigned insn;
+-} UTIL_INSN_T_V5;
++} AceUtilInsn;
+ 
+-typedef struct Insn_Code {
++typedef struct {
+   unsigned num;
+-  UTIL_INSN_T_V5 *code;
+-} INSN_CODE_T_V5;
++  AceUtilInsn *code;
++} AceInsnCode;
+ 
+-extern unsigned *global_acr_reg_count_v5;
+-extern unsigned *global_acr_type_count_v5;
+-extern unsigned *global_ace_lib_for_gdb_len_v5;
+-extern const char *global_ace_lib_for_gdb_v5;
+-extern ACR_INFO_T_V5 *global_acr_info_list_v5;
+-extern INSN_CODE_T_V5* (*gen_get_value_code) (char *name, unsigned index);
+-extern INSN_CODE_T_V5* (*gen_set_value_code) (char *name, unsigned index);
++extern unsigned *ace_acr_reg_count;
++extern unsigned *ace_acr_type_count;
++extern unsigned *ace_lib_for_gdb_len;
++extern const char *ace_lib_for_gdb;
++extern AceAcrInfo *ace_acr_info_list;
++extern AceInsnCode *(*ace_gen_get_value_code) (char *name, unsigned index);
++extern AceInsnCode *(*ace_gen_set_value_code) (char *name, unsigned index);
+ 
+ int32_t gdb_ace_load_lib(const char *);
+ int32_t gdb_ace_get_file_name_for_gdb(unsigned char *, char *);
+-int gdb_handle_query_rcmd_nds_query(GArray *, void *);
++int gdb_handle_query_rcmd_andes_query(GArray *, void *);
+ #endif
+diff --git a/gdbstub/system.c b/gdbstub/system.c
+index d02738ff3a..31ddce5004 100644
+--- a/gdbstub/system.c
++++ b/gdbstub/system.c
+@@ -536,7 +536,7 @@ void gdb_handle_query_rcmd(GArray *params, void *user_ctx)
+     gdb_hextomem(gdbserver_state.mem_buf, get_param(params, 0)->data, len);
+     g_byte_array_append(gdbserver_state.mem_buf, &zero, 1);
+     /* process 'nds xxx' commands */
+-    if (gdb_handle_query_rcmd_nds_query(params, user_ctx) == 0) {
++    if (gdb_handle_query_rcmd_andes_query(params, user_ctx) == 0) {
+         return;
+     }
+     qemu_chr_be_write(gdbserver_system_state.mon_chr,
+diff --git a/target/riscv/ace-helper.h b/target/riscv/ace-helper.h
+index 38f9cd9e84..a5073360dd 100644
+--- a/target/riscv/ace-helper.h
++++ b/target/riscv/ace-helper.h
+@@ -2,7 +2,6 @@
+  * Andes ACE common header
+  *
+  * Copyright (c) 2023 Andes Technology Corp.
+- * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+ #ifndef __ACE_HELPER_H__
+ #define __ACE_HELPER_H__
+@@ -18,41 +17,34 @@
+ /* define ACE agent version, just use int value */
+ #define ACE_AGENT_VERSION   100
+ 
+-enum CB_NAME {
+-    GET_XRF = 0,
+-    SET_XRF,
+-    GET_FRF,
+-    SET_FRF,
+-    GET_VRF,
+-    SET_VRF,
+-    GET_MEM,
+-    SET_MEM,
+-    GET_CSR,
+-    SET_CSR,
+-    SET_CSR_MASKED,
+-    GET_ACM,
+-    SET_ACM,
+-    GET_PC,
+-    GET_HARD_ID,
+-    GET_CPU_PRIV,
+-    GET_ACES,
+-    SET_ACES,
+-    CB_NAME_MAX
++enum ACE_CB_NAME {
++    ACE_GET_XRF = 0,
++    ACE_SET_XRF,
++    ACE_GET_FRF,
++    ACE_SET_FRF,
++    ACE_GET_VRF,
++    ACE_SET_VRF,
++    ACE_GET_MEM,
++    ACE_SET_MEM,
++    ACE_GET_CSR,
++    ACE_SET_CSR,
++    ACE_SET_CSR_MASKED,
++    ACE_GET_ACM,
++    ACE_SET_ACM,
++    ACE_GET_PC,
++    ACE_GET_HARD_ID,
++    ACE_GET_CPU_PRIV,
++    ACE_GET_ACES,
++    ACE_SET_ACES,
++    ACE_CB_NAME_MAX
+ };
+ 
+-typedef int (*generic_fp)(void);
+-typedef generic_fp *cb_table_t;
+-/*
+- * generic_fp table[CB_NAME_MAX];
+- * table[GET_XRF] = &qemu_get_xrf;
+- * table[SET_XRF] = &qemu_set_xrf;
+- *
+- */
++typedef int (*AceAgentFuncPtr)(void);
+ 
+ typedef enum {
+     ACM_OK,
+     ACM_ERROR,
+-} ACM_Status;
++} AcmStatus;
+ 
+ /* For Get PC/HART_ID/PRIV */
+ typedef uint64_t (*func0)(void *);
+@@ -85,18 +77,17 @@ typedef void (*func3m)(void *, uint64_t x, uint64_t y, uint32_t z);
+ #define FUNC_3M(f, p0, p1, p2, p3) ((func3m)(f))(p0, p1, p2, p3)
+ 
+ /* For Get/Set ACM */
+-typedef ACM_Status (*func3a)(void *, uint64_t x, uint32_t y, char *z);
++typedef AcmStatus (*func3a)(void *, uint64_t x, uint32_t y, char *z);
+ #define FUNC_3A(f, p0, p1, p2, p3) ((func3a)(f))(p0, p1, p2, p3)
+ 
+-typedef int32_t (*fp_ace_agent_register_t)(void *, cb_table_t, uint32_t,
+-    const char*, uint64_t, int32_t);
+-typedef int32_t (*fp_ace_agent_run_insn_t)(void *, uint32_t, uint64_t);
+-typedef int32_t (*fp_ace_agent_version_t)(void *, uint64_t);
+-typedef char* (*fp_ace_agent_copilot_version_t)(void *, uint64_t);
+-EXPORT_C int32_t ace_agent_register(void *, cb_table_t cb_table,
+-    uint32_t cb_table_num, const char *, uint64_t, int32_t);
+-EXPORT_C int32_t ace_agent_run_insn(void *, uint32_t opcode, uint64_t);
++typedef int32_t (*AceAgentReg)(void *, void *, uint32_t,
++                               const char*, uint64_t, int32_t);
++typedef int32_t (*AceAgentRunInsn)(void *, uint32_t, uint64_t);
++typedef int32_t (*AceAgentVersion)(void *);
++typedef char* (*AceAgentCopilotVersion)(void *, uint64_t);
++EXPORT_C int32_t ace_agent_register(void *, AceAgentFuncPtr *,
++                                    uint32_t, const char *, uint64_t, int32_t);
++EXPORT_C int32_t ace_agent_run_insn(void *, uint32_t, uint64_t);
+ EXPORT_C int32_t ace_agent_version(void *);
+ EXPORT_C const char *ace_agent_copilot_version(void *, uint64_t);
+-
+ #endif
+diff --git a/target/riscv/andes_ace_helper.c.inc b/target/riscv/andes_ace_helper.c.inc
+index 93638b3467..b4710d96b9 100644
+--- a/target/riscv/andes_ace_helper.c.inc
++++ b/target/riscv/andes_ace_helper.c.inc
+@@ -9,70 +9,71 @@
+ #include <string.h>
+ #include <dlfcn.h>
+ 
+-generic_fp cb_tables[] = {
+-    (generic_fp)qemu_get_XRF, (generic_fp)qemu_set_XRF,
+-    (generic_fp)qemu_get_FRF, (generic_fp)qemu_set_FRF,
+-    (generic_fp)qemu_get_VRF, (generic_fp)qemu_set_VRF,
+-    (generic_fp)qemu_get_MEM, (generic_fp)qemu_set_MEM,
+-    (generic_fp)qemu_get_CSR, (generic_fp)qemu_set_CSR,
+-    (generic_fp)qemu_set_CSR_masked,
+-    (generic_fp)qemu_get_ACM, (generic_fp)qemu_set_ACM,
+-    (generic_fp)qemu_get_PC,
+-    (generic_fp)qemu_get_hart_id,
+-    (generic_fp)qemu_get_cpu_priv,
+-    (generic_fp)qemu_get_ACES, (generic_fp)qemu_set_ACES,
++AceAgentFuncPtr ace_agent_cb_func_table[] = {
++    (AceAgentFuncPtr)qemu_get_XRF, (AceAgentFuncPtr)qemu_set_XRF,
++    (AceAgentFuncPtr)qemu_get_FRF, (AceAgentFuncPtr)qemu_set_FRF,
++    (AceAgentFuncPtr)qemu_get_VRF, (AceAgentFuncPtr)qemu_set_VRF,
++    (AceAgentFuncPtr)qemu_get_MEM, (AceAgentFuncPtr)qemu_set_MEM,
++    (AceAgentFuncPtr)qemu_get_CSR, (AceAgentFuncPtr)qemu_set_CSR,
++    (AceAgentFuncPtr)qemu_set_CSR_masked,
++    (AceAgentFuncPtr)qemu_get_ACM, (AceAgentFuncPtr)qemu_set_ACM,
++    (AceAgentFuncPtr)qemu_get_PC,
++    (AceAgentFuncPtr)qemu_get_hart_id,
++    (AceAgentFuncPtr)qemu_get_cpu_priv,
++    (AceAgentFuncPtr)qemu_get_ACES, (AceAgentFuncPtr)qemu_set_ACES,
+     };
+ 
+-/*
+- * Below variable may move to cpu environment for
+- * multi-core support different ACE
+- */
+-ACEApis aceapis[ACE_HART_MAX];
++/* QEMU ACE agent handler */
++void *qemu_ace_agent_handle;
+ 
+-int32_t qemu_ace_load_wrapper(const char *filename, target_ulong hartid)
++int32_t qemu_ace_agent_load(const char *filename)
+ {
+     /* Check whether handler already loaded? */
+-    if (aceapis[hartid].qemu_ace_wrapper_handle != NULL) {
++    if (qemu_ace_agent_handle != NULL) {
+         return 0;
+     }
+-    aceapis[hartid].qemu_ace_wrapper_handle = dlopen(filename,
+-                                                     RTLD_NOW | RTLD_LOCAL);
+-    if (!aceapis[hartid].qemu_ace_wrapper_handle) {
++    qemu_ace_agent_handle = dlopen(filename, RTLD_NOW | RTLD_LOCAL);
++    if (!qemu_ace_agent_handle) {
+         return -1;
+     }
+     return 0;
+ }
+ 
+-int32_t qemu_ace_load_wrapper_symbol(const char *symbol_name,
+-                                     void **func_ptr, target_ulong hartid)
++int32_t qemu_ace_agent_load_symbol(const char *symbol_name, void **func_ptr)
+ {
+-    if (aceapis[hartid].qemu_ace_wrapper_handle == NULL) {
++    if (qemu_ace_agent_handle == NULL) {
+             return -1;
+     }
+     /* Clear any existing error */
+     dlerror();
+-    *(void **)(func_ptr) = dlsym(aceapis[hartid].qemu_ace_wrapper_handle,
+-                                 symbol_name);
++    *(void **)(func_ptr) = dlsym(qemu_ace_agent_handle, symbol_name);
+     if (*func_ptr == NULL) {
+         return -1;
+     }
+     return 0;
+ }
+ 
+-int32_t qemu_ace_agent_register(CPURISCVState *env,
+-                                const char *extlibpath, target_ulong hartid,
++int32_t qemu_ace_agent_register(CPURISCVState *env, const char *extlibpath,
+                                 int32_t multi)
+ {
+-    if (qemu_ace_load_wrapper_symbol("ace_agent_version",
+-        (void **)&aceapis[hartid].fp_ace_agent_version, hartid) != 0) {
++    AceAgentVersion ace_agent_version;
++    target_ulong hartid;
++#ifndef CONFIG_USER_ONLY
++    hartid = env->mhartid;
++#else
++    hartid = 0;
++#endif
++    if (qemu_ace_agent_load_symbol("ace_agent_version",
++        (void **)&ace_agent_version) != 0) {
+         return -1;
+     }
+-    if (aceapis[hartid].fp_ace_agent_version(env) != ACE_AGENT_VERSION) {
++    if (ace_agent_version(env) != ACE_AGENT_VERSION) {
++        qemu_printf("QEMU and ACE agent version don't match\n");
+         return -1;
+     }
+-    if (aceapis[hartid].fp_ace_agent_register == NULL) {
+-        if (qemu_ace_load_wrapper_symbol("ace_agent_register",
+-            (void **)&aceapis[hartid].fp_ace_agent_register, hartid) != 0) {
++    if (env->ace_agent_register == NULL) {
++        if (qemu_ace_agent_load_symbol("ace_agent_register",
++            (void **)&env->ace_agent_register) != 0) {
+             return -1;
+         }
+     }
+@@ -80,20 +81,25 @@ int32_t qemu_ace_agent_register(CPURISCVState *env,
+      * register with direct function tables and also pass number of
+      * total callback functions
+      */
+-    return aceapis[hartid].fp_ace_agent_register(env, cb_tables, CB_NAME_MAX,
+-                                                extlibpath, hartid, multi);
++    return env->ace_agent_register(env, ace_agent_cb_func_table,
++                                   ACE_CB_NAME_MAX, extlibpath, hartid, multi);
+ }
+ 
+-int32_t qemu_ace_agent_run_insn(CPURISCVState *env, uint32_t opcode,
+-                                target_ulong hartid)
++int32_t qemu_ace_agent_run_insn(CPURISCVState *env, uint32_t opcode)
+ {
+-    if (aceapis[hartid].fp_ace_agent_run_insn == NULL) {
+-        if (qemu_ace_load_wrapper_symbol("ace_agent_run_insn",
+-            (void **)&aceapis[hartid].fp_ace_agent_run_insn, hartid) != 0) {
++    target_ulong hartid;
++    if (env->ace_agent_run_insn == NULL) {
++        if (qemu_ace_agent_load_symbol("ace_agent_run_insn",
++            (void **)&env->ace_agent_run_insn) != 0) {
+             return -1;
+         }
+     }
+-    return aceapis[hartid].fp_ace_agent_run_insn(env, opcode, hartid);
++#ifndef CONFIG_USER_ONLY
++    hartid = env->mhartid;
++#else
++    hartid = 0;
++#endif
++    return env->ace_agent_run_insn(env, opcode, hartid);
+ }
+ 
+ uint64_t qemu_get_XRF(CPURISCVState *env, uint32_t index)
+@@ -280,7 +286,7 @@ void qemu_set_CSR_masked(CPURISCVState *env, uint32_t index, uint64_t value)
+ }
+ 
+ /* get memory without via mmu */
+-ACM_Status qemu_get_ACM(CPURISCVState *env, uint64_t addr,
++AcmStatus qemu_get_ACM(CPURISCVState *env, uint64_t addr,
+                         uint32_t size, char *data)
+ {
+ #ifndef CONFIG_USER_ONLY
+@@ -289,7 +295,7 @@ ACM_Status qemu_get_ACM(CPURISCVState *env, uint64_t addr,
+     return ACM_OK;
+ }
+ 
+-ACM_Status qemu_set_ACM(CPURISCVState *env, uint64_t addr,
++AcmStatus qemu_set_ACM(CPURISCVState *env, uint64_t addr,
+                         uint32_t size, char *data)
+ {
+ #ifndef CONFIG_USER_ONLY
+@@ -298,17 +304,6 @@ ACM_Status qemu_set_ACM(CPURISCVState *env, uint64_t addr,
+     return ACM_OK;
+ }
+ 
+-/* information access */
+-bool is_big_endian(void)
+-{
+-    return 0;
+-}
+-
+-bool interruption_exist(void)
+-{
+-    return 0;
+-}
+-
+ uint32_t qemu_get_ACES(CPURISCVState *env)
+ {
+     return qemu_get_CSR(env, CSR_MMISC_CTL, MASK_MMISC_CTL_ACES);
+diff --git a/target/riscv/andes_ace_helper.h b/target/riscv/andes_ace_helper.h
+index 3b24c66a8a..806f9858f2 100644
+--- a/target/riscv/andes_ace_helper.h
++++ b/target/riscv/andes_ace_helper.h
+@@ -4,8 +4,8 @@
+  * Copyright (c) 2023 Andes Technology Corp.
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
+-#ifndef __ANDES_ACE_HELPER__
+-#define __ANDES_ACE_HELPER__ 1
++#ifndef ANDES_ACE_HELPER
++#define ANDES_ACE_HELPER 1
+ #include <stdint.h>
+ #include "qemu/qemu-print.h"
+ #include "ace-helper.h"
+@@ -26,35 +26,15 @@ void qemu_set_CSR(CPURISCVState *env, uint32_t index,
+ void qemu_set_CSR_masked(CPURISCVState *env, uint32_t index, uint64_t value);
+ 
+ /* get memory without via mmu */
+-ACM_Status qemu_get_ACM(CPURISCVState *env, uint64_t addr,
++AcmStatus qemu_get_ACM(CPURISCVState *env, uint64_t addr,
+                         uint32_t size, char *data);
+-ACM_Status qemu_set_ACM(CPURISCVState *env, uint64_t addr,
++AcmStatus qemu_set_ACM(CPURISCVState *env, uint64_t addr,
+                         uint32_t size, char *data);
+ 
+-/* information access */
+-bool is_big_endian(void);
+-bool interruption_exist(void);
+-
+-/* gdb target description */
+-enum Register_Type {
+-    NO_SPECIFY,
+-    DATA_POINTER,
+-    CODE_POINTER,
+-    FLOAT,
+-    DOUBLE,
+-    UINT8
+-};
+-
+ /* for set/get CPU MSTATUS ACES bits */
+ uint32_t qemu_get_ACES(CPURISCVState *env);
+ void qemu_set_ACES(CPURISCVState *env, uint32_t value);
+ 
+-/*
+- * for get the cause code of exception
+- * the definition of cause code is in SPA spec 5.1.8
+- */
+-uint64_t get_cause_code(void);
+-
+ /* PC */
+ uint64_t qemu_get_PC(CPURISCVState *env);
+ 
+@@ -64,37 +44,9 @@ uint64_t qemu_get_hart_id(CPURISCVState *env);
+ /* CPU Priv Mode */
+ uint32_t qemu_get_cpu_priv(CPURISCVState *env);
+ 
+-/* Execution ID */
+-uint64_t get_IS(void);
+-
+-/* Exception is exist */
+-bool exception_exist(void);
+-
+-int32_t qemu_ace_load_wrapper(const char *filename, target_ulong hartid);
+-int32_t qemu_ace_load_wrapper_symbol(const char *symbol_name,
+-                                     void **func_ptr, target_ulong hartid);
+-int32_t qemu_ace_agent_register(CPURISCVState *env,
+-                                const char *extlibpath, target_ulong hartid,
++int32_t qemu_ace_agent_load(const char *filename);
++int32_t qemu_ace_agent_load_symbol(const char *symbol_name, void **func_ptr);
++int32_t qemu_ace_agent_register(CPURISCVState *env, const char *extlibpath,
+                                 int32_t multi);
+-int32_t qemu_ace_agent_run_insn(CPURISCVState *env, uint32_t opcode,
+-                                target_ulong hartid);
+-typedef int32_t (*ace_agent_register_t)(void *, void *, uint32_t,
+-                                const char*, target_ulong, int32_t multi);
+-typedef int32_t (*ace_agent_run_insn_t)(void *, uint32_t insn_in,
+-                                        target_ulong);
+-typedef int32_t (*ace_agent_version_t)(void *);
+-typedef char* (*ace_agent_copilot_version_t)(void *, target_ulong);
+-
+-#define ACE_HART_MAX    16
+-
+-typedef struct ACEApis {
+-    /* dlopen ace wrapper handle */
+-    void *qemu_ace_wrapper_handle;
+-    /* register callback function */
+-    ace_agent_register_t fp_ace_agent_register;
+-    /* run_insn function */
+-    ace_agent_run_insn_t fp_ace_agent_run_insn;
+-    ace_agent_version_t fp_ace_agent_version;
+-    ace_agent_copilot_version_t fp_ace_agent_copilot_version;
+-} ACEApis;
++int32_t qemu_ace_agent_run_insn(CPURISCVState *env, uint32_t opcode);
+ #endif
+diff --git a/target/riscv/andes_helper.c b/target/riscv/andes_helper.c
+index 8de8817a15..bf2e7c406f 100644
+--- a/target/riscv/andes_helper.c
++++ b/target/riscv/andes_helper.c
+@@ -205,15 +205,9 @@ void helper_andes_v5_hsp_check(CPURISCVState *env, target_ulong val)
+ }
+ 
+ #include "andes_ace_helper.h"
+-target_ulong helper_andes_v5_ace(CPURISCVState *env, target_ulong opcode)
++target_ulong helper_andes_ace(CPURISCVState *env, target_ulong opcode)
+ {
+-    target_ulong hartid;
+-#ifndef CONFIG_USER_ONLY
+-    hartid = env->mhartid;
+-#else
+-    hartid = 0;
+-#endif
+-    int ret = qemu_ace_agent_run_insn(env, opcode, hartid);
++    int ret = qemu_ace_agent_run_insn(env, opcode);
+     if (ret != 0) {
+         /* wrong ACE instruction seems return RESERVED_INSN(=1), not ILL Insn */
+         qemu_printf("Run ace instruction result = %d\n", ret);
+diff --git a/target/riscv/andes_helper.h b/target/riscv/andes_helper.h
+index 0cd337793a..287b571092 100644
+--- a/target/riscv/andes_helper.h
++++ b/target/riscv/andes_helper.h
+@@ -42,5 +42,5 @@ DEF_HELPER_6(vqmaccsu_vx_b, void, ptr, ptr, tl, ptr, env, i32)
+ DEF_HELPER_6(vqmaccsu_vx_h, void, ptr, ptr, tl, ptr, env, i32)
+ DEF_HELPER_6(vqmaccus_vx_b, void, ptr, ptr, tl, ptr, env, i32)
+ DEF_HELPER_6(vqmaccus_vx_h, void, ptr, ptr, tl, ptr, env, i32)
+-DEF_HELPER_FLAGS_2(andes_v5_ace, TCG_CALL_NO_RWG, tl, env, tl)
++DEF_HELPER_FLAGS_2(andes_ace, TCG_CALL_NO_RWG, tl, env, tl)
+ DEF_HELPER_FLAGS_2(andes_v5_hsp_check, TCG_CALL_NO_RWG, void, env, tl)
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index 06bcc9cdba..56019f36f7 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -45,6 +45,9 @@ typedef struct CPUArchState CPURISCVState;
+ /* Vendor CSR declaration */
+ #include "csr_andes.h"
+ 
++/* Andes ACE helper */
++#include "ace-helper.h"
++
+ #define TCG_GUEST_DEFAULT_MO 0
+ 
+ /*
+@@ -430,6 +433,10 @@ struct CPUArchState {
+     AndesVec andes_vec;
+     void (*do_interrupt_post)(CPUState *cpu);
+ 
++    /* Andes ACE agent symbols */
++    AceAgentReg ace_agent_register;
++    AceAgentRunInsn ace_agent_run_insn;
++
+ #ifndef CONFIG_USER_ONLY
+     MemoryRegion *cpu_as_root;
+     MemoryRegion *cpu_as_mem;
+diff --git a/target/riscv/gdbstub.c b/target/riscv/gdbstub.c
+index bfa68d2fdc..2f2ae62682 100644
+--- a/target/riscv/gdbstub.c
++++ b/target/riscv/gdbstub.c
+@@ -266,7 +266,7 @@ static int riscv_gen_dynamic_csr_xml(CPUState *cs, int base_reg)
+ 
+ unsigned char *acr_value;
+ 
+-static int nds_ace_get_reg(CPURISCVState *env, int reg_n)
++static int andes_ace_get_reg(CPURISCVState *env, int reg_n)
+ {
+     bool is_rv64 = (MXL_RV32 == env->misa_mxl_max) ? false : true;
+     uint32_t reg_bytes = is_rv64 ? 8ul : 4ul;
+@@ -274,14 +274,14 @@ static int nds_ace_get_reg(CPURISCVState *env, int reg_n)
+     unsigned int reg_idx = 0;
+     char *type_name = NULL;
+     uint32_t curr_reg_no = 0;
+-    ACR_INFO_T_V5 *acr_info_list_v5 = global_acr_info_list_v5;
++    AceAcrInfo *acr_info_list = ace_acr_info_list;
+ 
+-    if (global_acr_info_list_v5 == NULL) {
++    if (acr_info_list == NULL) {
+         return 0;
+     }
+ 
+     /* Check ACR get function whether exist */
+-    if (gen_get_value_code == NULL) {
++    if (ace_gen_get_value_code == NULL) {
+         return -1;
+     }
+     /*
+@@ -296,11 +296,11 @@ static int nds_ace_get_reg(CPURISCVState *env, int reg_n)
+     s2 = env->gpr[7];
+ 
+     /* Allocate acr value array and get acr info by ACR register number */
+-    for (unsigned int i = 0; i < *global_acr_type_count_v5; i++) {
+-        if ((acr_info_list_v5->num + curr_reg_no) >= reg_n + 1) {
++    for (unsigned int i = 0; i < *ace_acr_type_count; i++) {
++        if ((acr_info_list->num + curr_reg_no) >= reg_n + 1) {
+             reg_idx = reg_n - curr_reg_no;
+-            type_name = acr_info_list_v5->name;
+-            unsigned int acr_width = acr_info_list_v5->width;
++            type_name = acr_info_list->name;
++            unsigned int acr_width = acr_info_list->width;
+             ByteSize =
+                 (acr_width % 8 == 0) ? acr_width / 8 : (acr_width / 8) + 1;
+             if (acr_value != NULL) {
+@@ -309,8 +309,8 @@ static int nds_ace_get_reg(CPURISCVState *env, int reg_n)
+             acr_value = malloc(ByteSize);
+             break;
+         }
+-        curr_reg_no += acr_info_list_v5->num;
+-        acr_info_list_v5++;
++        curr_reg_no += acr_info_list->num;
++        acr_info_list++;
+     }
+     if (acr_value == NULL) {
+         qemu_printf("Cannot allocate acr value memory '%s'\n", type_name);
+@@ -319,10 +319,10 @@ static int nds_ace_get_reg(CPURISCVState *env, int reg_n)
+     unsigned char *value = acr_value;
+ 
+     /* Generate code to read value from ACR/ACM */
+-    INSN_CODE_T_V5 *insn_code = gen_get_value_code(type_name, reg_idx);
++    AceInsnCode *insn_code = ace_gen_get_value_code(type_name, reg_idx);
+ 
+     bool init_acm_addr = false;
+-    /* Execute the code generated by gen_get_value_code() iteratively */
++    /* Execute the code generated by ace_gen_get_value_code() iteratively */
+     for (unsigned i = 0; i < insn_code->num; i++) {
+ 
+         /*
+@@ -348,13 +348,9 @@ static int nds_ace_get_reg(CPURISCVState *env, int reg_n)
+         }
+ 
+         /* execute the code */
+-#ifdef CONFIG_USER_ONLY
+-        int exec_out = qemu_ace_agent_run_insn(env, insn, 0);
+-#else
+-        int exec_out = qemu_ace_agent_run_insn(env, insn, env->mhartid);
+-#endif
++        int exec_out = qemu_ace_agent_run_insn(env, insn);
+         if (exec_out != 0) {
+-            qemu_printf("Unable to execute ACE utility program\n");
++            qemu_printf("Unable to execute ACE program\n");
+ 
+             /* Restore temp register */
+             env->gpr[5] = s0;
+@@ -388,7 +384,7 @@ static int nds_ace_get_reg(CPURISCVState *env, int reg_n)
+     return ByteSize;
+ }
+ 
+-static int nds_ace_set_reg(CPURISCVState *env, unsigned char *val, int reg_n)
++static int andes_ace_set_reg(CPURISCVState *env, unsigned char *val, int reg_n)
+ {
+     bool is_rv64 = (MXL_RV32 == env->misa_mxl_max) ? false : true;
+     uint32_t reg_bytes = is_rv64 ? 8ul : 4ul;
+@@ -396,14 +392,14 @@ static int nds_ace_set_reg(CPURISCVState *env, unsigned char *val, int reg_n)
+     unsigned int reg_idx = 0;
+     char *type_name = NULL;
+     uint32_t curr_reg_no = 0;
+-    ACR_INFO_T_V5 *acr_info_list_v5 = global_acr_info_list_v5;
++    AceAcrInfo *acr_info_list = ace_acr_info_list;
+ 
+-    if (global_acr_info_list_v5 == NULL) {
++    if (acr_info_list == NULL) {
+         return 0;
+     }
+ 
+     /* Check ACR get function whether exist */
+-    if (gen_set_value_code == NULL) {
++    if (ace_gen_set_value_code == NULL) {
+         return -1;
+     }
+     /*
+@@ -418,17 +414,17 @@ static int nds_ace_set_reg(CPURISCVState *env, unsigned char *val, int reg_n)
+     s2 = env->gpr[7];
+ 
+     /* Allocate acr value array and get acr info by ACR register number */
+-    for (unsigned int i = 0; i < *global_acr_type_count_v5; i++) {
+-        if ((acr_info_list_v5->num + curr_reg_no) >= reg_n + 1) {
++    for (unsigned int i = 0; i < *ace_acr_type_count; i++) {
++        if ((acr_info_list->num + curr_reg_no) >= reg_n + 1) {
+             reg_idx = reg_n - curr_reg_no;
+-            type_name = acr_info_list_v5->name;
+-            unsigned int acr_width = acr_info_list_v5->width;
++            type_name = acr_info_list->name;
++            unsigned int acr_width = acr_info_list->width;
+             ByteSize =
+                 (acr_width % 8 == 0) ? acr_width / 8 : (acr_width / 8) + 1;
+             break;
+         }
+-        curr_reg_no += acr_info_list_v5->num;
+-        acr_info_list_v5++;
++        curr_reg_no += acr_info_list->num;
++        acr_info_list++;
+     }
+     if (type_name == NULL) {
+         qemu_printf("Cannot find acr reg no %d\n", reg_n);
+@@ -445,10 +441,10 @@ static int nds_ace_set_reg(CPURISCVState *env, unsigned char *val, int reg_n)
+     char *value = buffer;
+ 
+     /* Generate code to write value to ACR/ACM */
+-    INSN_CODE_T_V5 *insn_code = gen_set_value_code(type_name, reg_idx);
++    AceInsnCode *insn_code = ace_gen_set_value_code(type_name, reg_idx);
+ 
+     bool init_acm_addr = false;
+-    /* Execute the code generated by gen_set_value_code() iteratively */
++    /* Execute the code generated by ace_gen_set_value_code() iteratively */
+     for (unsigned i = 0; i < insn_code->num; i++) {
+         /*
+          * determine the number of GPRs used to read/write data from/to ACR/ACM
+@@ -496,13 +492,9 @@ static int nds_ace_set_reg(CPURISCVState *env, unsigned char *val, int reg_n)
+         unsigned insn = (insn_code->code + i)->insn;
+ 
+         /* execute the code */
+-#ifdef CONFIG_USER_ONLY
+-        int exec_out = qemu_ace_agent_run_insn(env, insn, 0);
+-#else
+-        int exec_out = qemu_ace_agent_run_insn(env, insn, env->mhartid);
+-#endif
++        int exec_out = qemu_ace_agent_run_insn(env, insn);
+         if (exec_out != 0) {
+-            qemu_printf("Unable to execute program\n");
++            qemu_printf("Unable to execute ACE program\n");
+             /* Restore temp register */
+             env->gpr[5] = s0;
+             env->gpr[6] = s1;
+@@ -522,7 +514,7 @@ static int nds_ace_set_reg(CPURISCVState *env, unsigned char *val, int reg_n)
+ 
+ static int riscv_gdb_get_ace(CPURISCVState *env, GByteArray *buf, int n)
+ {
+-    unsigned total_bytes = nds_ace_get_reg(env, n);
++    unsigned total_bytes = andes_ace_get_reg(env, n);
+     if (total_bytes != -1) {
+         g_byte_array_append(buf, acr_value, total_bytes);
+         return total_bytes;
+@@ -532,7 +524,7 @@ static int riscv_gdb_get_ace(CPURISCVState *env, GByteArray *buf, int n)
+ 
+ static int riscv_gdb_set_ace(CPURISCVState *env, uint8_t *mem_buf, int n)
+ {
+-    unsigned total_bytes = nds_ace_set_reg(env, mem_buf, n);
++    unsigned total_bytes = andes_ace_set_reg(env, mem_buf, n);
+     if (total_bytes != -1) {
+         return total_bytes;
+     }
+@@ -547,9 +539,9 @@ static int riscv_gen_dynamic_ace_xml(CPUState *cs, int base_reg)
+ #endif
+     GString *s = g_string_new(NULL);
+     int num_regs = 0;
+-    ACR_INFO_T_V5 *acr_info_list_v5 = global_acr_info_list_v5;
++    AceAcrInfo *acr_info_list = ace_acr_info_list;
+ 
+-    if (global_acr_info_list_v5 == NULL) {
++    if (acr_info_list == NULL) {
+         return 0;
+     }
+ 
+@@ -561,10 +553,10 @@ static int riscv_gen_dynamic_ace_xml(CPUState *cs, int base_reg)
+     g_string_append_printf(s, "<!DOCTYPE feature SYSTEM \"gdb-target.dtd\">");
+     g_string_append_printf(s, "<feature name=\"org.gnu.gdb.riscv.ace\">");
+ 
+-    for (unsigned int i = 0; i < *global_acr_type_count_v5; i++) {
+-        unsigned int acr_number = acr_info_list_v5->num;
+-        unsigned int acr_width = acr_info_list_v5->width;
+-        char *acr_name = acr_info_list_v5->name;
++    for (unsigned int i = 0; i < *ace_acr_type_count; i++) {
++        unsigned int acr_number = acr_info_list->num;
++        unsigned int acr_width = acr_info_list->width;
++        char *acr_name = acr_info_list->name;
+         unsigned int ByteSize =
+             (acr_width % 8 == 0) ? acr_width / 8 : (acr_width / 8) + 1;
+ 
+@@ -584,7 +576,7 @@ static int riscv_gen_dynamic_ace_xml(CPUState *cs, int base_reg)
+                                    base_reg++);
+             num_regs++;
+         }
+-        acr_info_list_v5++;
++        acr_info_list++;
+     }
+ 
+     g_string_append_printf(s, "</feature>");
+diff --git a/target/riscv/insn_trans/trans_xandesace.c.inc b/target/riscv/insn_trans/trans_xandesace.c.inc
+index 40ec15f74b..cf7e938278 100644
+--- a/target/riscv/insn_trans/trans_xandesace.c.inc
++++ b/target/riscv/insn_trans/trans_xandesace.c.inc
+@@ -24,7 +24,7 @@ static bool trans_andes_ace(DisasContext *ctx, arg_andes_ace *a)
+     REQUIRE_ACE;
+     REQUIRE_ACES;
+     TCGv opc = tcg_constant_tl(ctx->opcode);
+-    gen_helper_andes_v5_ace(opc, tcg_env, opc);
++    gen_helper_andes_ace(opc, tcg_env, opc);
+     gen_update_pc(ctx, ctx->cur_insn_len);
+     lookup_and_goto_ptr(ctx);
+ 
+diff --git a/target/riscv/tcg/tcg-cpu.c b/target/riscv/tcg/tcg-cpu.c
+index 0a7124591e..a51f7e8778 100644
+--- a/target/riscv/tcg/tcg-cpu.c
++++ b/target/riscv/tcg/tcg-cpu.c
+@@ -638,20 +638,14 @@ static void riscv_cpu_validate_andes_ace(RISCVCPU *cpu, Error **errp)
+      * be NULL since above check already
+      */
+     if (cpu->cfg.ext_XAndesAce) {
+-        target_ulong hartid;
+-#ifndef CONFIG_USER_ONLY
+-        hartid = env->mhartid;
+-#else
+-        hartid = 0;
+-#endif
+-        if (qemu_ace_load_wrapper(cpu->cfg.XAndesAceLib, hartid)) {
++        if (qemu_ace_agent_load(cpu->cfg.XAndesAceLib)) {
+             error_setg(errp, "xandesacelib '%s' cannot be loaded",
+                        cpu->cfg.XAndesAceLib);
+             return;
+         } else {
+             /* Loaded ACE wrapper library, register callback function */
+             if (qemu_ace_agent_register(env, cpu->cfg.XAndesAceExtLibPath,
+-                                    hartid, cpu->cfg.ext_XAndesAceMulti)) {
++                                    cpu->cfg.ext_XAndesAceMulti)) {
+                 error_setg(errp, "xandesacelib '%s' register failed",
+                            cpu->cfg.XAndesAceLib);
+                 return;
+-- 
+2.34.1
+

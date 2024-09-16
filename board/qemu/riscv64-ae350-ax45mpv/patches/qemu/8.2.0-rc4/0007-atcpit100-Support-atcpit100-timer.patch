@@ -1,0 +1,735 @@
+From 6d3984f8a192367b664d8aca11236e5a2cff0335 Mon Sep 17 00:00:00 2001
+From: Dylan Jhong <dylan@andestech.com>
+Date: Wed, 14 Apr 2021 19:20:19 +0800
+Subject: [PATCH 007/241] atcpit100: Support atcpit100 timer.
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+---
+ hw/riscv/Kconfig             |   1 +
+ hw/riscv/andes_ae350.c       |   6 +
+ hw/timer/Kconfig             |   4 +
+ hw/timer/atcpit100.c         | 570 +++++++++++++++++++++++++++++++++++
+ hw/timer/meson.build         |   1 +
+ include/hw/timer/atcpit100.h |  71 +++++
+ 6 files changed, 653 insertions(+)
+ create mode 100644 hw/timer/atcpit100.c
+ create mode 100644 include/hw/timer/atcpit100.h
+
+diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
+index 8209d0b196..615fa03785 100644
+--- a/hw/riscv/Kconfig
++++ b/hw/riscv/Kconfig
+@@ -10,6 +10,7 @@ config ANDES_AE350
+     select ANDES_PLIC
+     select ANDES_PLMT
+     select ATCDMAC300
++    select ATCPIT100
+     select ATFMAC100
+     select ATFSDC010
+     select SERIAL
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 626343b838..fe5b952df0 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -45,7 +45,9 @@
+ 
+ #include "hw/intc/andes_plic.h"
+ #include "hw/timer/andes_plmt.h"
++#include "hw/timer/atcpit100.h"
+ #include "hw/riscv/andes_ae350.h"
++#include "hw/sd/atfsdc010.h"
+ 
+ #define BIOS_FILENAME ""
+ 
+@@ -388,6 +390,10 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+                  nd, memmap[ANDES_AE350_MAC].base,
+                  qdev_get_gpio_in(DEVICE(s->plic), ANDES_AE350_MAC_IRQ));
+ 
++    /* PIT */
++    atcpit100_create(memmap[ANDES_AE350_PIT].base,
++                qdev_get_gpio_in(DEVICE(s->plic), ANDES_AE350_PIT_IRQ));
++
+     /* SDC */
+     atfsdc010_create(memmap[ANDES_AE350_SDC].base,
+                 qdev_get_gpio_in(DEVICE(s->plic), ANDES_AE350_SDC_IRQ));
+diff --git a/hw/timer/Kconfig b/hw/timer/Kconfig
+index fbfe2f040d..b3fda46045 100644
+--- a/hw/timer/Kconfig
++++ b/hw/timer/Kconfig
+@@ -1,6 +1,10 @@
+ config ANDES_PLMT
+     bool
+ 
++config ATCPIT100
++    bool
++    select PTIMER
++
+ config ARM_TIMER
+     bool
+     select PTIMER
+diff --git a/hw/timer/atcpit100.c b/hw/timer/atcpit100.c
+new file mode 100644
+index 0000000000..893fa15a1e
+--- /dev/null
++++ b/hw/timer/atcpit100.c
+@@ -0,0 +1,570 @@
++/*
++ * Andes Programmable Interval Timer, ATCPIT100.
++ *
++ * Copyright (c) 2018 Andes Tech. Corp.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/bitops.h"
++#include "qemu/log.h"
++#include "hw/irq.h"
++#include "hw/ptimer.h"
++#include "hw/qdev-properties.h"
++#include "hw/timer/atcpit100.h"
++
++/* #define DEBUG_ATCPIT100 */
++/* #define MORE_HOOK */
++
++#define xLOG(x...)
++#define yLOG(x...) qemu_log(x)
++#define zLOG(x...) printf(x)
++
++#define LOG(x...) xLOG(x)
++#define LOGGE(x...) qemu_log_mask(LOG_GUEST_ERROR, x)
++
++#ifdef DEBUG_ATCPIT100
++#undef LOG
++#define LOG(x...) yLOG(x)
++#endif
++
++enum {
++    ID_PIT = 0x03031,
++    ID_PIT_SHIFT = 12,
++};
++
++enum {
++    VER_MAJOR = 0x00,
++    VER_MAJOR_SHIFT = 4,
++    VER_MINOR = 0x00,
++    VER_MINOR_SHIFT = 0,
++};
++
++enum {
++    REG_IDREV = 0x00,
++    REG_CFG = 0x10,
++    REG_INTEN = 0x14,
++    REG_INTST = 0x18,
++    REG_CHEN = 0x1c,
++    REG_CH_BASE = 0x20,
++    REG_CH_STRIDE = 0x10,
++    REG_CH_STRIDE_SHIFT = 4,
++    REG_CH_BIAS_MASK = 0xf,
++    REG_SIZE = 0x60,
++};
++
++enum {
++    REG_CH_CTRL = 0x00,
++    REG_CH_RELOAD = 0x04,
++    REG_CH_CNTR = 0x08,
++};
++
++#define DEVNAME "ATCPIT100"
++
++#define CHANNEL_MODE(ctrl)  (extract32(ctrl, 0, 3))
++#define CHANNEL_CLOCK(ctrl) (extract32(ctrl, 3, 1))
++#define CHANNEL_PARK(ctrl)  (extract32(ctrl, 4, 1))
++
++#define CHANNEL_ENABLE(ena, ch_no)    (extract32(ena, (ch_no << 2), 4))
++#define TIMER_ENABLE(ena, ch_no, tmr) (extract32(ena, (ch_no << 2) + tmr, 1))
++
++static void
++enable_ptimer(ptimer_state *ptimer, uint64_t reload, uint32_t freq)
++{
++    /*
++     * Pause the timer if it is running.  This may cause some
++     * inaccuracy during to rounding, but avoids a whole lot of other
++     * messiness.
++     */
++    ptimer_transaction_begin(ptimer);
++    ptimer_stop(ptimer);
++    ptimer_set_limit(ptimer, reload ? reload : -1u, 1);
++    ptimer_set_freq(ptimer, freq);
++    ptimer_run(ptimer, 0);
++    ptimer_transaction_commit(ptimer);
++}
++
++static void
++atcpit100_update_irq(Atcpit100State *s)
++{
++    uint level = !!(s->int_en & s->int_st);
++
++    LOG("%s: level %d\n", __func__, level);
++    qemu_set_irq(s->irq, level);
++}
++
++static uint32_t
++calculate_timer_count(Atcpit100Channel *ch)
++{
++    uint32_t count;
++    Atcpit100Timer *t = ch->timers;
++    uint mode = CHANNEL_MODE(ch->control);
++
++    switch (mode) {
++    case 0: /* reserved */
++    case 5: /* reserved */
++        count = ch->counter;
++        break;
++    case 1: /* 32-bit-timer x1 */
++        count = ptimer_get_count(t[0].ptimer);
++        break;
++    case 2: /* 16-bit-timer x2 */
++        count = ((ptimer_get_count(t[0].ptimer) & 0xffffu) << 0) |
++                ((ptimer_get_count(t[1].ptimer) & 0xffffu) << 16);
++        break;
++    case 3: /* 8-bit-timer x4 */
++    case 7: /* Mixed PWM/8-bit timers */
++        count = ((ptimer_get_count(t[0].ptimer) & 0xffu) << 0) |
++                ((ptimer_get_count(t[1].ptimer) & 0xffu) << 8) |
++                ((ptimer_get_count(t[2].ptimer) & 0xffu) << 16) |
++                ((ptimer_get_count(t[3].ptimer) & 0xffu) << 24);
++        break;
++    case 4: /* PWM */
++        count = ((ptimer_get_count(t[2].ptimer) & 0xffffu) << 0) |
++                ((ptimer_get_count(t[3].ptimer) & 0xffffu) << 16);
++        break;
++    case 6: /* Mixed PWM/16-bit timer */
++        count = ((ptimer_get_count(t[0].ptimer) & 0xffffu) << 0) |
++                ((ptimer_get_count(t[2].ptimer) & 0x00ffu) << 16) |
++                ((ptimer_get_count(t[3].ptimer) & 0x00ffu) << 24);
++        break;
++    }
++
++    return count;
++}
++
++static void
++update_single_channel_enable(Atcpit100Channel *ch, uint32_t toggles)
++{
++    LOG("%s: CH %d, toggles 0x%1x\n", __func__, ch->id, toggles);
++    uint ch_no, tmr_no, mask, mode, enables;
++    uint32_t freq, reload;
++    Atcpit100State *s;
++    Atcpit100Timer *t;
++
++    if (!toggles) {
++        return;
++    }
++
++    s = ch->state;
++    t = ch->timers;
++    ch_no = ch->id;
++    freq = CHANNEL_CLOCK(ch->control) ? s->pclk : s->extclk;
++    mode = CHANNEL_MODE(ch->control);
++    enables = CHANNEL_ENABLE(s->ch_en, ch_no);
++
++    /* stop toggled timers first */
++    mask = 1;
++    for (tmr_no = 0; tmr_no < ATCPIT100_CHANNEL_TIMER_NUM; ++tmr_no) {
++        if (toggles & mask) {
++            ptimer_transaction_begin(t[tmr_no].ptimer);
++            ptimer_stop(t[tmr_no].ptimer);
++            ptimer_transaction_commit(t[tmr_no].ptimer);
++        }
++        mask <<= 1;
++    }
++
++    /* (re)start newly enabled timers now */
++    switch (mode) {
++    case 0: /* reserved */
++    case 5: /* reserved */
++        if (enables) {
++            LOGGE("ATCPIT100: CH %d is enabled in RESERVED mode!\n", ch_no);
++        }
++        break;
++    case 1: /* 32-bit-timer x1 */
++        if ((toggles & 1) && (enables & 1)) {
++            reload = ch->reload;
++            enable_ptimer(t[0].ptimer, reload, freq);
++        }
++        break;
++    case 2: /* 16-bit-timer x2 */
++        if ((toggles & 1) && (enables & 1)) {
++            reload = ch->reload & 0xffffu;
++            enable_ptimer(t[0].ptimer, reload, freq);
++        }
++        if ((toggles & 2) && (enables & 2)) {
++            reload = (ch->reload >> 16) & 0xffffu;
++            enable_ptimer(t[1].ptimer, reload, freq);
++        }
++        break;
++    case 3: /* 8-bit-timer x4 */
++        if ((toggles & 1) && (enables & 1)) {
++            reload = ch->reload & 0xffu;
++            enable_ptimer(t[0].ptimer, reload, freq);
++        }
++        if ((toggles & 2) && (enables & 2)) {
++            reload = (ch->reload >> 8) & 0xffu;
++            enable_ptimer(t[1].ptimer, reload, freq);
++        }
++        if ((toggles & 4) && (enables & 4)) {
++            reload = (ch->reload >> 16) & 0xffu;
++            enable_ptimer(t[2].ptimer, reload, freq);
++        }
++        if ((toggles & 8) && (enables & 8)) {
++            reload = (ch->reload >> 24) & 0xffu;
++            enable_ptimer(t[3].ptimer, reload, freq);
++        }
++        break;
++    case 4:
++        if ((toggles & 8) && (enables & 8)) { /* PWM */
++            reload = ch->reload & 0xffffu;
++            enable_ptimer(t[2].ptimer, reload, freq);
++            reload = (ch->reload >> 16) & 0xffffu;
++            enable_ptimer(t[3].ptimer, reload, freq);
++        }
++        break;
++    case 6: /* Mixed PWM/16-bit timer */
++        if ((toggles & 1) && (enables & 1)) {
++            reload = ch->reload & 0xffffu;
++            enable_ptimer(t[0].ptimer, reload, freq);
++        }
++        if ((toggles & 8) && (enables & 8)) { /* PWM */
++            reload = (ch->reload >> 16) & 0xffu;
++            enable_ptimer(t[2].ptimer, reload, freq);
++            reload = (ch->reload >> 24) & 0xffu;
++            enable_ptimer(t[3].ptimer, reload, freq);
++        }
++        break;
++    case 7: /* Mixed PWM/8-bit timers */
++        if ((toggles & 1) && (enables & 1)) {
++            reload = ch->reload & 0xffu;
++            enable_ptimer(t[0].ptimer, reload, freq);
++        }
++        if ((toggles & 2) && (enables & 2)) {
++            reload = (ch->reload >> 8) & 0xffu;
++            enable_ptimer(t[1].ptimer, reload, freq);
++        }
++        if ((toggles & 8) && (enables & 8)) { /* PWM */
++            reload = (ch->reload >> 16) & 0xffu;
++            enable_ptimer(t[2].ptimer, reload, freq);
++            reload = (ch->reload >> 24) & 0xffu;
++            enable_ptimer(t[3].ptimer, reload, freq);
++        }
++        break;
++    }
++}
++
++static inline void
++atcpit100_update_channel_enable(Atcpit100State *s, uint64_t value)
++{
++    LOG("%s:\n", __func__);
++    uint ch_no;
++    uint32_t toggle = s->ch_en ^ value;
++    Atcpit100Channel *ch = s->channels;
++
++    s->ch_en = value;
++    for (ch_no = 0; ch_no < ATCPIT100_CHANNEL_NUM; ++ch_no) {
++        uint32_t ch_toggle = toggle & 0xf;
++        update_single_channel_enable(&ch[ch_no], ch_toggle);
++        toggle >>= 4;
++    }
++}
++
++static inline void
++update_channel_control(Atcpit100Channel *ch, uint32_t value)
++{
++    Atcpit100State *s = ch->state;
++    uint32_t toggles = ch->control ^ value;
++    uint32_t enables = CHANNEL_ENABLE(s->ch_en, ch->id);
++    uint32_t redo_enable = 0;
++
++    ch->control = value;
++
++    if (CHANNEL_MODE(toggles)) { /* mode changed */
++        if (enables) {
++            LOGGE("%s: CH %d changes Mode when enabled!\n", DEVNAME, ch->id);
++        }
++        redo_enable = 1;
++    }
++
++    if (CHANNEL_CLOCK(toggles)) { /* clock changed */
++        redo_enable = 1;
++    }
++
++    if (CHANNEL_PARK(toggles)) { /* park changed */
++        /* PWM not supported yet */
++    }
++
++    if (redo_enable) {
++        update_single_channel_enable(ch, 0xf); /* as all enables are toggled */
++    }
++}
++
++static uint64_t
++atcpit100_read_channel(Atcpit100Channel *ch, hwaddr addr)
++{
++    uint64_t rz = 0;
++
++    switch (addr) {
++    case REG_CH_CTRL:
++        rz = ch->control;
++        break;
++    case REG_CH_RELOAD:
++        rz = ch->reload;
++        break;
++    case REG_CH_CNTR: /* RO */
++        rz = calculate_timer_count(ch);
++        break;
++    default:
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: Bad access (ch %d, addr %x)\n",
++                      __func__, ch->id, (int)addr);
++    }
++
++    LOG("\e[96m%s: ch %d, addr %08x, value %08x\e[0m\n", __func__, ch->id,
++        (int)addr, (int)rz);
++    return rz;
++}
++
++static void
++atcpit100_write_channel(Atcpit100Channel *ch, hwaddr addr, uint64_t value)
++{
++    LOG("\e[96m%s: ch %d, addr %08x, value %08x\e[0m\n", __func__, ch->id,
++        (int)addr, (int)value);
++
++    switch (addr) {
++    case REG_CH_CTRL:
++        update_channel_control(ch, (uint32_t)value);
++        break;
++    case REG_CH_RELOAD:
++        ch->reload = value;
++        break;
++    case REG_CH_CNTR: /* RO */
++        break;
++    default:
++        LOGGE("%s: Bad ch %d, addr %x\n", __func__, ch->id, (int)addr);
++    }
++}
++
++static uint64_t
++atcpit100_read(void *opaque, hwaddr addr, unsigned size)
++{
++    Atcpit100State *s = ATCPIT100(opaque);
++    uint64_t rz = 0;
++
++    switch (addr) {
++    case REG_IDREV ... REG_CH_BASE - 1:
++        switch (addr) {
++        case REG_IDREV: /* RO */
++            rz = ID_PIT << ID_PIT_SHIFT | VER_MAJOR << VER_MAJOR_SHIFT |
++                 VER_MINOR << VER_MINOR_SHIFT;
++            break;
++        case REG_CFG: /* RO */
++            rz = ATCPIT100_CHANNEL_NUM;
++            break;
++        case REG_INTEN:
++            rz = s->int_en;
++            break;
++        case REG_INTST: /* W1C */
++            rz = s->int_st;
++            break;
++        case REG_CHEN:
++            rz = s->ch_en;
++            break;
++        default:
++            LOGGE("%s: Bad addr %x\n", __func__, (int)addr);
++            break;
++        }
++        LOG("\e[95m%s: addr %08x, value %08x\e[0m\n", __func__, (int)addr,
++            (int)rz);
++        break;
++    case REG_CH_BASE ... REG_SIZE - 1:
++        if (1) {
++            int ch_num = (addr - REG_CH_BASE) >> REG_CH_STRIDE_SHIFT;
++            int bias = addr & REG_CH_BIAS_MASK;
++            rz = atcpit100_read_channel(&s->channels[ch_num], bias);
++        }
++        break;
++    default:
++        LOGGE("%s: Bad addr %x\n", __func__, (int)addr);
++    }
++
++    return rz;
++}
++
++static inline void
++atcpit100_update_int_enable(Atcpit100State *s, uint64_t value)
++{
++    LOG("%s:\n", __func__);
++    s->int_en = value;
++    atcpit100_update_irq(s);
++}
++
++static void
++atcpit100_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
++{
++    Atcpit100State *s = ATCPIT100(opaque);
++
++    LOG("\e[97m%s: addr %08x, value %08x\e[0m\n", __func__, (int)addr,
++        (int)value);
++    switch (addr) {
++    case REG_IDREV ... REG_CH_BASE - 1:
++        switch (addr) {
++        case REG_IDREV: /* RO */
++            break;
++        case REG_CFG: /* RO */
++            break;
++        case REG_INTEN:
++            atcpit100_update_int_enable(s, value);
++            break;
++        case REG_INTST: /* W1C */
++            s->int_st &= ~(uint32_t)value;
++            atcpit100_update_irq(s);
++            break;
++        case REG_CHEN:
++            atcpit100_update_channel_enable(s, value);
++            break;
++        default:
++            /* reserved bits are written as no effect */
++            LOGGE("%s: Bad addr %x (value %x)\n", __func__, (int)addr,
++                  (int)value);
++            break;
++        }
++        break;
++    case REG_CH_BASE ... REG_SIZE - 1:
++        if (1) {
++            int ch_num = (addr - REG_CH_BASE) >> REG_CH_STRIDE_SHIFT;
++            int bias = addr & REG_CH_BIAS_MASK;
++            atcpit100_write_channel(&s->channels[ch_num], bias, value);
++        }
++        break;
++    default:
++        LOGGE("%s: Bad addr %x (value %x)\n", __func__, (int)addr, (int)value);
++    }
++}
++
++static const MemoryRegionOps atcpit100_ops = {
++    .read = atcpit100_read,
++    .write = atcpit100_write,
++    .endianness = DEVICE_NATIVE_ENDIAN,
++    .valid = {.min_access_size = 4, .max_access_size = 4}
++};
++
++#ifdef MORE_HOOK
++static void
++atcpit100_reset(DeviceState *dev)
++{
++    LOG("%s:\n", __func__);
++}
++
++static void
++atcpit100_realize(DeviceState *dev, Error **errp)
++{
++    LOG("%s:\n", __func__);
++}
++#endif
++
++static void
++timer_hit(void *opaque)
++{
++    Atcpit100Timer *tmr = opaque;
++    Atcpit100Channel *ch = tmr->channel;
++    Atcpit100State *s = ch->state;
++    LOG("%s: CH %d, TMR %d\n", __func__, tmr->id, ch->id);
++    uint32_t next = s->int_st | (1 << (tmr->id + (ch->id << 2)));
++
++    if (s->int_st ^ next) {
++        s->int_st = next;
++        atcpit100_update_irq(s);
++    } else {
++        /* nothing new!  */
++    }
++}
++
++static void
++atcpit100_init(Object *obj)
++{
++    LOG("%s:\n", __func__);
++    Atcpit100State *s = ATCPIT100(obj);
++    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
++    int i, j;
++
++    /* Init all channels.  */
++    for (i = 0; i < ATCPIT100_CHANNEL_NUM; ++i) {
++        Atcpit100Channel *ch = &s->channels[i];
++        ch->id = i;
++        ch->state = s;
++        /* Init all timers of one channel.  */
++        for (j = 0; j < ATCPIT100_CHANNEL_TIMER_NUM; ++j) {
++            Atcpit100Timer *tmr = &ch->timers[j];
++            tmr->id = j;
++            tmr->channel = ch;
++            tmr->ptimer = ptimer_init(timer_hit, tmr, PTIMER_POLICY_LEGACY);
++            ptimer_transaction_begin(tmr->ptimer);
++            ptimer_set_freq(tmr->ptimer, s->pclk);
++            ptimer_transaction_commit(tmr->ptimer);
++        }
++    }
++
++    sysbus_init_irq(sbd, &s->irq);
++    memory_region_init_io(&s->mmio, obj, &atcpit100_ops, s, TYPE_ATCPIT100,
++                          0x100);
++    sysbus_init_mmio(sbd, &s->mmio);
++}
++
++static Property atcpit100_properties[] = {
++    DEFINE_PROP_UINT32("pclk", Atcpit100State, pclk, 40 * 1000 * 1000),
++    DEFINE_PROP_UINT32("extclk", Atcpit100State, extclk, 20 * 1000 * 1000),
++    DEFINE_PROP_END_OF_LIST(),
++};
++
++static void
++atcpit100_class_init(ObjectClass *klass, void *data)
++{
++    LOG("%s:\n", __func__);
++    DeviceClass *k = DEVICE_CLASS(klass);
++
++#ifdef MORE_HOOK
++    k->realize = atcpit100_realize;
++    k->reset = atcpit100_reset;
++#endif
++    device_class_set_props(k, atcpit100_properties);
++}
++
++static const TypeInfo atcpit100_info = {
++    .name = TYPE_ATCPIT100,
++    .parent = TYPE_SYS_BUS_DEVICE,
++    .instance_size = sizeof(Atcpit100State),
++    .instance_init = atcpit100_init,
++    .class_init = atcpit100_class_init,
++};
++
++static void
++atcpit100_register_types(void)
++{
++    LOG("%s:\n", __func__);
++    type_register_static(&atcpit100_info);
++}
++
++type_init(atcpit100_register_types);
++
++/*
++ * Create PIT device.
++ */
++DeviceState *
++atcpit100_create(hwaddr addr, qemu_irq irq)
++{
++    LOG("%s:\n", __func__);
++    DeviceState *dev;
++
++    dev = sysbus_create_simple(TYPE_ATCPIT100, addr, irq);
++
++    return dev;
++}
+diff --git a/hw/timer/meson.build b/hw/timer/meson.build
+index a5b2fe3583..9d040eab86 100644
+--- a/hw/timer/meson.build
++++ b/hw/timer/meson.build
+@@ -38,4 +38,5 @@ specific_ss.add(when: 'CONFIG_IBEX', if_true: files('ibex_timer.c'))
+ system_ss.add(when: 'CONFIG_SIFIVE_PWM', if_true: files('sifive_pwm.c'))
+ 
+ specific_ss.add(when: 'CONFIG_ANDES_PLMT', if_true: files('andes_plmt.c'))
++specific_ss.add(when: 'CONFIG_ATCPIT100', if_true: files('atcpit100.c'))
+ specific_ss.add(when: 'CONFIG_AVR_TIMER16', if_true: files('avr_timer16.c'))
+diff --git a/include/hw/timer/atcpit100.h b/include/hw/timer/atcpit100.h
+new file mode 100644
+index 0000000000..955f782b7f
+--- /dev/null
++++ b/include/hw/timer/atcpit100.h
+@@ -0,0 +1,71 @@
++/*
++ * Andes Programmable Interval Timer, ATCPIT100, interface.
++ *
++ * Copyright (c) 2018 Andes Tech. Corp.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to deal
++ * in the Software without restriction, including without limitation the rights
++ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++ * copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
++ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
++ * THE SOFTWARE.
++ */
++
++#ifndef HW_ATCPIT100_H
++#define HW_ATCPIT100_H
++
++#include "hw/ptimer.h"
++#include "hw/sysbus.h"
++
++#define ATCPIT100_CHANNEL_NUM (4)
++#define ATCPIT100_CHANNEL_TIMER_NUM (4)
++
++#define TYPE_ATCPIT100 "atcpit100"
++#define ATCPIT100(obj) OBJECT_CHECK(Atcpit100State, (obj), TYPE_ATCPIT100)
++
++typedef struct Atcpit100Timer {
++    ptimer_state *ptimer;
++    void *channel;
++    int id;
++} Atcpit100Timer;
++
++typedef struct Atcpit100Channel {
++    Atcpit100Timer timers[ATCPIT100_CHANNEL_TIMER_NUM];
++    void *state;
++    int id;
++
++    uint32_t control;
++    uint32_t reload;
++    uint32_t counter;
++} Atcpit100Channel;
++
++typedef struct Atcpit100State {
++    SysBusDevice parent_obj;
++
++    MemoryRegion mmio;
++    Atcpit100Channel channels[ATCPIT100_CHANNEL_NUM];
++    qemu_irq irq;
++    uint32_t pclk;
++    uint32_t extclk;
++
++    uint32_t id_rev;
++    uint32_t cfg;
++    uint32_t int_en;
++    uint32_t int_st;
++    uint32_t ch_en;
++} Atcpit100State;
++
++DeviceState *atcpit100_create(hwaddr addr, qemu_irq irq);
++
++#endif /* HW_ATCPIT100_H */
+-- 
+2.34.1
+

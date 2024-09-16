@@ -1,0 +1,29 @@
+From 37d2e86b61f41034ff149948a712b71718411676 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Mon, 20 Nov 2023 15:40:07 +0800
+Subject: [PATCH 121/241] target/riscv: Enable tcontrol and mcontext for Andes
+ N25 CPU
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/cpu.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 80ed3eb182..c8e111e4d7 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1080,6 +1080,10 @@ static void rv32_andes_n25_cpu_init(Object *obj)
+ 
+     /* inherited from parent obj via riscv_cpu_init() */
+     cfg->pmp = true;
++
++    /* Debug sdtrig extension optional CSR */
++    cfg->ext_sdtrig_tcontrol = true;
++    cfg->ext_sdtrig_mcontext = true;
+ }
+ 
+ static void rv32_andes_n45_cpu_init(Object *obj)
+-- 
+2.34.1
+

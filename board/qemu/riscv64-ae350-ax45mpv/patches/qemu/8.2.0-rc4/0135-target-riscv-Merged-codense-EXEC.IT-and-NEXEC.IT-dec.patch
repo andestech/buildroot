@@ -1,0 +1,269 @@
+From 2a968c86a270f9b3fca831b9b4925c0b20b3b661 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Mon, 11 Dec 2023 09:19:58 +0800
+Subject: [PATCH 135/241] target/riscv: Merged codense EXEC.IT and NEXEC.IT
+ decode into one single binary, and added relative CSR check while does an
+ instruction translation (#87)
+
+1. Merged EXEC.IT and NEXEC.IT, QEMU will choice EXEC.IT or NEXEC.IT to do translation via CSR mmsc_cfg configuration. Please care only NEXEC.IT can co-work with zcb extension since EXEC.IT opcode is conflict.
+2. Also fixed cm_jalt instruction may get wrong return address issue if tb_cflags CF_PCREL is set
+
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/87
+Reviewed-by: Yuming Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-by: Alvin Che-Chia Chang <alvinga@andestech.com>
+Reviewed-by: Ethan Zhan-Yang Chen <ethan84@andestech.com>
+Co-authored-by: Foxes Hung <foxes687@andestech.com>
+Co-committed-by: Foxes Hung <foxes687@andestech.com>
+---
+ configs/targets/riscv32-softmmu.mak           |  1 -
+ configs/targets/riscv64-softmmu.mak           |  1 -
+ target/riscv/XAndesCodenseOps.decode          | 10 +++-
+ target/riscv/XAndesCodenseV2Ops.decode        | 12 ----
+ target/riscv/insn_trans/trans_rvzce.c.inc     |  2 +-
+ .../insn_trans/trans_xandescodenseops.c.inc   | 57 +++++++++++++++++++
+ .../riscv/insn_trans/trans_xandesv5ops.c.inc  |  9 ++-
+ target/riscv/meson.build                      | 11 ----
+ target/riscv/translate.c                      | 13 +++--
+ 9 files changed, 82 insertions(+), 34 deletions(-)
+ delete mode 100644 target/riscv/XAndesCodenseV2Ops.decode
+
+diff --git a/configs/targets/riscv32-softmmu.mak b/configs/targets/riscv32-softmmu.mak
+index a12c2d3d4e..d8b71cddcd 100644
+--- a/configs/targets/riscv32-softmmu.mak
++++ b/configs/targets/riscv32-softmmu.mak
+@@ -3,4 +3,3 @@ TARGET_BASE_ARCH=riscv
+ TARGET_SUPPORTS_MTTCG=y
+ TARGET_XML_FILES= gdb-xml/riscv-32bit-cpu.xml gdb-xml/riscv-32bit-fpu.xml gdb-xml/riscv-64bit-fpu.xml gdb-xml/riscv-32bit-virtual.xml
+ TARGET_NEED_FDT=y
+-CONFIG_CODENSE_NEXECIT=y
+diff --git a/configs/targets/riscv64-softmmu.mak b/configs/targets/riscv64-softmmu.mak
+index 16a696f58f..7c0e7eeb42 100644
+--- a/configs/targets/riscv64-softmmu.mak
++++ b/configs/targets/riscv64-softmmu.mak
+@@ -3,4 +3,3 @@ TARGET_BASE_ARCH=riscv
+ TARGET_SUPPORTS_MTTCG=y
+ TARGET_XML_FILES= gdb-xml/riscv-64bit-cpu.xml gdb-xml/riscv-32bit-fpu.xml gdb-xml/riscv-64bit-fpu.xml gdb-xml/riscv-64bit-virtual.xml
+ TARGET_NEED_FDT=y
+-CONFIG_CODENSE_NEXECIT=y
+diff --git a/target/riscv/XAndesCodenseOps.decode b/target/riscv/XAndesCodenseOps.decode
+index 699530657c..19e393a19b 100644
+--- a/target/riscv/XAndesCodenseOps.decode
++++ b/target/riscv/XAndesCodenseOps.decode
+@@ -9,4 +9,12 @@
+ %imm_ex10 8:1 12:1 3:1 9:1 5:2 2:1 10:2 4:1
+ &codense imm_codense
+ @ex10     ... .... . . ..... .. &codense imm_codense=%imm_ex10
+-execit    100 .... . 0 ..... 00 @ex10
++
++%imm_nex10 8:1 7:1 3:1 9:1 5:2 2:1 10:2 4:1
++&codensev2 imm_codensev2
++@nex10    ... .... . . ..... .. &codensev2 imm_codensev2=%imm_nex10
++
++{
++  nexecit    100 1... . . ..... 00 @nex10
++  execit     100 .... . 0 ..... 00 @ex10
++}
+diff --git a/target/riscv/XAndesCodenseV2Ops.decode b/target/riscv/XAndesCodenseV2Ops.decode
+deleted file mode 100644
+index afc81bbf14..0000000000
+--- a/target/riscv/XAndesCodenseV2Ops.decode
++++ /dev/null
+@@ -1,12 +0,0 @@
+-#
+-# RISC-V translation routines for Andes CoDense
+-#
+-# Copyright (c) 2023 Andes Technology Corp.
+-# SPDX-License-Identifier: GPL-2.0-or-later
+-#
+-
+-#NEXEC.IT imm10 is different with EXEC.IT
+-%imm_nex10 8:1 7:1 3:1 9:1 5:2 2:1 10:2 4:1
+-&codense imm_codense
+-@nex10    ... .... . . ..... .. &codense imm_codense=%imm_nex10
+-execit    100 1 ... . . ..... 00 @nex10
+diff --git a/target/riscv/insn_trans/trans_rvzce.c.inc b/target/riscv/insn_trans/trans_rvzce.c.inc
+index 2d992e14c4..87029a15d4 100644
+--- a/target/riscv/insn_trans/trans_rvzce.c.inc
++++ b/target/riscv/insn_trans/trans_rvzce.c.inc
+@@ -303,7 +303,7 @@ static bool trans_cm_jalt(DisasContext *ctx, arg_cm_jalt *a)
+     /* c.jt vs c.jalt depends on the index. */
+     if (a->index >= 32) {
+         TCGv succ_pc = dest_gpr(ctx, xRA);
+-        gen_pc_plus_diff(succ_pc, ctx, ctx->cur_insn_len);
++        tcg_gen_movi_tl(succ_pc, ctx->base.pc_next + ctx->cur_insn_len);
+         gen_set_gpr(ctx, xRA, succ_pc);
+     }
+ 
+diff --git a/target/riscv/insn_trans/trans_xandescodenseops.c.inc b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+index df30859ed2..ae5f4522fb 100644
+--- a/target/riscv/insn_trans/trans_xandescodenseops.c.inc
++++ b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+@@ -11,6 +11,52 @@
+                            | (extract32(inst, 12, 8) << 12) \
+                            | (extract32(inst, 31, 1) << 20))
+ 
++/* If require CSR field(s) is not zero, return false */
++#define REQUIRE_CFG_0(CSRNO, CSRFIELD) do {\
++    RISCVException ret; \
++    target_ulong value; \
++    riscv_csr_operations ops; \
++    riscv_get_csr_ops(CSRNO, &ops); \
++    if (ops.read == NULL) { \
++        return false; \
++    } \
++    ret = ops.read(cpu_env(ctx->cs), CSRNO, &value); \
++    if (ret != RISCV_EXCP_NONE) \
++        return false; \
++    if (value & CSRFIELD) \
++        return false; \
++} while (0);
++
++
++/* ECD = 1, ECDV = 0, PP16 = 0 */
++#define REQUIRE_EXECIT do { \
++    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_ECD) \
++    if (cpu_env(ctx->cs)->misa_mxl == MXL_RV32) { \
++        REQUIRE_CFG_0(CSR_MMSC_CFG2, MASK_MMSC_CFG2_ECDV) \
++        REQUIRE_CFG_0(CSR_MMSC_CFG2, MASK_MMSC_CFG2_PP16) \
++    } else { \
++        REQUIRE_CFG_0(CSR_MMSC_CFG, MASK_MMSC_CFG_ECDV) \
++        REQUIRE_CFG_0(CSR_MMSC_CFG, MASK_MMSC_CFG_PP16) \
++    } \
++} while (0)
++
++/*
++ * This is assumed that CSR mmsc_cfg.ECDV are set
++ * to non-zero(1,2,3) treat as NEXEC.IT, it may be different
++ * with SPA spec, but should work now
++ * ECD = 1, ECDV = 1, PP16 = 0
++ */
++#define REQUIRE_NEXECIT do { \
++    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_ECD) \
++    if (cpu_env(ctx->cs)->misa_mxl == MXL_RV32) { \
++        REQUIRE_CFG(CSR_MMSC_CFG2, MASK_MMSC_CFG2_ECDV) \
++        REQUIRE_CFG_0(CSR_MMSC_CFG2, MASK_MMSC_CFG2_PP16) \
++    } else { \
++        REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_ECDV) \
++        REQUIRE_CFG_0(CSR_MMSC_CFG, MASK_MMSC_CFG_PP16) \
++    } \
++} while (0)
++
+ static void decode_opc_andes(CPURISCVState *env,
+                              DisasContext *ctx,
+                              uint32_t opcode)
+@@ -24,8 +70,10 @@ static void decode_opc_andes(CPURISCVState *env,
+         bool (*decode_func)(DisasContext *, uint32_t);
+     } decoders[] = {
+         { always_true_p,  decode_insn32 },
++        { has_xthead_p, decode_xthead },
+         { has_XVentanaCondOps_p,  decode_XVentanaCodeOps },
+         { has_XAndesV5Ops_p,  decode_XAndesV5Ops },
++        { has_XAndesAce_p,  decode_XAndesAce },
+     };
+ 
+     static const struct {
+@@ -109,6 +157,15 @@ static int andes_v5_gen_codense_exec_it(DisasContext *ctx,
+ 
+ static bool trans_execit(DisasContext *ctx, arg_execit *a)
+ {
++    REQUIRE_EXECIT;
+     andes_v5_gen_codense_exec_it(ctx, a);
+     return true;
+ }
++
++static bool trans_nexecit(DisasContext *ctx, arg_nexecit *a)
++{
++    REQUIRE_NEXECIT;
++    /* type casting arg_nexecit to arg_execit since they will be the same */
++    andes_v5_gen_codense_exec_it(ctx, (arg_execit *)a);
++    return true;
++}
+diff --git a/target/riscv/insn_trans/trans_xandesv5ops.c.inc b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+index 549ad472cb..6224449914 100644
+--- a/target/riscv/insn_trans/trans_xandesv5ops.c.inc
++++ b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+@@ -7,11 +7,14 @@
+ #define GP 3
+ 
+ #define REQUIRE_CFG(CSRNO, CSRFIELD) do {\
+-    CPUState *cpu = ctx->cs; \
+-    CPURISCVState *env = cpu_env(cpu); \
+     RISCVException ret; \
+     target_ulong value; \
+-    ret = riscv_csrrw(env, CSRNO, &value, 0, 0); \
++    riscv_csr_operations ops; \
++    riscv_get_csr_ops(CSRNO, &ops); \
++    if (ops.read == NULL) { \
++        return false; \
++    } \
++    ret = ops.read(cpu_env(ctx->cs), CSRNO, &value); \
+     if (ret != RISCV_EXCP_NONE) \
+         return false; \
+     if (!(value & CSRFIELD)) \
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index 847558ed5a..f8cde6e615 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -6,19 +6,12 @@ gen = [
+   decodetree.process('XVentanaCondOps.decode', extra_args: '--static-decode=decode_XVentanaCodeOps'),
+   decodetree.process('XAndesV5Ops.decode', extra_args: ['--static-decode=decode_XAndesV5Ops']),
+   decodetree.process('XAndesAce.decode', extra_args: ['--static-decode=decode_XAndesAce']),
+-]
+-genv1 = [
+   decodetree.process('XAndesCodenseOps.decode',extra_args: ['--static-decode=decode_XAndesCodenseOps',
+                                                              '--insnwidth=16']),
+ ]
+-genv2 = [
+-  decodetree.process('XAndesCodenseV2Ops.decode',extra_args: ['--static-decode=decode_XAndesCodenseOps',
+-                                                             '--insnwidth=16']),
+-]
+ 
+ riscv_ss = ss.source_set()
+ riscv_ss.add(gen)
+-riscv_ss.add(when: 'CONFIG_CODENSE_NEXECIT', if_true: genv2, if_false: genv1)
+ riscv_ss.add(files(
+   'cpu.c',
+   'cpu_helper.c',
+@@ -57,7 +50,3 @@ subdir('kvm')
+ 
+ target_arch += {'riscv': riscv_ss}
+ target_system_arch += {'riscv': riscv_system_ss}
+-
+-if 'CONFIG_CODENSE_NEXECIT' == 'y'
+-    add_project_arguments('-DCONFIG_CODENSE_NEXECIT=1', language : 'c')
+-endif
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index 0c77521ffb..afe0f88266 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -1111,11 +1111,7 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+ 
+ /* Include AndeStar V5 extensions */
+ #include "decode-XAndesV5Ops.c.inc"
+-#ifndef CONFIG_CODENSE_NEXECIT
+ #include "decode-XAndesCodenseOps.c.inc"
+-#else
+-#include "decode-XAndesCodenseV2Ops.c.inc"
+-#endif
+ #include "decode-XAndesAce.c.inc"
+ #include "insn_trans/trans_xandesv5ops.c.inc"
+ #include "insn_trans/trans_xandescodenseops.c.inc"
+@@ -1151,6 +1147,15 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
+         bool (*decode_func)(DisasContext *, uint16_t);
+     } decoders_16[] = {
+         { always_true_p,  decode_insn16 },
++        /*
++         * Codense V2 should decode before legacy Codense,
++         * Since legacy codense opcode conflics with zcb extension,
++         * But codense v2 can be compatiable with zcb, so user can
++         * turn on zcb and Andes codense(V2) together, or turn off
++         * zcb but turn on Andes codense(Legacy).
++         * translatation function will extension configuration whether
++         * is turn on by checking ext_zb and/or Andes relative CSRs bits
++         */
+         { has_XAndesCodenseOps_p, decode_XAndesCodenseOps },
+     };
+ 
+-- 
+2.34.1
+

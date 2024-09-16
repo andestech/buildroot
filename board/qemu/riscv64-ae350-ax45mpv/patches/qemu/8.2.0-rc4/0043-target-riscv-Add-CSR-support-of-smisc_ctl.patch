@@ -1,0 +1,74 @@
+From f3a3a7c376ff5b44c5e2312f8a8e8f1adab45ef6 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 18 Aug 2023 15:07:42 +0800
+Subject: [PATCH 043/241] target/riscv: Add CSR support of smisc_ctl.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c | 23 +++++++++++++++++++++--
+ target/riscv/csr_andes.h |  1 +
+ 2 files changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 207bd549d8..54443fee23 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -154,6 +154,17 @@ static RISCVException mmisc_ctl(CPURISCVState *env, int csrno)
+     return RISCV_EXCP_ILLEGAL_INST;
+ }
+ 
++static RISCVException smisc_ctl(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (riscv_has_ext(env, RVS)) {
++        if (get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_ACE) == 1) {
++            return RISCV_EXCP_NONE;
++        }
++    }
++    return RISCV_EXCP_ILLEGAL_INST;
++}
++
+ static RISCVException pmnds(CPURISCVState *env, int csrno)
+ {
+     AndesCsr *csr = &env->andes_csr;
+@@ -323,6 +334,13 @@ static RISCVException write_mmisc_ctl(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException write_smisc_ctl(CPURISCVState *env, int csrno,
++                                      target_ulong val)
++{
++    env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_SMISC_CTL;
++    return RISCV_EXCP_NONE;
++}
++
+ static RISCVException write_smdcause(CPURISCVState *env, int csrno,
+                                      target_ulong val)
+ {
+@@ -661,8 +679,9 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+                                                          write_shpmevent    },
+ 
+     /* Supervisor control registers */
+-    [CSR_SCCTLDATA] = { "scctldata",              any, read_csr, write_csr},
+-    [CSR_SMISC_CTL] = { "smisc_ctl",              any, read_csr, write_csr},
++    [CSR_SCCTLDATA] = { "scctldata",              any, read_csr, write_csr    },
++    [CSR_SMISC_CTL] = { "smisc_ctl",              smisc_ctl, read_csr,
++                                                             write_smisc_ctl  },
+ 
+     /* =================== AndeStar V5 user mode CSRs =================== */
+     /* User mode control registers */
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 156a0fbcbe..8568ce3fe7 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -133,6 +133,7 @@ typedef struct AndesVec {
+ #define WRITE_MASK_CSR_MDCAUSE              0x7F
+ #define WRITE_MASK_CSR_SDCAUSE              0x7F
+ #define WRITE_MASK_CSR_MMISC_CTL            0x3F7F
++#define WRITE_MASK_CSR_SMISC_CTL            0x30
+ 
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+-- 
+2.34.1
+

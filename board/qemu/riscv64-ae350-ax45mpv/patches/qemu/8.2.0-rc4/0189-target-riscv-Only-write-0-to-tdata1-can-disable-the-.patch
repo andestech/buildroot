@@ -1,0 +1,50 @@
+From 4370c9a80e8ac20e01ba63a42bdc33459608b176 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Thu, 25 Jan 2024 09:19:27 +0800
+Subject: [PATCH 189/241] target/riscv: Only write "0" to tdata1 can disable
+ the trigger
+
+Write "0" to the type field of tdata1 is not enough to disable the
+trigger. We need to write all zero to tdata1 instead.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index cb220dc8c4..757815dacf 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -1091,6 +1091,15 @@ void tdata_csr_write(CPURISCVState *env, int tdata_index, target_ulong val)
+ {
+     int trigger_type;
+ 
++    if (tdata_index == TDATA1 && val == 0) {
++        /* Write 0 to tdata1 disables the trigger. */
++        riscv_disable_trigger(env, env->trigger_cur);
++        env->tdata1[env->trigger_cur] =
++            (riscv_cpu_mxl(env) == MXL_RV32) ? RV32_TYPE(TRIGGER_TYPE_DISABLED)
++                                             : RV64_TYPE(TRIGGER_TYPE_DISABLED);
++        return;
++    }
++
+     if (tdata_index == TDATA1) {
+         trigger_type = extract_trigger_type(env, val);
+     } else {
+@@ -1114,10 +1123,8 @@ void tdata_csr_write(CPURISCVState *env, int tdata_index, target_ulong val)
+                       trigger_type);
+         break;
+     case TRIGGER_TYPE_NO_EXIST:
+-        riscv_disable_trigger(env, env->trigger_cur);
+-        env->tdata1[env->trigger_cur] =
+-            (riscv_cpu_mxl(env) == MXL_RV32) ? RV32_TYPE(TRIGGER_TYPE_DISABLED)
+-                                             : RV64_TYPE(TRIGGER_TYPE_DISABLED);
++        qemu_log_mask(LOG_GUEST_ERROR, "trigger type: %d does not exist\n",
++                      trigger_type);
+         break;
+     case TRIGGER_TYPE_DISABLED:
+         switch (tdata_index) {
+-- 
+2.34.1
+

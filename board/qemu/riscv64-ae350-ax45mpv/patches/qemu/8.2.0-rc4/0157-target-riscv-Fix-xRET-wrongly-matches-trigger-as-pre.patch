@@ -1,0 +1,99 @@
+From 56f717c69ec808869908c19de47823ae4852fbb5 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Wed, 20 Dec 2023 17:48:15 +0800
+Subject: [PATCH 157/241] target/riscv: Fix xRET wrongly matches trigger as
+ previous privilege
+
+The xRET instruction changes privilege mode during execution. But
+currently the icount triggers are checked when the instruction retires.
+This will make icount trigger matches on xRET instruction with wrong
+privilege mode.
+
+Fix it by early checking icount trigger matches before xRET instruction
+changes the privilege mode.
+
+Also the tcontrol CSR operations are moved after the icount trigger
+checking.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ .../riscv/insn_trans/trans_privileged.c.inc   |  4 +--
+ target/riscv/op_helper.c                      | 26 +++++++++++++------
+ 2 files changed, 20 insertions(+), 10 deletions(-)
+
+diff --git a/target/riscv/insn_trans/trans_privileged.c.inc b/target/riscv/insn_trans/trans_privileged.c.inc
+index 620ab54eb0..ff3ce08b25 100644
+--- a/target/riscv/insn_trans/trans_privileged.c.inc
++++ b/target/riscv/insn_trans/trans_privileged.c.inc
+@@ -79,7 +79,7 @@ static bool trans_sret(DisasContext *ctx, arg_sret *a)
+         decode_save_opc(ctx);
+         translator_io_start(&ctx->base);
+         gen_helper_sret(cpu_pc, tcg_env);
+-        exit_tb(ctx); /* no chaining */
++        tcg_gen_exit_tb(NULL, 0); /* no chaining */
+         ctx->base.is_jmp = DISAS_NORETURN;
+     } else {
+         return false;
+@@ -96,7 +96,7 @@ static bool trans_mret(DisasContext *ctx, arg_mret *a)
+     decode_save_opc(ctx);
+     translator_io_start(&ctx->base);
+     gen_helper_mret(cpu_pc, tcg_env);
+-    exit_tb(ctx); /* no chaining */
++    tcg_gen_exit_tb(NULL, 0); /* no chaining */
+     ctx->base.is_jmp = DISAS_NORETURN;
+     return true;
+ #else
+diff --git a/target/riscv/op_helper.c b/target/riscv/op_helper.c
+index e3fda3af69..37f9f64ffc 100644
+--- a/target/riscv/op_helper.c
++++ b/target/riscv/op_helper.c
+@@ -283,6 +283,11 @@ target_ulong helper_sret(CPURISCVState *env)
+         riscv_raise_exception(env, RISCV_EXCP_VIRT_INSTRUCTION_FAULT, GETPC());
+     }
+ 
++    if (env->itrigger_enabled) {
++        /* Check icount trigger matches before sret changes privilege mode */
++        helper_itrigger_match(env);
++    }
++
+     mstatus = env->mstatus;
+     prev_priv = get_field(mstatus, MSTATUS_SPP);
+     mstatus = set_field(mstatus, MSTATUS_SIE,
+@@ -322,14 +327,6 @@ target_ulong helper_mret(CPURISCVState *env)
+         riscv_raise_exception(env, RISCV_EXCP_ILLEGAL_INST, GETPC());
+     }
+ 
+-    if (riscv_cpu_cfg(env)->ext_sdtrig_tcontrol) {
+-        uint64_t tcontrol = env->tcontrol;
+-
+-        tcontrol = set_field(tcontrol, TCONTROL_MTE,
+-                             get_field(tcontrol, TCONTROL_MPTE));
+-        env->tcontrol = tcontrol;
+-    }
+-
+     target_ulong retpc = env->mepc;
+     if (!riscv_has_ext(env, RVC) && (retpc & 0x3)) {
+         riscv_raise_exception(env, RISCV_EXCP_INST_ADDR_MIS, GETPC());
+@@ -343,6 +340,19 @@ target_ulong helper_mret(CPURISCVState *env)
+         riscv_raise_exception(env, RISCV_EXCP_INST_ACCESS_FAULT, GETPC());
+     }
+ 
++    if (env->itrigger_enabled) {
++        /* Check icount trigger matches before mret changes privilege mode */
++        helper_itrigger_match(env);
++    }
++
++    if (riscv_cpu_cfg(env)->ext_sdtrig_tcontrol) {
++        uint64_t tcontrol = env->tcontrol;
++
++        tcontrol = set_field(tcontrol, TCONTROL_MTE,
++                             get_field(tcontrol, TCONTROL_MPTE));
++        env->tcontrol = tcontrol;
++    }
++
+     target_ulong prev_virt = get_field(env->mstatus, MSTATUS_MPV) &&
+                              (prev_priv != PRV_M);
+     mstatus = set_field(mstatus, MSTATUS_MIE,
+-- 
+2.34.1
+

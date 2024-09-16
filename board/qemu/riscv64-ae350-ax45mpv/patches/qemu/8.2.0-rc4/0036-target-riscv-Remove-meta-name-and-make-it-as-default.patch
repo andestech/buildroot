@@ -1,0 +1,106 @@
+From 6d3e14e7f02bc7c2d9dec32c255bd8941fd4a551 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 14 Aug 2023 13:39:34 +0800
+Subject: [PATCH 036/241] target/riscv: Remove meta name and make it as default
+ nx45v. Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+
+---
+ target/riscv/cpu.c                                        | 6 +++---
+ target/riscv/csr_andes.h                                  | 2 +-
+ .../riscv/{csr_andes_nx45v_meta.c => csr_andes_nx45v.c}   | 8 ++++----
+ target/riscv/meson.build                                  | 2 +-
+ 4 files changed, 9 insertions(+), 9 deletions(-)
+ rename target/riscv/{csr_andes_nx45v_meta.c => csr_andes_nx45v.c} (87%)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 6906479d2c..25d3e694ba 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -723,13 +723,13 @@ static void rv64_andes_nx45_cpu_init(Object *obj)
+     cfg->marchid = 0x8045;
+ }
+ 
+-static void rv64_andes_nx45v_meta_cpu_init(Object *obj)
++static void rv64_andes_nx45v_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     set_misa(env, MXL_RV64, RVA | RVC | RVD | RVF | RVI | RVM | RVN | RVU | RVV | RVX);
+-    rv64_andes_common_cpu_init(obj, andes_spec_csr_init_nx45v_meta);
++    rv64_andes_common_cpu_init(obj, andes_spec_csr_init_nx45v);
+     cfg->mmu = false;
+ #ifndef CONFIG_USER_ONLY
+     memset(&cfg->satp_mode, 0, sizeof(RISCVSATPMap));
+@@ -2104,7 +2104,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX25,       rv64_andes_nx25_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX27V,      rv64_andes_nx27v_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX45,       rv64_andes_nx45_cpu_init),
+-    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX45V_META, rv64_andes_nx45v_meta_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX45V,      rv64_andes_nx45v_cpu_init),
+     DEFINE_DYNAMIC_CPU(TYPE_RISCV_CPU_BASE64,   rv64_base_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_SIFIVE_E51,       rv64_sifive_e_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_SIFIVE_U54,       rv64_sifive_u_cpu_init),
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index b4fde7838e..6b89beed61 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -108,6 +108,6 @@ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+ void andes_cpu_do_interrupt_post(CPUState *cpu);
+ 
+-void andes_spec_csr_init_nx45v_meta(AndesCsr *);
++void andes_spec_csr_init_nx45v(AndesCsr *);
+ 
+ #endif /* RISCV_CSR_ANDES_INC_H */
+diff --git a/target/riscv/csr_andes_nx45v_meta.c b/target/riscv/csr_andes_nx45v.c
+similarity index 87%
+rename from target/riscv/csr_andes_nx45v_meta.c
+rename to target/riscv/csr_andes_nx45v.c
+index 3b6e7ed772..9cf79aa244 100644
+--- a/target/riscv/csr_andes_nx45v_meta.c
++++ b/target/riscv/csr_andes_nx45v.c
+@@ -7,8 +7,8 @@
+ #define MASK_MMSC_CFG_L2C          ((uint64_t)0x1 << 46)
+ #define MASK_MMSC_CFG_IOCP         ((uint64_t)0x1 << 46)
+ 
+-static RISCVException read_mmsc_cfg_nx45v_meta(CPURISCVState *env, int csrno,
+-                                               target_ulong *val)
++static RISCVException read_mmsc_cfg_nx45v(CPURISCVState *env, int csrno,
++                                          target_ulong *val)
+ {
+     static target_ulong mask = MASK_MMSC_CFG_ECC     | MASK_MMSC_CFG_ECD
+                              | MASK_MMSC_CFG_PFT     | MASK_MMSC_CFG_HSP
+@@ -29,7 +29,7 @@ static RISCVException read_mmsc_cfg_nx45v_meta(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
+-void andes_spec_csr_init_nx45v_meta(AndesCsr *andes_csr)
++void andes_spec_csr_init_nx45v(AndesCsr *andes_csr)
+ {
+     andes_csr->csrno[CSR_MMSC_CFG] = MASK_MMSC_CFG_ECD   | MASK_MMSC_CFG_PFT
+                                    | MASK_MMSC_CFG_HSP   | MASK_MMSC_CFG_ACE
+@@ -40,5 +40,5 @@ void andes_spec_csr_init_nx45v_meta(AndesCsr *andes_csr)
+                                    | MASK_MMSC_CFG_VL4
+                                    | MASK_MMSC_CFG_VECCFG;
+ 
+-    andes_csr_ops[CSR_MMSC_CFG].read = read_mmsc_cfg_nx45v_meta;
++    andes_csr_ops[CSR_MMSC_CFG].read = read_mmsc_cfg_nx45v;
+ }
+\ No newline at end of file
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index dd0ec25fae..25896d0414 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -28,7 +28,7 @@ riscv_ss.add(files(
+   'zce_helper.c'
+   'andes_helper.c',
+   'csr_andes.c',
+-  'csr_andes_nx45v_meta.c'
++  'csr_andes_nx45v.c'
+ ))
+ 
+ riscv_system_ss = ss.source_set()
+-- 
+2.34.1
+

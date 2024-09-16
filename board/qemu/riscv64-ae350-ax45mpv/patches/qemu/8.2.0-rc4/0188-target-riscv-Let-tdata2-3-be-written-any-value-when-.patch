@@ -1,0 +1,48 @@
+From 92f9882e7052955696a6aff403601d2ca203bfc3 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Wed, 24 Jan 2024 15:30:24 +0800
+Subject: [PATCH 188/241] target/riscv: Let tdata2/3 be written any value when
+ trigger is disabled
+
+Refer to RISC-V debug specification version 1.0-STABLE, when the trigger
+is disabled, tdata2 and tdata3 of this trigger can be written with any
+value that makes sense for any trigger type supported by this trigger.
+The tdata2 can be written with any value. The tdata3 can be written with
+supported fields, so we need to check it by textra_validate().
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index 9da9b251e8..cb220dc8c4 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -1120,8 +1120,21 @@ void tdata_csr_write(CPURISCVState *env, int tdata_index, target_ulong val)
+                                              : RV64_TYPE(TRIGGER_TYPE_DISABLED);
+         break;
+     case TRIGGER_TYPE_DISABLED:
+-        qemu_log_mask(LOG_GUEST_ERROR, "trigger type: %d does not exit\n",
+-                      trigger_type);
++        switch (tdata_index) {
++        case TDATA2:
++            if (val != env->tdata2[env->trigger_cur]) {
++                env->tdata2[env->trigger_cur] = val;
++            }
++            break;
++        case TDATA3:
++            val = textra_validate(env, val);
++            if (val != env->tdata3[env->trigger_cur]) {
++                env->tdata3[env->trigger_cur] = val;
++            }
++            break;
++        default:
++            g_assert_not_reached();
++        }
+         break;
+     default:
+         g_assert_not_reached();
+-- 
+2.34.1
+

@@ -1,0 +1,38 @@
+From 51b2f02bcb2a25ae3c74fe5aa70c57023c666fe7 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Tue, 22 Aug 2023 14:54:20 +0800
+Subject: [PATCH 046/241] andes_ae350: Fix CPU realize being called incorrectly
+ in SOC init
+
+CPU realization must be within andes_ae350_soc_realize() instead of
+andes_ae350_soc_instance_init(). Failing to do so could result in
+incorrect values being acquired by 'instance_post_init()'.
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/andes_ae350.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 63f159441a..d8cd9e4473 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -305,6 +305,7 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     char *plic_hart_config, *plicsw_hart_config;
+     NICInfo *nd = &nd_table[0];
+ 
++    sysbus_realize(SYS_BUS_DEVICE(&s->cpus), &error_abort);
+     plicsw_hart_config =
+         init_hart_config(ANDES_PLICSW_HART_CONFIG, machine->smp.cpus);
+ 
+@@ -453,7 +454,6 @@ static void andes_ae350_soc_instance_init(Object *obj)
+                             machine->smp.cpus, &error_abort);
+     qdev_prop_set_uint64(DEVICE(&s->cpus), "resetvec",
+                             memmap[ANDES_AE350_MROM].base);
+-    sysbus_realize(SYS_BUS_DEVICE(&s->cpus), &error_abort);
+ }
+ 
+ static int andes_load_elf(MachineState *machine,
+-- 
+2.34.1
+

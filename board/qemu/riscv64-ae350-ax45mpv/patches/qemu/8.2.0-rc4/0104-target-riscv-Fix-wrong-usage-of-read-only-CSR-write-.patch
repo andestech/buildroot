@@ -1,0 +1,58 @@
+From efc7673a042abc0870c46666b617df27da1b20ee Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 3 Nov 2023 09:34:08 +0800
+Subject: [PATCH 104/241] target/riscv: Fix wrong usage of read-only CSR
+ write() functions.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index d9c44eb6a6..ebea8342f0 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1372,7 +1372,7 @@ static void andes_csr_sync_cpu_ext(CPURISCVState *env, RISCVCPU *cpu)
+     mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCD, cpu->cfg.ext_zcd);
+     mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCF, cpu->cfg.ext_zcf);
+     mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCMT, cpu->cfg.ext_zcmt);
+-    csr_ops[CSR_MRVARCH_CFG].write(env, CSR_MRVARCH_CFG, mrvarch_cfg);
++    env->andes_csr.csrno[CSR_MRVARCH_CFG] = mrvarch_cfg;
+ 
+     if (riscv_cpu_mxl(env) == MXL_RV32) {
+         target_ulong mmsc_cfg2;
+@@ -1381,7 +1381,7 @@ static void andes_csr_sync_cpu_ext(CPURISCVState *env, RISCVCPU *cpu)
+                 RISCV_EXCP_NONE) {
+             csr_ops[CSR_MMSC_CFG2].read(env, CSR_MMSC_CFG2, &mmsc_cfg2);
+             mmsc_cfg2 = set_field(mmsc_cfg2, MASK_MMSC_CFG2_ZFH, cpu->cfg.ext_zfh);
+-            csr_ops[CSR_MMSC_CFG2].write(env, CSR_MMSC_CFG2, mmsc_cfg2);
++            env->andes_csr.csrno[CSR_MMSC_CFG2] = mmsc_cfg2;
+         }
+         if (csr_ops[CSR_MRVARCH_CFG2].predicate(env, CSR_MRVARCH_CFG2) ==
+                 RISCV_EXCP_NONE) {
+@@ -1389,18 +1389,18 @@ static void andes_csr_sync_cpu_ext(CPURISCVState *env, RISCVCPU *cpu)
+             mrvarch_cfg2 = set_field(mrvarch_cfg2, MASK_MRVARCH_CFG2_ZFBFMIN, cpu->cfg.ext_zfbfmin);
+             mrvarch_cfg2 = set_field(mrvarch_cfg2, MASK_MRVARCH_CFG2_ZVFBFMIN, cpu->cfg.ext_zvfbfmin);
+             mrvarch_cfg2 = set_field(mrvarch_cfg2, MASK_MRVARCH_CFG2_ZVFBFWMA, cpu->cfg.ext_zvfbfwma);
+-            csr_ops[CSR_MRVARCH_CFG2].write(env, CSR_MRVARCH_CFG2, mrvarch_cfg2);
++            env->andes_csr.csrno[CSR_MRVARCH_CFG2] = mrvarch_cfg2;
+         }
+     }
+     else {
+         target_ulong mmsc_cfg;
+         csr_ops[CSR_MMSC_CFG].read(env, CSR_MMSC_CFG, &mmsc_cfg);
+         mmsc_cfg = set_field(mmsc_cfg, MASK_MMSC_CFG_ZFH, cpu->cfg.ext_zfh);
+-        csr_ops[CSR_MMSC_CFG].write(env, CSR_MMSC_CFG, mmsc_cfg);
++        env->andes_csr.csrno[CSR_MMSC_CFG] = mmsc_cfg;
+         mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZFBFMIN, cpu->cfg.ext_zfbfmin);
+         mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZVFBFMIN, cpu->cfg.ext_zvfbfmin);
+         mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZVFBFWMA, cpu->cfg.ext_zvfbfwma);
+-        csr_ops[CSR_MRVARCH_CFG].write(env, CSR_MRVARCH_CFG, mrvarch_cfg);
++        env->andes_csr.csrno[CSR_MRVARCH_CFG] = mrvarch_cfg;
+     }
+ }
+ #endif
+-- 
+2.34.1
+

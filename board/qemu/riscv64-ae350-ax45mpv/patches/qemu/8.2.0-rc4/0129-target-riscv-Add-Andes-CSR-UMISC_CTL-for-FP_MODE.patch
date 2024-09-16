@@ -1,0 +1,49 @@
+From 9f5788ce24acd923d36e25735ca38e6da9f40586 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Wed, 22 Nov 2023 16:18:52 +0800
+Subject: [PATCH 129/241] target/riscv: Add Andes CSR UMISC_CTL for FP_MODE
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/andes_cpu_bits.h | 1 +
+ target/riscv/csr_andes.c      | 1 +
+ target/riscv/csr_andes.h      | 4 ++++
+ 3 files changed, 6 insertions(+)
+
+diff --git a/target/riscv/andes_cpu_bits.h b/target/riscv/andes_cpu_bits.h
+index 57779d8b49..db65682d03 100644
+--- a/target/riscv/andes_cpu_bits.h
++++ b/target/riscv/andes_cpu_bits.h
+@@ -122,3 +122,4 @@
+ #define CSR_WFE                 0x810
+ #define CSR_SLEEPVALUE          0x811
+ #define CSR_TXEVT               0x812
++#define CSR_UMISC_CTL           0x813
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 19b3c321ab..9a94c810a6 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -929,4 +929,5 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_WFE]            = { "wfe",               any,   read_csr, write_csr  },
+     [CSR_SLEEPVALUE]     = { "sleepvalue",        any,   read_csr, write_csr  },
+     [CSR_TXEVT]          = { "csr_txevt",         any,   read_csr, write_csr  },
++    [CSR_UMISC_CTL]      = { "umisc_ctl",         any,   read_csr, write_csr  },
+ };
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index e922e25565..ad591c8826 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -243,6 +243,10 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define WRITE_MASK_CSR_SMISC_CTL            0x30
+ #define WRITE_MASK_CSR_MCACHE_CTL           0x7FFFFF
+ 
++/* umisc_ctl */
++#define MASK_UMISC_CTL_FP_MODE              (0x1)
++#define MASK_UMISC_CTL_CMR_CTL              (0x1 << 2)
++
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+ void andes_cpu_do_interrupt_post(CPUState *cpu);
+-- 
+2.34.1
+

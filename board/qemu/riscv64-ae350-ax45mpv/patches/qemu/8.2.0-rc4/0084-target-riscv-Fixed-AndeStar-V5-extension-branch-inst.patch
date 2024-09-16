@@ -1,0 +1,47 @@
+From f8c0474631c6b93e39c17bd415a50fa9a6fb2982 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Mon, 18 Sep 2023 15:49:52 +0800
+Subject: [PATCH 084/241] target/riscv: Fixed AndeStar V5 extension branch
+ instructions issue after upgrade to QEMU v8.1.0
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/insn_trans/trans_xandesv5ops.c.inc | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/insn_trans/trans_xandesv5ops.c.inc b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+index c58bea9833..939772f41c 100644
+--- a/target/riscv/insn_trans/trans_xandesv5ops.c.inc
++++ b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+@@ -51,6 +51,7 @@ static void andes_v5_gen_branch_tcgv(DisasContext *ctx, uint32_t opc,
+                             TCGv source1, TCGv source2, target_long imm)
+ {
+     TCGLabel *label = gen_new_label();
++    target_ulong orig_pc_save = ctx->pc_save;
+ 
+     switch (opc) {
+     case OPC_RISC_BEQ:
+@@ -77,6 +78,8 @@ static void andes_v5_gen_branch_tcgv(DisasContext *ctx, uint32_t opc,
+     }
+ 
+     gen_goto_tb(ctx, 1, ctx->cur_insn_len);
++    ctx->pc_save = orig_pc_save;
++
+     gen_set_label(label); /* branch taken */
+     if (!has_ext(ctx, RVC) && ((ctx->base.pc_next + imm) & 0x3)) {
+         /* misaligned */
+@@ -84,8 +87,10 @@ static void andes_v5_gen_branch_tcgv(DisasContext *ctx, uint32_t opc,
+         gen_pc_plus_diff(target_pc, ctx, imm);
+         gen_exception_inst_addr_mis(ctx, target_pc);
+     } else {
+-        gen_goto_tb(ctx, 0, ctx->base.pc_next + imm);
++        gen_goto_tb(ctx, 0, imm);
+     }
++
++    ctx->pc_save = -1;
+     ctx->base.is_jmp = DISAS_NORETURN;
+ }
+ 
+-- 
+2.34.1
+

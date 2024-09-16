@@ -1,0 +1,37 @@
+From f2e82b6e61920a231971431548636bf873a27d46 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Tue, 12 Dec 2023 11:30:22 +0800
+Subject: [PATCH 138/241] target/riscv: Disable unsupported extensions for
+ Andes N25 CPU
+
+Some extensions are enabled by default but they are not supported by
+Andes N25 CPU. Disable them in rv32_andes_n25_cpu_init().
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/cpu.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 451bcce00d..15c78a539a 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1090,6 +1090,15 @@ static void rv32_andes_n25_cpu_init(Object *obj)
+     /* Debug sdtrig extension optional CSR */
+     cfg->ext_sdtrig_tcontrol = true;
+     cfg->ext_sdtrig_mcontext = true;
++
++    /* Disable unsupported extensions which are enabled by default */
++    cfg->ext_zihintpause = false;
++    cfg->ext_zawrs = false;
++    cfg->ext_zfa = false;
++    cfg->ext_sstc = false;
++    cfg->ext_svadu = false;
++    cfg->ext_icbom = false;
++    cfg->ext_icboz = false;
+ }
+ 
+ static void rv32_andes_n45_cpu_init(Object *obj)
+-- 
+2.34.1
+

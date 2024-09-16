@@ -1,0 +1,92 @@
+From 205d9c6270de49d62edbcf7b9b80459fe4cdd9a2 Mon Sep 17 00:00:00 2001
+From: Dylan Jhong <dylan@andestech.com>
+Date: Wed, 26 Jul 2023 10:49:16 +0800
+Subject: [PATCH 021/241] AE350: Support WDT,RTC,I2C,SPI2 as unimplemented
+ device (#39)
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/39
+Co-authored-by: Dylan Jhong <dylan@andestech.com>
+Co-committed-by: Dylan Jhong <dylan@andestech.com>
+---
+ hw/riscv/andes_ae350.c         | 20 ++++++++++++++++++++
+ include/hw/riscv/andes_ae350.h |  4 ++++
+ 2 files changed, 24 insertions(+)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 47d1e7e3fe..63f159441a 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -70,11 +70,15 @@ static const struct MemmapEntry {
+     [ANDES_AE350_UART1]     = { 0xf0200000,   0x100000 },
+     [ANDES_AE350_UART2]     = { 0xf0300000,   0x100000 },
+     [ANDES_AE350_PIT]       = { 0xf0400000,   0x100000 },
++    [ANDES_AE350_WDT]       = { 0xf0500000,   0x100000 },
++    [ANDES_AE350_RTC]       = { 0xf0600000,   0x100000 },
+     [ANDES_AE350_GPIO]      = { 0xf0700000,   0x100000 },
++    [ANDES_AE350_I2C]       = { 0xf0a00000,   0x100000 },
+     [ANDES_AE350_SPI]       = { 0xf0b00000,   0x100000 },
+     [ANDES_AE350_DMAC]      = { 0xf0c00000,   0x100000 },
+     [ANDES_AE350_SND]       = { 0xf0d00000,   0x100000 },
+     [ANDES_AE350_SDC]       = { 0xf0e00000,   0x100000 },
++    [ANDES_AE350_SPI2]      = { 0xf0f00000,   0x100000 },
+     [ANDES_AE350_VIRTIO]    = { 0xfe000000,     0x1000 },
+ };
+ 
+@@ -368,10 +372,22 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     create_unimplemented_device("riscv.andes.ae350.spi",
+         memmap[ANDES_AE350_SPI].base, memmap[ANDES_AE350_SPI].size);
+ 
++    /* WDT */
++    create_unimplemented_device("riscv.andes.ae350.wdt",
++        memmap[ANDES_AE350_WDT].base, memmap[ANDES_AE350_WDT].size);
++
++    /* RTC */
++    create_unimplemented_device("riscv.andes.ae350.rtc",
++        memmap[ANDES_AE350_RTC].base, memmap[ANDES_AE350_RTC].size);
++
+     /* GPIO */
+     create_unimplemented_device("riscv.andes.ae350.gpio",
+         memmap[ANDES_AE350_GPIO].base, memmap[ANDES_AE350_GPIO].size);
+ 
++    /* I2C */
++    create_unimplemented_device("riscv.andes.ae350.i2c",
++        memmap[ANDES_AE350_I2C].base, memmap[ANDES_AE350_I2C].size);
++
+     /* LCD */
+     create_unimplemented_device("riscv.andes.ae350.lcd",
+         memmap[ANDES_AE350_LCD].base, memmap[ANDES_AE350_LCD].size);
+@@ -399,6 +415,10 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     atfsdc010_create(memmap[ANDES_AE350_SDC].base,
+                 qdev_get_gpio_in(DEVICE(s->plic), ANDES_AE350_SDC_IRQ));
+ 
++    /* SPI2 */
++    create_unimplemented_device("riscv.andes.ae350.spi2",
++        memmap[ANDES_AE350_SPI2].base, memmap[ANDES_AE350_SPI2].size);
++
+ 
+     /* UART */
+     serial_mm_init(system_memory,
+diff --git a/include/hw/riscv/andes_ae350.h b/include/hw/riscv/andes_ae350.h
+index 52ab10bd14..89f021a386 100644
+--- a/include/hw/riscv/andes_ae350.h
++++ b/include/hw/riscv/andes_ae350.h
+@@ -75,11 +75,15 @@ enum {
+     ANDES_AE350_UART1,
+     ANDES_AE350_UART2,
+     ANDES_AE350_PIT,
++    ANDES_AE350_WDT,
++    ANDES_AE350_RTC,
+     ANDES_AE350_GPIO,
++    ANDES_AE350_I2C,
+     ANDES_AE350_SPI,
+     ANDES_AE350_DMAC,
+     ANDES_AE350_SND,
+     ANDES_AE350_SDC,
++    ANDES_AE350_SPI2,
+     ANDES_AE350_VIRTIO,
+ };
+ 
+-- 
+2.34.1
+

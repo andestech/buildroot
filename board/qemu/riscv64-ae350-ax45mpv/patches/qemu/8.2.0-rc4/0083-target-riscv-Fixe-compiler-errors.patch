@@ -1,0 +1,66 @@
+From 5e89c4c6d5952c2270643f05ce63624b49c19c90 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 18 Sep 2023 11:47:20 +0800
+Subject: [PATCH 083/241] target/riscv: Fixe compiler errors.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ hw/intc/andes_plic.c | 8 ++++----
+ hw/intc/riscv_plic.c | 4 ++--
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/hw/intc/andes_plic.c b/hw/intc/andes_plic.c
+index 5dd4dcdc6d..bd370019b9 100644
+--- a/hw/intc/andes_plic.c
++++ b/hw/intc/andes_plic.c
+@@ -75,7 +75,7 @@ void andes_plichw_update(void *plic)
+                         riscv_plic->riscv_plic_claim(riscv_plic, target_id);
+                     assert(vec->vectored_irq_m);
+             }
+-            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_MEIP, BOOL_TO_MASK(level));
++            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_MEIP, BOOL_TO_MASK(level));
+             break;
+         case PlicMode_S:
+             if (!vec->vectored_irq_s &&
+@@ -85,7 +85,7 @@ void andes_plichw_update(void *plic)
+                         riscv_plic->riscv_plic_claim(riscv_plic, target_id);
+                     assert(vec->vectored_irq_s);
+             }
+-            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_SEIP, BOOL_TO_MASK(level));
++            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_SEIP, BOOL_TO_MASK(level));
+             break;
+         default:
+             break;
+@@ -112,10 +112,10 @@ void andes_plicsw_update(void *plic)
+ 
+         switch (mode) {
+         case PlicMode_M:
+-            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_MSIP, BOOL_TO_MASK(level));
++            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_MSIP, BOOL_TO_MASK(level));
+             break;
+         case PlicMode_S:
+-            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_SSIP, BOOL_TO_MASK(level));
++            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_SSIP, BOOL_TO_MASK(level));
+             break;
+         default:
+             break;
+diff --git a/hw/intc/riscv_plic.c b/hw/intc/riscv_plic.c
+index 1ea94a1bc6..cca0da885c 100644
+--- a/hw/intc/riscv_plic.c
++++ b/hw/intc/riscv_plic.c
+@@ -151,10 +151,10 @@ static void riscv_plic_update(void *opaque)
+         int level = riscv_plic_irqs_pending(plic, addrid);
+         switch (mode) {
+         case PLICMode_M:
+-            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_MEIP, BOOL_TO_MASK(level));
++            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_MEIP, BOOL_TO_MASK(level));
+             break;
+         case PLICMode_S:
+-            riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_SEIP, BOOL_TO_MASK(level));
++            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_SEIP, BOOL_TO_MASK(level));
+             break;
+         default:
+             break;
+-- 
+2.34.1
+

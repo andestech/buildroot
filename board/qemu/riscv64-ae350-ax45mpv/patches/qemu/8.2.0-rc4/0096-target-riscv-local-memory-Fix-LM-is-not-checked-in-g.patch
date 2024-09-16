@@ -1,0 +1,45 @@
+From 81debc43bbec16d894fff13dbf05091b87fec7cd Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Fri, 6 Oct 2023 10:54:40 +0800
+Subject: [PATCH 096/241] target/riscv: local memory: Fix LM is not checked in
+ get_physical_address when environment is M-mode or no-MMU
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ target/riscv/cpu_helper.c | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
+index 38a47dac2a..f58d48c015 100644
+--- a/target/riscv/cpu_helper.c
++++ b/target/riscv/cpu_helper.c
+@@ -823,12 +823,6 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
+         use_background = true;
+     }
+ 
+-    if (mode == PRV_M || !riscv_cpu_cfg(env)->mmu) {
+-        *physical = addr;
+-        *ret_prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
+-        return TRANSLATE_SUCCESS;
+-    }
+-
+     /* Access local memory */
+     if (env->andes_csr.csrno[CSR_MILMB] & 0x1 &&
+         addr >= env->ilm_base &&
+@@ -844,6 +838,13 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
+         return TRANSLATE_SUCCESS;
+     }
+ 
++    if (mode == PRV_M || !riscv_cpu_cfg(env)->mmu) {
++        *physical = addr;
++        *ret_prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
++        return TRANSLATE_SUCCESS;
++    }
++
++
+     *ret_prot = 0;
+ 
+     hwaddr base;
+-- 
+2.34.1
+

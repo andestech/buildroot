@@ -1,0 +1,47 @@
+From 3953e4ed61db7235b85f99d6d5e6a748ab4957c8 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Thu, 25 Jan 2024 11:22:27 +0800
+Subject: [PATCH 193/241] target/riscv: Fix log typo for TRIGGER_TYPE_NO_EXIST
+
+Should be "exist" not "exit".
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index b33650ec44..d042f9b4a8 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -131,10 +131,11 @@ static trigger_action_t get_trigger_action(CPURISCVState *env,
+                       trigger_type);
+         break;
+     case TRIGGER_TYPE_NO_EXIST:
+-    case TRIGGER_TYPE_DISABLED:
+-        qemu_log_mask(LOG_GUEST_ERROR, "trigger type: %d does not exit\n",
++        qemu_log_mask(LOG_GUEST_ERROR, "trigger type: %d does not exist\n",
+                       trigger_type);
+         break;
++    case TRIGGER_TYPE_DISABLED:
++        break;
+     default:
+         g_assert_not_reached();
+     }
+@@ -533,10 +534,11 @@ static bool trigger_mode_match(CPURISCVState *env, trigger_type_t type,
+         qemu_log_mask(LOG_UNIMP, "trigger type: %d is not supported\n", type);
+         break;
+     case TRIGGER_TYPE_NO_EXIST:
+-    case TRIGGER_TYPE_DISABLED:
+-        qemu_log_mask(LOG_GUEST_ERROR, "trigger type: %d does not exit\n",
++        qemu_log_mask(LOG_GUEST_ERROR, "trigger type: %d does not exist\n",
+                       type);
+         break;
++    case TRIGGER_TYPE_DISABLED:
++        break;
+     default:
+         g_assert_not_reached();
+     }
+-- 
+2.34.1
+

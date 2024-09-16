@@ -1,0 +1,28 @@
+From 03b5f6bd65f8be8d6a50da13b756a1cbc1b29552 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Thu, 15 Feb 2024 11:12:44 +0800
+Subject: [PATCH 204/241] target/riscv: Remove the usage of g_alloca0() for
+ Ubuntu 20.04.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/gdbstub.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/gdbstub.c b/target/riscv/gdbstub.c
+index b241afe8ce..a12efb7de7 100644
+--- a/target/riscv/gdbstub.c
++++ b/target/riscv/gdbstub.c
+@@ -434,7 +434,8 @@ static int andes_ace_set_reg(CPURISCVState *env, unsigned char *val, int reg_n)
+     /* Allocate buffer which is the multiple of register size */
+     unsigned int rounds = (ByteSize % reg_bytes) ?
+                            ByteSize / reg_bytes + 1 : ByteSize / reg_bytes;
+-    char *buffer = g_alloca0(rounds * reg_bytes);
++    char *buffer = g_alloca(rounds * reg_bytes);
++    memset(buffer, 0, rounds * reg_bytes);
+     memcpy(buffer, val, ByteSize);
+     /* this pointer will be increased when extracting value partially */
+     char *value = buffer;
+-- 
+2.34.1
+

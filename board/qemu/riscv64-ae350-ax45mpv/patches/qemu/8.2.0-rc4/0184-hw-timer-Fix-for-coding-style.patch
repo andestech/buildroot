@@ -1,0 +1,94 @@
+From c98827b37f21b3cf800a63896c52c9db0e60431e Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 26 Jan 2024 10:32:20 +0800
+Subject: [PATCH 184/241] hw/timer: Fix for coding style target/riscv: Fix for
+ coding style
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ hw/timer/atcpit100.c            | 2 +-
+ target/riscv/andes_fpu_helper.c | 3 ++-
+ target/riscv/cpu_helper.c       | 4 ++--
+ target/riscv/csr.c              | 4 ++--
+ target/riscv/debug.c            | 2 +-
+ 5 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/hw/timer/atcpit100.c b/hw/timer/atcpit100.c
+index 3dabfee175..ee2128bfd0 100644
+--- a/hw/timer/atcpit100.c
++++ b/hw/timer/atcpit100.c
+@@ -460,7 +460,7 @@ static const MemoryRegionOps atcpit100_ops = {
+ static void
+ atcpit100_reset(DeviceState *dev)
+ {
+-    int i,j;
++    int i, j;
+     Atcpit100State *s = ATCPIT100(dev);
+     for (i = 0; i < ATCPIT100_CHANNEL_NUM; ++i) {
+         Atcpit100Channel *ch = &s->channels[i];
+diff --git a/target/riscv/andes_fpu_helper.c b/target/riscv/andes_fpu_helper.c
+index 723e8f4dd9..64ce3b5853 100644
+--- a/target/riscv/andes_fpu_helper.c
++++ b/target/riscv/andes_fpu_helper.c
+@@ -22,7 +22,8 @@ bool check_fp_mode(CPURISCVState *env)
+     if (ret != RISCV_EXCP_NONE) {
+         return false;
+     }
+-    return ((umisc_ctl_val & MASK_UMISC_CTL_FP_MODE) == MASK_UMISC_CTL_FP_MODE_BF16);
++    return ((umisc_ctl_val & MASK_UMISC_CTL_FP_MODE) ==
++        MASK_UMISC_CTL_FP_MODE_BF16);
+ }
+ 
+ float16 nds_check_nanbox_h(CPURISCVState *env, uint64_t f)
+diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
+index 9fcd6807fc..cc8ba3b06c 100644
+--- a/target/riscv/cpu_helper.c
++++ b/target/riscv/cpu_helper.c
+@@ -1847,8 +1847,8 @@ void riscv_cpu_do_interrupt(CPUState *cs)
+                   __func__, env->mhartid, async, cause, env->pc, tval,
+                   riscv_cpu_get_trap_name(cause, async));
+ 
+-    if (env->priv <= PRV_S && cause < 64 &&
+-        (((deleg >> cause) & 1) || s_injected || vs_injected || andes_lideleg)) {
++    if (env->priv <= PRV_S && cause < 64 && (((deleg >> cause) & 1) ||
++        s_injected || vs_injected || andes_lideleg)) {
+         /* handle the trap in S-mode */
+         if (riscv_has_ext(env, RVH)) {
+             uint64_t hdeleg = async ? env->hideleg : env->hedeleg;
+diff --git a/target/riscv/csr.c b/target/riscv/csr.c
+index caa50fb704..667c88c994 100644
+--- a/target/riscv/csr.c
++++ b/target/riscv/csr.c
+@@ -4958,14 +4958,14 @@ riscv_csr_operations csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_PMPADDR15] =  { "pmpaddr15", pmp, read_pmpaddr, write_pmpaddr },
+ 
+     /* Debug CSRs */
+-	[CSR_TSELECT]   =  { "tselect",  debug, read_tselect,  write_tselect },
++    [CSR_TSELECT]   =  { "tselect",  debug, read_tselect,  write_tselect },
+     [CSR_TDATA1]    =  { "tdata1",   debug, read_tdata,    write_tdata   },
+     [CSR_TDATA2]    =  { "tdata2",   debug, read_tdata,    write_tdata   },
+     [CSR_TDATA3]    =  { "tdata3",   debug, read_tdata,    write_tdata   },
+     [CSR_TINFO]     =  { "tinfo",    debug, read_tinfo,    write_ignore  },
+     [CSR_TCONTROL]  =  { "tcontrol", sdtrig_tcontrol,      read_tcontrol,
+                          write_tcontrol                                  },
+-	[CSR_SCONTEXT]  =  { "scontext", sdtrig_scontext,      read_scontext,
++    [CSR_SCONTEXT]  =  { "scontext", sdtrig_scontext,      read_scontext,
+                          write_scontext                                  },
+     [CSR_HCONTEXT]  =  { "hcontext", sdtrig_hcontext,      read_hcontext,
+                          write_hcontext                                  },
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index 51a2d09b44..4af33c1228 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -882,7 +882,7 @@ bool riscv_itrigger_enabled(CPURISCVState *env)
+             (env->tdata1[i] & ITRIGGER_VU) == 0 &&
+             (env->tdata1[i] & ITRIGGER_U)  == 0 &&
+             (env->tdata1[i] & ITRIGGER_S)  == 0 &&
+-            (env->tdata1[i] & ITRIGGER_M)  == 0 ) {
++            (env->tdata1[i] & ITRIGGER_M)  == 0) {
+             continue;
+         }
+         count = itrigger_get_count(env, i);
+-- 
+2.34.1
+

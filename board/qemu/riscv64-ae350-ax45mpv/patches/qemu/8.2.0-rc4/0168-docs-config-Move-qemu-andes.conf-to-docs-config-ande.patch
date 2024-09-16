@@ -1,0 +1,155 @@
+From 6c3275c1d7f200bbf77477d21f3acf8faf61750a Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Mon, 8 Jan 2024 09:05:29 +0800
+Subject: [PATCH 168/241] docs/config: Move qemu-andes.conf to
+ docs/config/andes.cfg
+
+Also add more comments for this file
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ docs/config/andes.cfg | 62 +++++++++++++++++++++++++++++++++++++++++++
+ qemu-andes.conf       | 62 -------------------------------------------
+ 2 files changed, 62 insertions(+), 62 deletions(-)
+ create mode 100644 docs/config/andes.cfg
+ delete mode 100644 qemu-andes.conf
+
+diff --git a/docs/config/andes.cfg b/docs/config/andes.cfg
+new file mode 100644
+index 0000000000..48c2b7d141
+--- /dev/null
++++ b/docs/config/andes.cfg
+@@ -0,0 +1,62 @@
++# readconfig will be overwrite by command line property settings if the same config
++# Usage:
++#
++#   $ qemu-system-riscv64 \
++#     -M andes_ae350 -cpu [andes-nx45v|...]
++#     -readconfig adnes.cfg
++#
++# Andes config example
++#
++#CPU option setting
++#The same with '-cpu andes-nx45v,xandesaceextlibpath=lib'
++#[global]
++#driver = "andes-nx45v-riscv-cpu"
++#property = "xandesaceextlibpath"
++#value = "lib"
++
++#Set ilm size setting
++#The same with '-global driver=riscv.andes.ae350.soc,property=ilm_size,value=0x10000'
++#[global]
++#driver = "riscv.andes.ae350.soc"
++#property = "ilm_size"
++#value = "0x10000"
++
++#current andes cpus config setting, we use "cpu" as ID now
++[andes-config "cpu"]
++isa-codense = "on"
++powerbrake = "on"
++stack-protection = "on"
++isa-ace = "off"
++vectored-plic = "on"
++slave-port = "on"
++pfm-nds = "on"
++cctl = "on"
++isa-efhw = "on"
++#cctl version is 2 bits value
++cctl-version = "1"
++ppi = "on"
++isa-dsp = "on"
++msc-ext = "on"
++isa-bf16cvt = "on"
++#this zfg only effects CSR mmsc_cfg, must sync with ext_zfh
++isa-zfh = "on"
++isa-vl4 = "on"
++crash-save = "on"
++veccfg = "on"
++isa-pp16 = "on"
++isa-vsih = "on"
++mmsc-cfg-ccachemp-cfg = "on"
++mmsc-cfg-ccache = "on"
++#codense version is 2 bits value
++codense-ver = "1"
++isa-vdot = "on"
++isa-vpfh = "on"
++stack-protection-only = "on"
++mmsc-cfg-rvarch = "on"
++alt-fp-fmt = "on"
++msc-ext3 = "on"
++#misew is 2 bits value
++mvec-cfg-misew = "1"
++#mfsew is 2 bits value
++mvec-cfg-mfsew = "2"
++
+diff --git a/qemu-andes.conf b/qemu-andes.conf
+deleted file mode 100644
+index b7920a7e78..0000000000
+--- a/qemu-andes.conf
++++ /dev/null
+@@ -1,62 +0,0 @@
+-# Andes config example
+-
+-#test cpu option setting, will the same with -cpu andes-nx45v,xandesaceextlibpath=lib
+-[global]
+-driver = "andes-nx45v-riscv-cpu"
+-property = "xandesaceextlibpath"
+-value = "lib"
+-
+-#test set ilm size setting
+-[global]
+-driver = "riscv.andes.ae350.soc"
+-property = "ilm_size"
+-value = "0x10000"
+-
+-#current andes cpus config setting, we use "cpu" as ID now
+-[andes-config "cpu"]
+-isa-codense = "on"
+-powerbrake = "on"
+-stack-protection = "on"
+-isa-ace = "off"
+-vectored-plic = "on"
+-slave-port = "on"
+-pfm-nds = "on"
+-cctl = "on"
+-isa-efhw = "on"
+-cctl-version = "1"
+-ppi = "on"
+-isa-dsp = "on"
+-msc-ext = "on"
+-isa-bf16cvt = "on"
+-isa-zfh = "on"
+-isa-vl4 = "on"
+-crash-save = "on"
+-veccfg = "on"
+-isa-pp16 = "on"
+-isa-vsih = "on"
+-mmsc-cfg-ccachemp-cfg = "on"
+-mmsc-cfg-ccache = "on"
+-codense-ver = "1"
+-isa-vdot = "on"
+-isa-vpfh = "on"
+-stack-protection-only = "on"
+-mmsc-cfg-rvarch = "on"
+-alt-fp-fmt = "on"
+-msc-ext3 = "on"
+-mvec-cfg-misew = "1"
+-mvec-cfg-mfsew = "2"
+-
+-#test cpu id with hart number 0
+-[andes-config "cpu0"]
+-enable = "off"
+-target = "aa"
+-
+-#test cpu id with hart number 1
+-[andes-config "cpu1"]
+-enable = "on"
+-target = "ab"
+-
+-#test empty id
+-[andes-config]
+-enable = "off"
+-target = "abc","v","dd"
+-- 
+2.34.1
+

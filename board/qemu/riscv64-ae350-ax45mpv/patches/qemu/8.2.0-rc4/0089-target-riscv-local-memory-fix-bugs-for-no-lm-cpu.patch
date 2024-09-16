@@ -1,0 +1,65 @@
+From 118ae15f58aa0562b729feb7919528c7d3c93480 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Tue, 19 Sep 2023 15:27:52 +0800
+Subject: [PATCH 089/241] target/riscv: local memory : fix bugs for no-lm cpu
+
+CPU without local memory support should not touch local memory
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/riscv_hart.c | 4 +++-
+ target/riscv/cpu.c    | 9 ++++++---
+ 2 files changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/hw/riscv/riscv_hart.c b/hw/riscv/riscv_hart.c
+index ab07401bd4..b08d6eb821 100644
+--- a/hw/riscv/riscv_hart.c
++++ b/hw/riscv/riscv_hart.c
+@@ -74,7 +74,9 @@ static bool riscv_hart_realize(RISCVHartArrayState *s, int idx,
+ {
+     object_initialize_child(OBJECT(s), "harts[*]", &s->harts[idx], cpu_type);
+     qdev_prop_set_uint64(DEVICE(&s->harts[idx]), "resetvec", s->resetvec);
+-    andes_hart_prop_set(s, idx);
++    if(strncmp(cpu_type, "andes", 5) == 0) {
++        andes_hart_prop_set(s, idx);
++    }
+     s->harts[idx].env.mhartid = s->hartid_base + idx;
+     qemu_register_reset(riscv_harts_cpu_reset, &s->harts[idx]);
+     return qdev_realize(DEVICE(&s->harts[idx]), NULL, errp);
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index dd2c70145e..65c9d2a23d 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1401,7 +1401,7 @@ static void riscv_cpu_reset_hold(Object *obj)
+             memory_region_add_subregion_overlap(env->cpu_as_root,
+                                 env->ilm_base, env->mask_ilm, 1);
+         }
+-    } else if (memory_region_is_mapped(env->mask_ilm)) {
++    } else if (env->mask_ilm && memory_region_is_mapped(env->mask_ilm)) {
+         memory_region_del_subregion(env->cpu_as_root, env->mask_ilm);
+     }
+     if (env->dlm_default_enable) {
+@@ -1409,7 +1409,7 @@ static void riscv_cpu_reset_hold(Object *obj)
+             memory_region_add_subregion_overlap(env->cpu_as_root,
+                                 env->dlm_base, env->mask_dlm, 1);
+         }
+-    } else if (memory_region_is_mapped(env->mask_dlm)) {
++    } else if (env->mask_dlm && memory_region_is_mapped(env->mask_dlm)) {
+         memory_region_del_subregion(env->cpu_as_root, env->mask_dlm);
+     }
+     tlb_flush(env_cpu(env));
+@@ -1619,7 +1619,10 @@ static void riscv_cpu_realize(DeviceState *dev, Error **errp)
+     }
+ 
+ #ifndef CONFIG_USER_ONLY
+-    andes_cpu_lm_realize(dev);
++    /* if local memory is initialized */
++    if(env->cpu_as_root) {
++        andes_cpu_lm_realize(dev);
++    }
+ #endif
+ 
+     riscv_cpu_register_gdb_regs_for_features(cs);
+-- 
+2.34.1
+

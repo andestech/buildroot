@@ -1,0 +1,27 @@
+From f7b3fa0c009adab3405427b0807317e5b7746af1 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Fri, 6 Oct 2023 16:05:42 +0800
+Subject: [PATCH 097/241]  target/riscv: local memory: ILM have read, write,
+ execute permission
+
+ Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ target/riscv/cpu_helper.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
+index f58d48c015..620644c23b 100644
+--- a/target/riscv/cpu_helper.c
++++ b/target/riscv/cpu_helper.c
+@@ -828,7 +828,7 @@ static int get_physical_address(CPURISCVState *env, hwaddr *physical,
+         addr >= env->ilm_base &&
+         addr < env->ilm_base + env->ilm_size) {
+         *physical = addr;
+-        *ret_prot = PAGE_EXEC;
++        *ret_prot = PAGE_READ | PAGE_WRITE | PAGE_EXEC;
+         return TRANSLATE_SUCCESS;
+     } else if (env->andes_csr.csrno[CSR_MDLMB] & 0x1 &&
+                addr >= env->dlm_base &&
+-- 
+2.34.1
+

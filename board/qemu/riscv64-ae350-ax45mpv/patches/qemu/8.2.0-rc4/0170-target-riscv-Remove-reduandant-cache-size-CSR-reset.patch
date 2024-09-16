@@ -1,0 +1,37 @@
+From 651f111bdb7b8e0a162ef78bd9609efde7fbc223 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Wed, 10 Jan 2024 13:43:45 +0800
+Subject: [PATCH 170/241] target/riscv: Remove reduandant cache size CSR reset
+
+Since MICM_CFG_ISZ/MDCM_CFG_DSZ already reset, do not change the field
+in loacal memory part.
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ target/riscv/cpu.c | 10 ++++------
+ 1 file changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 97bffd0b49..b601365e96 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1381,12 +1381,10 @@ static void andes_csr_reset_common(CPURISCVState *env)
+     int ilmsz = 31 - __builtin_clz(env->ilm_size) - 9;
+     int dlmsz = 31 - __builtin_clz(env->dlm_size) - 9;
+ 
+-    env->andes_csr.csrno[CSR_MICM_CFG] = (3 << V5_MICM_CFG_ISZ) |
+-                                         (1UL << V5_MICM_CFG_ILMB) |
+-                                         (ilmsz << V5_MICM_CFG_ILMSZ);
+-    env->andes_csr.csrno[CSR_MDCM_CFG] = (3 << V5_MDCM_CFG_DSZ) |
+-                                         (1UL << V5_MDCM_CFG_DLMB) |
+-                                         (dlmsz << V5_MDCM_CFG_DLMSZ);
++    env->andes_csr.csrno[CSR_MICM_CFG] |= (1UL << V5_MICM_CFG_ILMB) |
++                                          (ilmsz << V5_MICM_CFG_ILMSZ);
++    env->andes_csr.csrno[CSR_MDCM_CFG] |= (1UL << V5_MDCM_CFG_DLMB) |
++                                          (dlmsz << V5_MDCM_CFG_DLMSZ);
+ 
+     env->andes_csr.csrno[CSR_MILMB] = env->ilm_base | env->ilm_default_enable;
+     env->andes_csr.csrno[CSR_MDLMB] = env->dlm_base | env->dlm_default_enable;
+-- 
+2.34.1
+

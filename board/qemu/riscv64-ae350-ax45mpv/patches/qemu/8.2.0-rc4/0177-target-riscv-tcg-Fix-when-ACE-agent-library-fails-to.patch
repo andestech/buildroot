@@ -1,0 +1,29 @@
+From 0709b2c636b0f2a11a4540dc7fa6e69366d14fdc Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 18 Jan 2024 10:33:29 +0800
+Subject: [PATCH 177/241] target/riscv/tcg: Fix when ACE agent library fails to
+ load, doesn't do the error propagation back to system issue
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/tcg/tcg-cpu.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/target/riscv/tcg/tcg-cpu.c b/target/riscv/tcg/tcg-cpu.c
+index 2c8bdedced..20a9498756 100644
+--- a/target/riscv/tcg/tcg-cpu.c
++++ b/target/riscv/tcg/tcg-cpu.c
+@@ -692,6 +692,10 @@ void riscv_tcg_cpu_finalize_features(RISCVCPU *cpu, Error **errp)
+     }
+ 
+     riscv_cpu_validate_andes_ace(cpu, &local_err);
++    if (local_err != NULL) {
++        error_propagate(errp, local_err);
++        return;
++    }
+ }
+ 
+ bool riscv_cpu_tcg_compatible(RISCVCPU *cpu)
+-- 
+2.34.1
+

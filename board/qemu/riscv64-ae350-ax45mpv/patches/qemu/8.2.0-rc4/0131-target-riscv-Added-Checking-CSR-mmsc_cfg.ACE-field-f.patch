@@ -1,0 +1,37 @@
+From 1bc2ec5b37023cd69d83fbf771be4012dff5d327 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Mon, 4 Dec 2023 10:11:51 +0800
+Subject: [PATCH 131/241] target/riscv: Added Checking CSR mmsc_cfg.ACE field
+ for translating ACE instruction
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/insn_trans/trans_xandesace.c.inc | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/target/riscv/insn_trans/trans_xandesace.c.inc b/target/riscv/insn_trans/trans_xandesace.c.inc
+index 54a6681181..3c6b6af274 100644
+--- a/target/riscv/insn_trans/trans_xandesace.c.inc
++++ b/target/riscv/insn_trans/trans_xandesace.c.inc
+@@ -4,6 +4,10 @@
+  * Copyright (c) 2023 Andes Technology Corp.
+  * SPDX-License-Identifier: GPL-2.0-or-later
+  */
++#define REQUIRE_ACE do { \
++    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_ACE) \
++} while (0)
++
+ #define REQUIRE_ACES do { \
+     REQUIRE_CFG(CSR_MMISC_CTL, MASK_MMISC_CTL_ACES) \
+ } while (0)
+@@ -15,6 +19,7 @@ static bool trans_andes_ace(DisasContext *ctx, arg_andes_ace *a)
+         qemu_printf("XAndesAce not set\n");
+         riscv_raise_exception(cpu_env(ctx->cs), RISCV_EXCP_ILLEGAL_INST, GETPC());
+     }
++    REQUIRE_ACE;
+     REQUIRE_ACES;
+     TCGv opc = tcg_constant_tl(ctx->opcode);
+     gen_helper_andes_v5_ace(opc, tcg_env, opc);
+-- 
+2.34.1
+

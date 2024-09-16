@@ -1,0 +1,55 @@
+From d76b6b822d1413cb76a3c2d9079b5c8aed691bf6 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Tue, 2 Apr 2024 12:08:01 +0800
+Subject: [PATCH 219/241] atcdmac300: Implement ID and revision register
+
+Fix the construction of IdRev. Implement reading of IdRev (offset 0x0)
+into atcdmac300_read().
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ hw/dma/atcdmac300.c         | 7 +++++--
+ include/hw/dma/atcdmac300.h | 2 ++
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/hw/dma/atcdmac300.c b/hw/dma/atcdmac300.c
+index 329b72e722..4cb94bc2b5 100644
+--- a/hw/dma/atcdmac300.c
++++ b/hw/dma/atcdmac300.c
+@@ -57,6 +57,9 @@ static uint64_t atcdmac300_read(void *opaque, hwaddr offset, unsigned size)
+     }
+ 
+     switch (offset) {
++    case ATCDMAC300_DMA_IDREV:
++        result = s->IdRev;
++        break;
+     case ATCDMAC300_DMA_CFG:
+         result = s->DMACfg;
+         break;
+@@ -255,8 +258,8 @@ static Property atcdmac300_properties[] = {
+     DEFINE_PROP_UINT32("mmio-size", ATCDMAC300State, mmio_size, 0x100000),
+     DEFINE_PROP_UINT32("id-and-revision", ATCDMAC300State, IdRev,
+                     (ATCDMAC300_PRODUCT_ID  << 8) |
+-                    ((ATCDMAC300_PRODUCT_ID & 0x7) << 4) |
+-                    ((ATCDMAC300_PRODUCT_ID & 0x7))),
++                    ((ATCDMAC300_REV_MAJOR & 0xF) << 4) |
++                    ((ATCDMAC300_REV_MINOR & 0xF))),
+     DEFINE_PROP_UINT32("inturrupt-status", ATCDMAC300State, IntStatus, 0),
+     DEFINE_PROP_UINT32("dmac-configuration", ATCDMAC300State,
+                             DMACfg, 0xc3404108),
+diff --git a/include/hw/dma/atcdmac300.h b/include/hw/dma/atcdmac300.h
+index 9d0320a140..db089b45b6 100644
+--- a/include/hw/dma/atcdmac300.h
++++ b/include/hw/dma/atcdmac300.h
+@@ -26,6 +26,8 @@
+ #define TYPE_ATCDMAC300 "atcdmac300"
+ OBJECT_DECLARE_SIMPLE_TYPE(ATCDMAC300State, ATCDMAC300)
+ 
++/* DMAC ID and Revision Register (Offset 0x0) */
++#define ATCDMAC300_DMA_IDREV            0x0
+ #define ATCDMAC300_PRODUCT_ID           0x010230
+ #define ATCDMAC300_REV_MAJOR            0x0
+ #define ATCDMAC300_REV_MINOR            0x1
+-- 
+2.34.1
+

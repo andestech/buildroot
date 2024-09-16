@@ -1,0 +1,61 @@
+From 5bbc8711996fd72ba3c55cdb0cf9e53145e75287 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Fri, 8 Sep 2023 10:44:54 +0800
+Subject: [PATCH 079/241] target/riscv: local memory: Call realize before
+ register_gdb_regs
+
+Let gdb regs list have local memory register
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ target/riscv/cpu.c | 13 +++++--------
+ 1 file changed, 5 insertions(+), 8 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 620143e5a3..eb0f457ec3 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1616,6 +1616,10 @@ static void riscv_cpu_realize(DeviceState *dev, Error **errp)
+         return;
+     }
+ 
++#ifndef CONFIG_USER_ONLY
++    andes_cpu_lm_realize(dev);
++#endif
++
+     riscv_cpu_register_gdb_regs_for_features(cs);
+ 
+ #ifndef CONFIG_USER_ONLY
+@@ -1625,9 +1629,6 @@ static void riscv_cpu_realize(DeviceState *dev, Error **errp)
+ #endif
+ 
+     qemu_init_vcpu(cs);
+-#ifndef CONFIG_USER_ONLY
+-    andes_cpu_lm_realize(dev);
+-#endif
+     cpu_reset(cs);
+ 
+     mcc->parent_realize(dev, errp);
+@@ -2057,9 +2058,6 @@ static Property riscv_cpu_properties[] = {
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
+-<<<<<<< HEAD
+-static const gchar *riscv_gdb_arch_name(CPUState *cs)
+-=======
+ static Property andes_cpu_property[] = {
+     /* Defaults for standard extensions */
+ #ifndef CONFIG_USER_ONLY
+@@ -2084,8 +2082,7 @@ static void register_andes_cpu_props(Object *obj)
+     }
+ }
+ 
+-static gchar *riscv_gdb_arch_name(CPUState *cs)
+->>>>>>> 5fab65d54b (target/riscv: local memory: support local memory on AE350)
++static const gchar *riscv_gdb_arch_name(CPUState *cs)
+ {
+     RISCVCPU *cpu = RISCV_CPU(cs);
+     CPURISCVState *env = &cpu->env;
+-- 
+2.34.1
+

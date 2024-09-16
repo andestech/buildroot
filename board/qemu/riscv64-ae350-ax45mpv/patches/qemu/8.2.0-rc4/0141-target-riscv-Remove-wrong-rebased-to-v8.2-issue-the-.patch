@@ -1,0 +1,27 @@
+From 975ca0041a81bb60fd4e868eac798b856cef96aa Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 15 Dec 2023 09:23:51 +0800
+Subject: [PATCH 141/241] target/riscv: Remove wrong rebased to v8.2 issue, the
+ code of v8.2 had removed allocation timer during itrigger reset and hold time
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/debug.c | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index ed5d7478f8..159c67b451 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -1194,8 +1194,6 @@ void riscv_trigger_reset_hold(CPURISCVState *env)
+         env->cpu_breakpoint[i] = NULL;
+         env->cpu_watchpoint[i] = NULL;
+         timer_del(env->itrigger_timer[i]);
+-        env->itrigger_timer[i] = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+-                                              riscv_itrigger_timer_cb, env);
+         env->tcontrol = 0;
+         env->scontext = 0;
+         env->mcontext = 0;
+-- 
+2.34.1
+

@@ -1,0 +1,838 @@
+From 0ec5b1f6f678db96e946e9ffdaccf7d449f00809 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 13 Jul 2023 16:05:25 +0800
+Subject: [PATCH 111/241] target/riscv:   Support ACE instruction   Must assign
+ cpu feature xandesace to 'on', and set xandesacelib to ACE wrapper library
+ path.   Can find ACE wrapper library source from
+ "https://gitea.andestech.com/foxes687/qemu-copilot-agent/src/branch/master/qemu-ace".
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/XAndesAce.decode                 |  29 ++
+ target/riscv/ace-helper.h                     |  89 +++++
+ target/riscv/andes_ace_helper.c.inc           | 339 ++++++++++++++++++
+ target/riscv/andes_ace_helper.h               |  93 +++++
+ target/riscv/andes_helper.c                   |  18 +
+ target/riscv/andes_helper.h                   |   1 +
+ target/riscv/cpu.c                            |  37 ++
+ target/riscv/cpu_cfg.h                        |   4 +
+ target/riscv/insn_trans/trans_xandesace.c.inc |  20 ++
+ .../riscv/insn_trans/trans_xandesv5ops.c.inc  |   1 -
+ target/riscv/meson.build                      |   1 +
+ target/riscv/tcg/tcg-cpu.c                    |  24 ++
+ target/riscv/translate.c                      |   3 +
+ 13 files changed, 658 insertions(+), 1 deletion(-)
+ create mode 100644 target/riscv/XAndesAce.decode
+ create mode 100644 target/riscv/ace-helper.h
+ create mode 100644 target/riscv/andes_ace_helper.c.inc
+ create mode 100644 target/riscv/andes_ace_helper.h
+ create mode 100644 target/riscv/insn_trans/trans_xandesace.c.inc
+
+diff --git a/target/riscv/XAndesAce.decode b/target/riscv/XAndesAce.decode
+new file mode 100644
+index 0000000000..bfadd80177
+--- /dev/null
++++ b/target/riscv/XAndesAce.decode
+@@ -0,0 +1,29 @@
++#
++# RISC-V translation routines for the RVXI Base Integer Instruction Set.
++#
++# Copyright (c) 2018 Peer Adelt, peer.adelt@hni.uni-paderborn.de
++#                    Bastian Koppelmann, kbastian@mail.uni-paderborn.de
++#
++# This program is free software; you can redistribute it and/or modify it
++# under the terms and conditions of the GNU General Public License,
++# version 2 or later, as published by the Free Software Foundation.
++#
++# This program is distributed in the hope it will be useful, but WITHOUT
++# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++# more details.
++#
++# You should have received a copy of the GNU General Public License along with
++# this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Fields:
++%f_ace 7:25
++
++# Argument sets:
++&r_ace f_ace
++
++# Formats 32:
++@r_ace   ................. .... .... ....... &r_ace %f_ace
++
++## ACE instructions
++andes_ace	................. .... .... 1111011 @r_ace
+diff --git a/target/riscv/ace-helper.h b/target/riscv/ace-helper.h
+new file mode 100644
+index 0000000000..20c802323e
+--- /dev/null
++++ b/target/riscv/ace-helper.h
+@@ -0,0 +1,89 @@
++
++#ifndef __ACE_HELPER_H__
++#define __ACE_HELPER_H__
++
++#ifdef __cplusplus
++    #include <cstdint>
++    #define EXPORT_C extern "C"
++#else
++    #include <stdint.h>
++    #define EXPORT_C
++#endif
++
++enum CB_NAME
++{
++    GET_XRF = 0,
++    SET_XRF,
++    GET_FRF,
++    SET_FRF,
++    GET_VRF, 
++    SET_VRF,
++    GET_MEM, 
++    SET_MEM,
++    GET_CSR, 
++    SET_CSR,
++    SET_CSR_MASKED,
++    GET_ACM, 
++    SET_ACM,
++    GET_PC,
++    GET_HARD_ID,
++    GET_CPU_PRIV,
++    GET_ACES,
++    SET_ACES,
++    CB_NAME_MAX
++};
++
++typedef int (*generic_fp)(void);
++typedef generic_fp* cb_table_t;
++/**
++ * generic_fp table[CB_NAME_MAX];
++ * table[GET_XRF] = &qemu_get_xrf;
++ * table[SET_XRF] = &qemu_set_xrf;
++ * 
++*/
++
++typedef enum {
++    ACM_OK,
++    ACM_ERROR,
++} ACM_Status;
++
++/* For Get PC/HART_ID/PRIV */
++typedef uint64_t (*func0)(void *);
++#define FUNC_0(f) ((func0)(f))(void *)
++
++/* For Get/Set XRF/FRF */
++typedef uint64_t (*func1)(void *, uint32_t x);
++typedef void (*func2)(void *, uint32_t x, uint64_t y);
++#define FUNC_1(f, p0, p1) ((func1)(f))(p0, p1)
++#define FUNC_2(f, p0, p1, p2) ((func2)(f))(p0, p1, p2)
++
++/* For Get/Set CRS */
++typedef uint64_t (*func2c)(void *, uint32_t x, uint64_t y);
++typedef void (*func2cm)(void *, uint32_t x, uint64_t y);
++typedef void (*func3c)(void *, uint32_t x, uint64_t y, uint64_t z);
++#define FUNC_2C(f, p0, p1, p2) ((func2c)(f))(p0, p1, p2)
++#define FUNC_2CM(f, p0, p1, p2) ((func2cm)(f))(p0, p1, p2)
++#define FUNC_3C(f, p0, p1, p2, p3) ((func3c)(f))(p0, p1, p2, p3)
++
++/* For Get/Set VRF */
++typedef unsigned char* (*func1v)(void *, uint32_t x);
++typedef void (*func2v)(void *, uint32_t x, unsigned char *y);
++#define FUNC_1V(f, p0, p1) ((func1v)(f))(p0, p1)
++#define FUNC_2V(f, p0, p1, p2) ((func2v)(f))(p0, p1, p2)
++
++/* For Get/Set Mem */
++typedef uint64_t (*func2m)(void *, uint64_t x, uint32_t y);
++typedef void (*func3m)(void *, uint64_t x, uint64_t y, uint32_t z);
++#define FUNC_2M(f, p0, p1, p2) ((func2m)(f))(p0, p1, p2)
++#define FUNC_3M(f, p0, p1, p2, p3) ((func3m)(f))(p0, p1, p2, p3)
++
++/* For Get/Set ACM */
++typedef ACM_Status (*func3a)(void *, uint64_t x, uint32_t y, char *z);
++#define FUNC_3A(f, p0, p1, p2, p3) ((func3a)(f))(p0, p1, p2, p3)
++
++typedef int32_t (*fp_ace_agent_register_t)(void *, cb_table_t, uint32_t);
++typedef int32_t (*fp_ace_agent_run_insn_t)(void *, uint32_t);
++EXPORT_C int32_t ace_agent_register(void *, cb_table_t cb_table, uint32_t cb_table_num);
++EXPORT_C int32_t ace_agent_run_insn(void *, uint32_t opcode);
++
++#endif  // __ACE_HELPER_H__
+diff --git a/target/riscv/andes_ace_helper.c.inc b/target/riscv/andes_ace_helper.c.inc
+new file mode 100644
+index 0000000000..2aa21e2079
+--- /dev/null
++++ b/target/riscv/andes_ace_helper.c.inc
+@@ -0,0 +1,339 @@
++#include "andes_ace_helper.h"
++#include <stdio.h>
++#include <string.h>
++#include <dlfcn.h>
++
++generic_fp cb_tables[] = { 
++    (generic_fp)qemu_get_XRF, (generic_fp)qemu_set_XRF,
++    (generic_fp)qemu_get_FRF, (generic_fp)qemu_set_FRF,
++    (generic_fp)qemu_get_VRF, (generic_fp)qemu_set_VRF,
++    (generic_fp)qemu_get_MEM, (generic_fp)qemu_set_MEM,
++    (generic_fp)qemu_get_CSR, (generic_fp)qemu_set_CSR,
++    (generic_fp)qemu_set_CSR_masked,
++    (generic_fp)qemu_get_ACM, (generic_fp)qemu_set_ACM,
++    (generic_fp)qemu_get_PC,
++    (generic_fp)qemu_get_hart_id,
++    (generic_fp)qemu_get_cpu_priv,
++    (generic_fp)qemu_get_ACES, (generic_fp)qemu_set_ACES,
++    };
++
++/* Below variable may move to cpu environment for 
++ * multi-core support different ACE 
++ */
++/* dlopen ace wrapper handle */
++static void *qemu_ace_wrapper_handle = NULL;
++/* register callback function */
++ace_agent_register_t fp_ace_agent_register = NULL;
++/* run_insn function */
++ace_agent_run_insn_t fp_ace_agent_run_insn = NULL;
++
++int32_t load_qemu_ace_wrapper(const char *filename)
++{
++    /* Check whether handler already loaded? */
++    if (qemu_ace_wrapper_handle != NULL) {
++        return 0;
++    }
++    qemu_ace_wrapper_handle = dlopen(filename , RTLD_NOW|RTLD_DEEPBIND);
++    if (!qemu_ace_wrapper_handle) {
++        fprintf(stderr, "%s\n", dlerror());
++        return -1;
++    }
++    QAA_DEBUG("Loaded %s library\n", filename);
++    return 0;
++}
++
++int32_t load_qemu_ace_wrapper_API(const char *symbol_name, void **func_ptr)
++{
++    if (qemu_ace_wrapper_handle == NULL) {
++        if ( load_qemu_ace_wrapper("./libqemuace.so") != 0 )
++            return -1;
++    }
++    dlerror();    /* Clear any existing error */
++    *(void **)(func_ptr) = dlsym(qemu_ace_wrapper_handle, symbol_name);
++    if (*func_ptr == NULL) {
++        return -1;
++    }
++    QAA_DEBUG("Loaded %s symbol successful\n", symbol_name);
++    return 0;
++}
++
++int32_t qemu_ace_agent_register(CPURISCVState *env)
++{
++    if (fp_ace_agent_register == NULL) {
++        if (load_qemu_ace_wrapper_API("ace_agent_register", 
++            (void **)&fp_ace_agent_register) != 0) {
++            QAA_DEBUG("get ace_agent_register symbol failed\n");
++            return -1;
++        }
++    }
++    /* register with direct function tables and also pass number of 
++     * total callback functions
++     */
++    return fp_ace_agent_register(env, cb_tables, CB_NAME_MAX);
++}
++
++int32_t qemu_ace_agent_run_insn(CPURISCVState *env, uint32_t opcode)
++{
++    if (fp_ace_agent_run_insn == NULL) {
++        if (load_qemu_ace_wrapper_API("ace_agent_run_insn", 
++            (void **)&fp_ace_agent_run_insn) != 0) {
++            QAA_DEBUG("get ace_agent_run_insn symbol failed\n");
++            return -1;
++        }
++    }
++    QAA_DEBUG("Call ace_agent_run_insn %0x\n", opcode);
++    return fp_ace_agent_run_insn(env, opcode);
++}
++
++uint64_t qemu_get_XRF(CPURISCVState *env, uint32_t index)
++{
++    QAA_DEBUG("get_XRF %d\n", index);
++    if (index == 0) {
++        return 0;
++    }
++    QAA_DEBUG("get_XRF value %ld %p\n", env->gpr[index], &env->gpr[index]);
++    /* Not support RV128 */
++    return env->gpr[index];
++}
++void qemu_set_XRF(CPURISCVState *env, uint32_t index, uint64_t value)
++{
++    QAA_DEBUG("set_XRF %d %ld\n", index, value);
++    if (index == 0) {
++        return;
++    }
++    QAA_DEBUG("set_XRF old value %ld\n", env->gpr[index]);
++    env->gpr[index] = value;
++    QAA_DEBUG("set_XRF new value %ld\n", env->gpr[index]);
++}
++uint64_t qemu_get_FRF(CPURISCVState *env, uint32_t index)
++{
++    /* Should we check FP enable? */
++    QAA_DEBUG("get_FRF %d\n", index);
++    return env->fpr[index];
++}
++void qemu_set_FRF(CPURISCVState *env, uint32_t index, uint64_t value)
++{
++    /* Should we check FP enable? */
++    QAA_DEBUG("set_FRF %d %ld\n", index, value);
++    /* only updates mstatus, doesn't update ctx->mstatus_fs */
++#if !defined(CONFIG_USER_ONLY)
++    /* mstatus.FS doesn't disable (init/clean/dirty) */
++    if (env->mstatus & MSTATUS_FS) {
++        env->mstatus |= MSTATUS_FS;
++    }
++#endif
++    env->fpr[index] = value;
++} 
++unsigned char *qemu_get_VRF(CPURISCVState *env, uint32_t index)
++{
++    /* Should we check Vector enable? */
++    QAA_DEBUG("get_VRF %d\n", index);
++    /* div 64, check cpu.h */
++    uint16_t vlenq = env_archcpu(env)->cfg.vlen >> 6;
++    QAA_DEBUG("vlenq=%d\n", env_archcpu(env)->cfg.vlen >> 6);
++    /* get v register index pointer */
++    uint64_t *vreg = &env->vreg[index*vlenq];
++    return (unsigned char *)vreg;
++}
++void qemu_set_VRF(CPURISCVState *env, uint32_t index, unsigned char *value)
++{
++    /* Should we check Vector enable? */
++    QAA_DEBUG("set_VRF %d %s\n", index, value);
++    /* div 64, check cpu.h */
++    uint16_t vlenq = env_archcpu(env)->cfg.vlen >> 6;
++    QAA_DEBUG("vlenq=%d\n", env_archcpu(env)->cfg.vlen >> 6);
++    /* only update mstatus, doesn't update ctx->mstatus_vs */
++#if !defined(CONFIG_USER_ONLY)
++    /* mstatus.VS doesn't disable (init/clean/dirty) */
++    if (env->mstatus & MSTATUS_VS) {
++        env->mstatus |= MSTATUS_VS;
++    }
++#endif
++    /* vlenq is div 64, memcpy use byte size 8 */
++    memcpy(&env->vreg[index*vlenq], value, vlenq*8);
++}
++/* get_MEM/set_MEM don't support non 1,2,4,8 length,
++ * and return/set data always small than or equal to 8
++ */
++uint64_t qemu_get_MEM(CPURISCVState *env, uint64_t vaddr, uint32_t size)
++{
++    QAA_DEBUG("get_MEM %x:%x\n", vaddr, size);
++    uint64_t data = 0;
++    switch (size) {
++        case 1:
++#ifndef CONFIG_USER_ONLY
++            data = cpu_ldub_data_ra(env, vaddr, GETPC());
++#else
++            data = cpu_ldub_data(env, vaddr);
++#endif
++            break;
++        case 2:
++#ifndef CONFIG_USER_ONLY
++            data = cpu_lduw_data_ra(env, vaddr, GETPC());
++#else
++            data = cpu_lduw_data(env, vaddr);
++#endif
++            break;
++        case 4:
++#ifndef CONFIG_USER_ONLY
++            data = cpu_ldl_data_ra(env, vaddr, GETPC());
++#else
++            data = cpu_ldl_data(env, vaddr);
++#endif
++            break;
++        case 8:
++#ifndef CONFIG_USER_ONLY
++            data = cpu_ldq_data_ra(env, vaddr, GETPC());
++#else
++            data = cpu_ldq_data(env, vaddr);
++#endif
++            break;
++        default: /* Unknown right size? */
++            break;
++    }
++    return data;
++}
++void qemu_set_MEM(CPURISCVState *env, uint64_t vaddr,
++                  uint64_t value, uint32_t size)
++{
++    QAA_DEBUG("set_MEM %x:%x\n", vaddr, size);
++    switch (size) {
++        case 1:
++#ifndef CONFIG_USER_ONLY
++            cpu_stb_data_ra(env, vaddr, value, GETPC());
++#else
++            cpu_stb_data(env, vaddr, value);
++#endif
++            break;
++        case 2:
++#ifndef CONFIG_USER_ONLY
++            cpu_stw_data_ra(env, vaddr, value, GETPC());
++#else
++            cpu_stw_data(env, vaddr, value);
++#endif
++            break;
++        case 4:
++#ifndef CONFIG_USER_ONLY
++            cpu_stl_data_ra(env, vaddr, value, GETPC());
++#else
++            cpu_stl_data(env, vaddr, value);
++#endif
++            break;
++        case 8:
++#ifndef CONFIG_USER_ONLY
++            cpu_stq_data_ra(env, vaddr, value, GETPC());
++#else
++            cpu_stq_data(env, vaddr, value);
++#endif
++            break;
++        default: /* Unknown right size? */
++            break;
++    }
++}
++uint64_t qemu_get_CSR(CPURISCVState *env, uint32_t index, uint64_t mask)
++{
++    QAA_DEBUG("get_CSR %x:%x\n", index, mask);
++    target_ulong value;
++    riscv_csr_operations ops;
++    riscv_get_csr_ops(index , &ops);
++    if (ops.read != NULL) {
++        ops.read(env, index, &value);
++        return (value & mask);
++    }
++    return 0;
++}
++void qemu_set_CSR(CPURISCVState *env, uint32_t index,
++                  uint64_t mask, uint64_t value)
++{
++    QAA_DEBUG("set_CSR %x:%x:%x\n", index, mask, value);
++    riscv_csr_operations ops;
++    riscv_get_csr_ops(index , &ops);
++    if (ops.read != NULL && ops.write != NULL) {
++        target_ulong old;
++        ops.read(env, index, &old);
++        target_ulong new = (value & mask) | (old & ~mask);
++        ops.write(env, index, new);
++    }
++}
++void qemu_set_CSR_masked(CPURISCVState *env, uint32_t index, uint64_t value)
++{
++    QAA_DEBUG("set_CSR_masked %x:%x\n", index, value);
++    riscv_csr_operations ops;
++    riscv_get_csr_ops(index , &ops);
++    if (ops.write != NULL) {
++        ops.write(env, index, value);
++    }
++}
++
++/* get memory without via mmu */
++ACM_Status qemu_get_ACM(CPURISCVState *env, uint64_t addr,
++                        uint32_t size, char *data)
++{
++    QAA_DEBUG("get_ACM %x:%x\n", addr, size);
++#ifndef CONFIG_USER_ONLY
++    cpu_physical_memory_read(addr, data, size);
++#endif
++    return ACM_OK;
++}
++ACM_Status qemu_set_ACM(CPURISCVState *env, uint64_t addr,
++                        uint32_t size, char *data)
++{
++    QAA_DEBUG("set_ACM %x:%x\n", addr, size);
++#ifndef CONFIG_USER_ONLY
++    cpu_physical_memory_write(addr, data, size);
++#endif
++    return ACM_OK;
++}
++
++/* information access */
++bool is_big_endian(void)
++{
++    QAA_DEBUG("is_big_endian\n");
++    return 0;
++}
++bool interruption_exist(void)
++{
++    QAA_DEBUG("interruption_exist\n");
++    return 0;
++}
++
++#define V5_MMISC_CTL_ACES 0x30 /* bit [5:4] */
++uint32_t qemu_get_ACES(CPURISCVState *env)
++{
++    QAA_DEBUG("get_ACES\n");
++    return env->andes_csr.csrno[CSR_MMISC_CTL] & V5_MMISC_CTL_ACES;
++}
++void qemu_set_ACES(CPURISCVState *env, uint32_t value)
++{
++    QAA_DEBUG("set_ACES=%x\n", value);
++    uint32_t old = env->andes_csr.csrno[CSR_MMISC_CTL] & V5_MMISC_CTL_ACES;
++    uint32_t new = (value & V5_MMISC_CTL_ACES) | (old & ~V5_MMISC_CTL_ACES);
++    env->andes_csr.csrno[CSR_MMISC_CTL] = new;
++}
++
++uint64_t qemu_get_PC(CPURISCVState *env)
++{
++    QAA_DEBUG("get_PC\n");
++    return env->pc;
++}
++
++uint64_t qemu_get_hart_id(CPURISCVState *env)
++{
++    QAA_DEBUG("get_hart_id\n");
++#ifndef CONFIG_USER_ONLY
++    return env->mhartid;
++#else
++    return 0;
++#endif
++}
++
++uint32_t qemu_get_cpu_priv(CPURISCVState *env)
++{
++    QAA_DEBUG("get_cpu_priv\n");
++#ifndef CONFIG_USER_ONLY
++    return env->priv;
++#else
++    return 0;
++#endif
++}
++
+diff --git a/target/riscv/andes_ace_helper.h b/target/riscv/andes_ace_helper.h
+new file mode 100644
+index 0000000000..5a218de029
+--- /dev/null
++++ b/target/riscv/andes_ace_helper.h
+@@ -0,0 +1,93 @@
++#ifndef __ANDES_ACE_HELPER__
++#define __ANDES_ACE_HELPER__ 1
++#include <stdint.h>
++#include "qemu/qemu-print.h"
++#include "ace-helper.h"
++
++#define QEMU_ACE_AGENT_DEBUG 0 //0 or 1 to control debug message
++
++#if 0
++#define no_printf(fmt, ...)             \
++({                          \
++    if (0)                      \
++        printf(fmt, ##__VA_ARGS__);     \
++    0;                      \
++})
++#else
++#define no_printf(fmt, ...) {}
++#endif
++
++#if QEMU_ACE_AGENT_DEBUG
++    #define QAA_DEBUG(fmt, ...) printf(fmt, ##__VA_ARGS__)
++#else
++    #define QAA_DEBUG(fmt, ...) no_printf(fmt, ##__VA_ARGS__)
++#endif
++
++#if 0
++#ifndef __cplusplus
++typedef enum { false, true } bool;
++#endif
++#endif
++// data access
++uint64_t qemu_get_XRF(CPURISCVState *env, uint32_t index);
++void qemu_set_XRF(CPURISCVState *env, uint32_t index, uint64_t value);
++uint64_t qemu_get_FRF(CPURISCVState *env, uint32_t index);
++void qemu_set_FRF(CPURISCVState *env, uint32_t index, uint64_t value);
++unsigned char *qemu_get_VRF(CPURISCVState *env, uint32_t index);
++void qemu_set_VRF(CPURISCVState *env, uint32_t index, unsigned char *value);
++uint64_t qemu_get_MEM(CPURISCVState *env, uint64_t vaddr, uint32_t size);
++void qemu_set_MEM(CPURISCVState *env, uint64_t vaddr, uint64_t value, uint32_t size);
++uint64_t qemu_get_CSR(CPURISCVState *env, uint32_t index, uint64_t mask);
++void qemu_set_CSR(CPURISCVState *env, uint32_t index, uint64_t mask, uint64_t value);
++void qemu_set_CSR_masked(CPURISCVState *env, uint32_t index, uint64_t value);
++
++// get memory without via mmu
++ACM_Status qemu_get_ACM(CPURISCVState *env, uint64_t addr, uint32_t size, char *data);
++ACM_Status qemu_set_ACM(CPURISCVState *env, uint64_t addr, uint32_t size, char *data);
++
++// information access
++bool is_big_endian(void);
++bool interruption_exist(void);
++
++// gdb target description
++enum Register_Type {
++    NO_SPECIFY,
++    DATA_POINTER,
++    CODE_POINTER,
++    FLOAT,
++    DOUBLE,
++    UINT8
++};
++
++// for set/get CPU MSTATUS ACES bits
++uint32_t qemu_get_ACES(CPURISCVState *env);
++void qemu_set_ACES(CPURISCVState *env, uint32_t value);
++
++// for get the cause code of exception
++// the definition of cause code is in SPA spec 5.1.8
++uint64_t get_cause_code(void);
++
++// PC
++uint64_t qemu_get_PC(CPURISCVState *env);
++
++// hart ID
++uint64_t qemu_get_hart_id(CPURISCVState *env);
++
++// CPU Priv Mode
++uint32_t qemu_get_cpu_priv(CPURISCVState *env);
++
++// Execution ID
++uint64_t get_IS(void);
++
++// Exception is exist
++bool exception_exist(void);
++
++int32_t load_qemu_ace_wrapper(const char *filename);
++int32_t load_qemu_ace_wrapper_API(const char *symbol_name, void **func_ptr);
++int32_t qemu_ace_agent_register(CPURISCVState *env);
++int32_t qemu_ace_agent_run_insn(CPURISCVState *env, uint32_t opcode);
++typedef int32_t (*ace_agent_register_t)(void *, void *, uint32_t);
++typedef int32_t (*ace_agent_run_insn_t)(void *, uint32_t insn_in);
++
++
++#endif
+diff --git a/target/riscv/andes_helper.c b/target/riscv/andes_helper.c
+index ff5ffeae60..28b7788321 100644
+--- a/target/riscv/andes_helper.c
++++ b/target/riscv/andes_helper.c
+@@ -149,3 +149,21 @@ uint64_t helper_andes_nfcvt_s_bf16(CPURISCVState *env, uint64_t rs2)
+     return nanbox_s(env, bfloat16_to_float32(frs, &env->fp_status));
+ }
+ 
++#include "andes_ace_helper.h"
++target_ulong helper_andes_v5_ace(CPURISCVState *env, target_ulong opcode)
++{
++    target_ulong hartid;
++#ifndef CONFIG_USER_ONLY
++    hartid = env->mhartid;
++#else
++    hartid = 0;
++#endif
++    //int ret = qemu_ace_agent_run_insn(env, opcode, hartid);
++    int ret = qemu_ace_agent_run_insn(env, opcode);
++    if (ret != 0) {
++        /* wrong ACE instruction seems return RESERVED_INSN(=1), not ILL Insn */
++        qemu_printf("Run ace instruction result = %d\n", ret);
++        riscv_raise_exception(env, RISCV_EXCP_ILLEGAL_INST, GETPC());
++    }
++    return 0;
++}
+diff --git a/target/riscv/andes_helper.h b/target/riscv/andes_helper.h
+index 260889b814..17ad15d84c 100644
+--- a/target/riscv/andes_helper.h
++++ b/target/riscv/andes_helper.h
+@@ -42,3 +42,4 @@ DEF_HELPER_6(vqmaccsu_vx_b, void, ptr, ptr, tl, ptr, env, i32)
+ DEF_HELPER_6(vqmaccsu_vx_h, void, ptr, ptr, tl, ptr, env, i32)
+ DEF_HELPER_6(vqmaccus_vx_b, void, ptr, ptr, tl, ptr, env, i32)
+ DEF_HELPER_6(vqmaccus_vx_h, void, ptr, ptr, tl, ptr, env, i32)
++DEF_HELPER_FLAGS_2(andes_v5_ace, TCG_CALL_NO_RWG, tl, env, tl)
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 37d7a5282f..ee211cbc61 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -2028,6 +2028,7 @@ const RISCVCPUMultiExtConfig riscv_cpu_extensions[] = {
+     MULTI_EXT_CFG_BOOL("zcmt", ext_zcmt, false),
+     MULTI_EXT_CFG_BOOL("zicond", ext_zicond, false),
+ 
++<<<<<<< HEAD
+     /* Vector cryptography extensions */
+     MULTI_EXT_CFG_BOOL("zvbb", ext_zvbb, false),
+     MULTI_EXT_CFG_BOOL("zvbc", ext_zvbc, false),
+@@ -2045,6 +2046,42 @@ const RISCVCPUMultiExtConfig riscv_cpu_extensions[] = {
+     MULTI_EXT_CFG_BOOL("zvks", ext_zvks, false),
+     MULTI_EXT_CFG_BOOL("zvksc", ext_zvksc, false),
+     MULTI_EXT_CFG_BOOL("zvksg", ext_zvksg, false),
++=======
++    /* Vendor-specific custom extensions */
++    DEFINE_PROP_BOOL("xtheadba", RISCVCPU, cfg.ext_xtheadba, false),
++    DEFINE_PROP_BOOL("xtheadbb", RISCVCPU, cfg.ext_xtheadbb, false),
++    DEFINE_PROP_BOOL("xtheadbs", RISCVCPU, cfg.ext_xtheadbs, false),
++    DEFINE_PROP_BOOL("xtheadcmo", RISCVCPU, cfg.ext_xtheadcmo, false),
++    DEFINE_PROP_BOOL("xtheadcondmov", RISCVCPU, cfg.ext_xtheadcondmov, false),
++    DEFINE_PROP_BOOL("xtheadfmemidx", RISCVCPU, cfg.ext_xtheadfmemidx, false),
++    DEFINE_PROP_BOOL("xtheadfmv", RISCVCPU, cfg.ext_xtheadfmv, false),
++    DEFINE_PROP_BOOL("xtheadmac", RISCVCPU, cfg.ext_xtheadmac, false),
++    DEFINE_PROP_BOOL("xtheadmemidx", RISCVCPU, cfg.ext_xtheadmemidx, false),
++    DEFINE_PROP_BOOL("xtheadmempair", RISCVCPU, cfg.ext_xtheadmempair, false),
++    DEFINE_PROP_BOOL("xtheadsync", RISCVCPU, cfg.ext_xtheadsync, false),
++    DEFINE_PROP_BOOL("xventanacondops", RISCVCPU, cfg.ext_XVentanaCondOps, false),
++    DEFINE_PROP_BOOL("xandesv5ops", RISCVCPU, cfg.ext_XAndesV5Ops, false),
++    DEFINE_PROP_BOOL("xandesace", RISCVCPU, cfg.ext_XAndesAce, false),
++    DEFINE_PROP_BOOL("xandesacemulti", RISCVCPU, cfg.ext_XAndesAceMulti, false),
++    DEFINE_PROP_STRING("xandesacelib", RISCVCPU, cfg.XAndesAceLib),
++    DEFINE_PROP_BOOL("xandescodenseops", RISCVCPU,
++                        cfg.ext_XAndesCodenseOps, false),
++
++    /* These are experimental so mark with 'x-' */
++    DEFINE_PROP_BOOL("x-zicond", RISCVCPU, cfg.ext_zicond, false),
++
++    /* ePMP 0.9.3 */
++    DEFINE_PROP_BOOL("x-epmp", RISCVCPU, cfg.epmp, false),
++    DEFINE_PROP_BOOL("x-smaia", RISCVCPU, cfg.ext_smaia, false),
++    DEFINE_PROP_BOOL("x-ssaia", RISCVCPU, cfg.ext_ssaia, false),
++
++    DEFINE_PROP_BOOL("x-zvfh", RISCVCPU, cfg.ext_zvfh, false),
++    DEFINE_PROP_BOOL("x-zvfhmin", RISCVCPU, cfg.ext_zvfhmin, false),
++
++    DEFINE_PROP_BOOL("x-zfbfmin", RISCVCPU, cfg.ext_zfbfmin, false),
++    DEFINE_PROP_BOOL("x-zvfbfmin", RISCVCPU, cfg.ext_zvfbfmin, false),
++    DEFINE_PROP_BOOL("x-zvfbfwma", RISCVCPU, cfg.ext_zvfbfwma, false),
++>>>>>>> 14adb0d925 (target/riscv:)
+ 
+     DEFINE_PROP_END_OF_LIST(),
+ };
+diff --git a/target/riscv/cpu_cfg.h b/target/riscv/cpu_cfg.h
+index 9681d4231f..9d3603caf1 100644
+--- a/target/riscv/cpu_cfg.h
++++ b/target/riscv/cpu_cfg.h
+@@ -134,6 +134,8 @@ struct RISCVCPUConfig {
+     bool ext_xtheadsync;
+     bool ext_XVentanaCondOps;
+     bool ext_XAndesV5Ops;
++    bool ext_XAndesAce;
++    bool ext_XAndesAceMulti;
+     bool ext_XAndesCodenseOps;
+ 
+     uint32_t pmu_mask;
+@@ -141,6 +143,7 @@ struct RISCVCPUConfig {
+     char *user_spec;
+     char *bext_spec;
+     char *vext_spec;
++    char *XAndesAceLib;
+     uint16_t vlen;
+     uint16_t elen;
+     uint16_t cbom_blocksize;
+@@ -195,6 +198,7 @@ MATERIALISE_EXT_PREDICATE(xtheadmempair)
+ MATERIALISE_EXT_PREDICATE(xtheadsync)
+ MATERIALISE_EXT_PREDICATE(XVentanaCondOps)
+ MATERIALISE_EXT_PREDICATE(XAndesV5Ops);
++MATERIALISE_EXT_PREDICATE(XAndesAce);
+ MATERIALISE_EXT_PREDICATE(XAndesCodenseOps);
+ 
+ #endif
+diff --git a/target/riscv/insn_trans/trans_xandesace.c.inc b/target/riscv/insn_trans/trans_xandesace.c.inc
+new file mode 100644
+index 0000000000..08896097bd
+--- /dev/null
++++ b/target/riscv/insn_trans/trans_xandesace.c.inc
+@@ -0,0 +1,20 @@
++/*** ACE instructions ***/
++#include "andes_ace_helper.c.inc"
++static bool trans_andes_ace(DisasContext *ctx, arg_andes_ace *a)
++{
++    CPUState *cpu = ctx->cs;
++    CPURISCVState *env = cpu->env_ptr;
++    if (!env_archcpu(env)->cfg.ext_XAndesAce) {
++        qemu_printf("XAndesAce not set\n");
++        riscv_raise_exception(env, RISCV_EXCP_ILLEGAL_INST, GETPC());
++    }
++    /* We should check ACE whether is enabled by checking 
++     * mmisc_ctl.ACES or mstatus.XS 
++     */
++    TCGv opc = tcg_constant_tl(ctx->opcode);
++    gen_helper_andes_v5_ace(opc, cpu_env, opc);
++    gen_update_pc(ctx, ctx->cur_insn_len);
++    lookup_and_goto_ptr(ctx);
++
++    return true;
++}
+diff --git a/target/riscv/insn_trans/trans_xandesv5ops.c.inc b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+index 0f7e2561a5..caf21ebbad 100644
+--- a/target/riscv/insn_trans/trans_xandesv5ops.c.inc
++++ b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+@@ -960,4 +960,3 @@ GEN_OPIVX_QUAD_WIDEN_TRANS(vqmaccu_vx)
+ GEN_OPIVX_QUAD_WIDEN_TRANS(vqmacc_vx)
+ GEN_OPIVX_QUAD_WIDEN_TRANS(vqmaccsu_vx)
+ GEN_OPIVX_QUAD_WIDEN_TRANS(vqmaccus_vx)
+-
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index 31023bebdd..db15c7ebd6 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -5,6 +5,7 @@ gen = [
+   decodetree.process('xthead.decode', extra_args: '--static-decode=decode_xthead'),
+   decodetree.process('XVentanaCondOps.decode', extra_args: '--static-decode=decode_XVentanaCodeOps'),
+   decodetree.process('XAndesV5Ops.decode', extra_args: ['--static-decode=decode_XAndesV5Ops']),
++  decodetree.process('XAndesAce.decode', extra_args: ['--static-decode=decode_XAndesAce']),
+ ]
+ genv1 = [
+   decodetree.process('XAndesCodenseOps.decode',extra_args: ['--static-decode=decode_XAndesCodenseOps',
+diff --git a/target/riscv/tcg/tcg-cpu.c b/target/riscv/tcg/tcg-cpu.c
+index 8a35683a34..611fbfd37f 100644
+--- a/target/riscv/tcg/tcg-cpu.c
++++ b/target/riscv/tcg/tcg-cpu.c
+@@ -620,6 +620,28 @@ void riscv_cpu_validate_set_extensions(RISCVCPU *cpu, Error **errp)
+     riscv_cpu_disable_priv_spec_isa_exts(cpu);
+ }
+ 
++/* Andes ACE */
++#include "andes_ace_helper.h"
++static void riscv_cpu_validate_andes_ace(RISCVCPU *cpu, Error **errp)
++{
++    CPURISCVState *env = &cpu->env;
++
++    if (cpu->cfg.ext_XAndesAce && cpu->cfg.XAndesAceLib == NULL) {
++        error_setg(errp, "Invalid configuration: AndesACE requires XAndesAceLib setting");
++        return;
++    }
++
++    if (cpu->cfg.ext_XAndesAce) { /* cfg.ext_XAndesAce is true, cfg.XAndesAceLib cannot be NULL since above check already */
++        if (load_qemu_ace_wrapper(cpu->cfg.XAndesAceLib) != 0) {
++            error_setg(errp, "xandesacelib '%s' cannot be loaded", cpu->cfg.XAndesAceLib);
++            return;
++        } else {
++            qemu_ace_agent_register(env);
++        }
++    }
++}
++
++
+ void riscv_tcg_cpu_finalize_features(RISCVCPU *cpu, Error **errp)
+ {
+     CPURISCVState *env = &cpu->env;
+@@ -651,6 +673,8 @@ void riscv_tcg_cpu_finalize_features(RISCVCPU *cpu, Error **errp)
+         error_propagate(errp, local_err);
+         return;
+     }
++
++    riscv_cpu_validate_andes_ace(cpu, &local_err);
+ }
+ 
+ bool riscv_cpu_tcg_compatible(RISCVCPU *cpu)
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index 42e56ee4bb..0c77521ffb 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -1116,8 +1116,10 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+ #else
+ #include "decode-XAndesCodenseV2Ops.c.inc"
+ #endif
++#include "decode-XAndesAce.c.inc"
+ #include "insn_trans/trans_xandesv5ops.c.inc"
+ #include "insn_trans/trans_xandescodenseops.c.inc"
++#include "insn_trans/trans_xandesace.c.inc"
+ 
+ /* The specification allows for longer insns, but not supported by qemu. */
+ #define MAX_INSN_LEN  4
+@@ -1141,6 +1143,7 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
+         { has_xthead_p, decode_xthead },
+         { has_XVentanaCondOps_p,  decode_XVentanaCodeOps },
+         { has_XAndesV5Ops_p,  decode_XAndesV5Ops },
++        { has_XAndesAce_p,  decode_XAndesAce },
+     };
+ 
+     static const struct {
+-- 
+2.34.1
+

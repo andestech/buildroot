@@ -1,0 +1,445 @@
+From 0e970fa26762bef43a1669c088c060d49beda439 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 15 Dec 2023 17:16:04 +0800
+Subject: [PATCH 149/241] target/riscv: Added readconfig from file for setting
+ relative configuration to CSR
+
+Added readconfig from file for setting relative configuration to CSR
+Directly uses QEMU original -readconfig option (Only support system emulation mode)
+
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/91
+Reviewed-by: Yuming Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-by: Ethan Zhan-Yang Chen <ethan84@andestech.com>
+Reviewed-by: Alvin Che-Chia Chang <alvinga@andestech.com>
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+Co-authored-by: Foxes Hung <foxes687@andestech.com>
+Co-committed-by: Foxes Hung <foxes687@andestech.com>
+---
+ include/qemu/andes-config.h |  38 ++++++++++++
+ include/sysemu/sysemu.h     |   1 +
+ qemu-andes.conf             |  62 ++++++++++++++++++++
+ system/andes-config.c       |  85 +++++++++++++++++++++++++++
+ system/meson.build          |   1 +
+ system/vl.c                 |   1 +
+ target/riscv/cpu.c          |   4 ++
+ target/riscv/csr_andes.c    | 113 ++++++++++++++++++++++++++++++++++++
+ target/riscv/csr_andes.h    |   9 ++-
+ 9 files changed, 312 insertions(+), 2 deletions(-)
+ create mode 100644 include/qemu/andes-config.h
+ create mode 100644 qemu-andes.conf
+ create mode 100644 system/andes-config.c
+
+diff --git a/include/qemu/andes-config.h b/include/qemu/andes-config.h
+new file mode 100644
+index 0000000000..ab7aa216a2
+--- /dev/null
++++ b/include/qemu/andes-config.h
+@@ -0,0 +1,38 @@
++/*
++ * Andes config process header file
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++#ifndef QEMU_ANDES_CONFIG_H
++#define QEMU_ANDES_CONFIG_H
++
++#include "qemu/osdep.h"
++#include "qemu/option.h"
++#include "qemu/config-file.h"
++#include "qemu/error-report.h"
++#include "chardev/char.h"
++#include "qemu/option_int.h"
++#include "qapi/qmp/qerror.h"
++#include "qapi/error.h"
++#include "qemu/cutils.h"
++
++typedef struct AndesConfig {
++    const char *id;
++    const char *name;
++    char **value;
++} AndesConfig;
++
++int andes_config_query(const char *id, const char *name, char **value);
++int qemu_andes_config_options(const char *optarg);
++bool andes_config_bool(const char *id, const char *name, uint64_t *val);
++bool andes_config_number(const char *id, const char *name, uint64_t *val);
++
++typedef enum AndesConfigType {
++    CONFIG_BOOL = 0,
++    CONFIG_NUMBER
++} AndesConfigType;
++
++typedef bool andes_config_func(const char *, const char *, uint64_t *);
++
++#define ANDES_CONFIG_ID_CPU "cpu"
++#endif
+diff --git a/include/sysemu/sysemu.h b/include/sysemu/sysemu.h
+index 73a37949c2..ce6bab44fc 100644
+--- a/include/sysemu/sysemu.h
++++ b/include/sysemu/sysemu.h
+@@ -114,5 +114,6 @@ extern QemuOptsList qemu_nic_opts;
+ extern QemuOptsList qemu_net_opts;
+ extern QemuOptsList qemu_global_opts;
+ extern QemuOptsList qemu_semihosting_config_opts;
++extern QemuOptsList qemu_andes_config_opts;
+ 
+ #endif
+diff --git a/qemu-andes.conf b/qemu-andes.conf
+new file mode 100644
+index 0000000000..b7920a7e78
+--- /dev/null
++++ b/qemu-andes.conf
+@@ -0,0 +1,62 @@
++# Andes config example
++
++#test cpu option setting, will the same with -cpu andes-nx45v,xandesaceextlibpath=lib
++[global]
++driver = "andes-nx45v-riscv-cpu"
++property = "xandesaceextlibpath"
++value = "lib"
++
++#test set ilm size setting
++[global]
++driver = "riscv.andes.ae350.soc"
++property = "ilm_size"
++value = "0x10000"
++
++#current andes cpus config setting, we use "cpu" as ID now
++[andes-config "cpu"]
++isa-codense = "on"
++powerbrake = "on"
++stack-protection = "on"
++isa-ace = "off"
++vectored-plic = "on"
++slave-port = "on"
++pfm-nds = "on"
++cctl = "on"
++isa-efhw = "on"
++cctl-version = "1"
++ppi = "on"
++isa-dsp = "on"
++msc-ext = "on"
++isa-bf16cvt = "on"
++isa-zfh = "on"
++isa-vl4 = "on"
++crash-save = "on"
++veccfg = "on"
++isa-pp16 = "on"
++isa-vsih = "on"
++mmsc-cfg-ccachemp-cfg = "on"
++mmsc-cfg-ccache = "on"
++codense-ver = "1"
++isa-vdot = "on"
++isa-vpfh = "on"
++stack-protection-only = "on"
++mmsc-cfg-rvarch = "on"
++alt-fp-fmt = "on"
++msc-ext3 = "on"
++mvec-cfg-misew = "1"
++mvec-cfg-mfsew = "2"
++
++#test cpu id with hart number 0
++[andes-config "cpu0"]
++enable = "off"
++target = "aa"
++
++#test cpu id with hart number 1
++[andes-config "cpu1"]
++enable = "on"
++target = "ab"
++
++#test empty id
++[andes-config]
++enable = "off"
++target = "abc","v","dd"
+diff --git a/system/andes-config.c b/system/andes-config.c
+new file mode 100644
+index 0000000000..a864af948e
+--- /dev/null
++++ b/system/andes-config.c
+@@ -0,0 +1,85 @@
++/*
++ * Andes config process file
++ *
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/andes-config.h"
++
++QemuOptsList qemu_andes_config_opts = {
++    .name = "andes-config",
++    .head = QTAILQ_HEAD_INITIALIZER(qemu_andes_config_opts.head),
++    .desc = {
++        {  }
++    },
++};
++
++static int andes_config_query_func(void *opaque, QemuOpts *opts, Error **errp)
++{
++    QemuOpt *opt;
++    AndesConfig *user_opts = (AndesConfig *)opaque;
++    QTAILQ_FOREACH(opt, &opts->head, next) {
++        if (((!opts->id && !user_opts->id) || (opts->id && user_opts->id &&
++            !strcmp(user_opts->id, opts->id))) &&
++            !strcmp(user_opts->name, opt->name)) {
++            *user_opts->value = opt->str;
++            return 1;
++        }
++    }
++    return 0;
++
++}
++
++int andes_config_query(const char *id, const char *name, char **value)
++{
++    AndesConfig opts;
++    opts.id = id;
++    opts.name = name;
++    opts.value = value;
++    return qemu_opts_foreach(&qemu_andes_config_opts,
++        andes_config_query_func, &opts, NULL);
++}
++
++bool andes_config_bool(const char *id, const char *name, uint64_t *val)
++{
++    char *value;
++    bool bval;
++    /* For CSR mask special config, name is NULL will always set bit mask */
++    if (!name) {
++        *val = true;
++        return true;
++    }
++    if (andes_config_query(id, name, &value)) {
++        if (qapi_bool_parse(name, value, &bval, NULL)) {
++            *val = bval;
++            return true;
++        }
++    }
++    return false;
++}
++
++bool andes_config_number(const char *id, const char *name, uint64_t *val)
++{
++    char *value;
++    int ret;
++
++    /* For CSR mask special config, number type name cannot be set to NULL */
++    if (!name) {
++        return false;
++    }
++    if (andes_config_query(id, name, &value)) {
++        ret = qemu_strtou64(value, NULL, 0, val);
++        if (ret == -ERANGE) {
++            error_setg(&error_warn,
++                "Value '%s' is too large for parameter '%s'", value, name);
++            return false;
++        }
++        if (ret) {
++            error_setg(&error_warn,
++                QERR_INVALID_PARAMETER_VALUE, name, "a number");
++            return false;
++        }
++        return true;
++    }
++    return false;
++}
+diff --git a/system/meson.build b/system/meson.build
+index 3a64dd89de..c9f904554a 100644
+--- a/system/meson.build
++++ b/system/meson.build
+@@ -25,6 +25,7 @@ system_ss.add(files(
+   'runstate.c',
+   'tpm-hmp-cmds.c',
+   'vl.c',
++  'andes-config.c',
+ ), sdl, libpmem, libdaxctl)
+ 
+ if have_tpm
+diff --git a/system/vl.c b/system/vl.c
+index 2bcd9efb9a..ad55b906b9 100644
+--- a/system/vl.c
++++ b/system/vl.c
+@@ -2768,6 +2768,7 @@ void qemu_init(int argc, char **argv)
+     qemu_add_opts(&qemu_semihosting_config_opts);
+     qemu_add_opts(&qemu_fw_cfg_opts);
+     qemu_add_opts(&qemu_action_opts);
++    qemu_add_opts(&qemu_andes_config_opts);
+     qemu_add_run_with_opts();
+     module_call_init(MODULE_INIT_OPTS);
+ 
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 360fc08cbf..1e1a7dc15c 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1381,6 +1381,10 @@ static void andes_csr_reset_common(CPURISCVState *env)
+     if (env->andes_spec_csr_init != NULL) {
+         env->andes_spec_csr_init(&env->andes_csr);
+     }
++#ifndef CONFIG_USER_ONLY
++    /* Read CSR from config file */
++    andes_csr_configs(env);
++#endif
+ }
+ 
+ static void andes_csr_sync_cpu_ext(CPURISCVState *env, RISCVCPU *cpu)
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 9a94c810a6..913189528a 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -13,6 +13,7 @@
+ #include "andes_cpu_bits.h"
+ #include "csr_andes.h"
+ #include "exec/address-spaces.h"
++#include "qemu/andes-config.h"
+ 
+ static RISCVException any(CPURISCVState *env,
+                           int csrno)
+@@ -730,6 +731,118 @@ static RISCVException write_lmb(CPURISCVState *env,
+ }
+ #endif
+ 
++#ifndef CONFIG_USER_ONLY
++typedef struct AndesCsrConfigInfo {
++    AndesConfigType type;
++    target_ulong mask;
++    const char *key;
++} AndesCsrConfigInfo;
++
++AndesCsrConfigInfo csr_mmsc_cfg_map[] = {
++    {CONFIG_BOOL,   MASK_MMSC_CFG_ECD, "isa-codense"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_PFT, "powerbrake"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_HSP, "stack-protection"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_ACE, "isa-ace"}, /* spike uses aces? */
++    {CONFIG_BOOL,   MASK_MMSC_CFG_VPLIC, "vectored-plic"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_EV5PE, NULL}, /* always set */
++    {CONFIG_BOOL,   MASK_MMSC_CFG_LMSLVP, "slave-port"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_PMNDS, "pfm-nds"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_CCTLCSR, "cctl"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_EFHW, "isa-efhw"},
++    {CONFIG_NUMBER, MASK_MMSC_CFG_VCCTL, "cctl-version"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_PPI, "ppi"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_EDSP, "isa-dsp"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_PPMA, NULL},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_MSC_EXT, "msc-ext"},
++#ifdef TARGET_RISCV64
++    /* bits:[32] */
++    {CONFIG_BOOL,   MASK_MMSC_CFG_BF16CVT, "isa-bf16cvt"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_ZFH, "isa-zfh"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_VL4, "isa-vl4"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_CRASHSAVE, "crash-save"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_VECCFG, "veccfg"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_PP16, "isa-pp16"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_VSIH, "isa-vsih"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_CCACHEMP_CFG, "mmsc-cfg-ccachemp-cfg"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_CCACHE, "mmsc-cfg-ccache"},
++    {CONFIG_NUMBER, MASK_MMSC_CFG_ECDV, "codense-ver"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_VDOT, "isa-vdot"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_VPFH, "isa-vpfh"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_HSPO, "stack-protection-only"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_RVARCH, "mmsc-cfg-rvarch"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_ALT_FP_FMT, "alt-fp-fmt"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG_MSC_EXT3, "msc-ext3"},
++#endif
++};
++AndesCsrConfigInfo csr_mmsc_cfg2_map[]  = {
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_BF16CVT, "isa-bf16cvt"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_ZFH, "isa-zfh"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_VL4, "isa-vl4"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_CRASHSAVE, "crash-save"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_VECCFG, "veccfg"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_PP16, "isa-pp16"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_VSIH, "isa-vsih"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_CCACHEMP_CFG, "mmsc-cfg-ccachemp-cfg"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_CCACHE, "mmsc-cfg-ccache"},
++    {CONFIG_NUMBER, MASK_MMSC_CFG2_ECDV, "codense-ver"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_VDOT, "isa-vdot"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_VPFH, "isa-vpfh"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_HSPO, "stack-protection-only"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_RVARCH, "mmsc-cfg-rvarch"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_ALT_FP_FMT, "alt-fp-fmt"},
++    {CONFIG_BOOL,   MASK_MMSC_CFG2_MSC_EXT3, "msc-ext3"},
++};
++
++AndesCsrConfigInfo csr_mvec_cfg_map[]  = {
++    {CONFIG_NUMBER, MASK_MVEC_CFG_MISEW, "mvec-cfg-misew"},
++    {CONFIG_NUMBER, MASK_MVEC_CFG_MFSEW, "mvec-cfg-mfsew"},
++};
++
++static andes_config_func *const andes_config_fns[2] = {
++    andes_config_bool,
++    andes_config_number
++};
++
++
++static void andes_csr_from_config(AndesCsrConfigInfo *map, uint32_t size,
++    target_ulong *csr_val)
++{
++    target_ulong init_val = *csr_val;
++    int i;
++    for (i = 0; i < size; i++) {
++        uint64_t val;
++        if (andes_config_fns[map[i].type] != NULL
++            && andes_config_fns[map[i].type](ANDES_CONFIG_ID_CPU,
++            map[i].key, &val)) {
++            init_val = set_field(init_val, map[i].mask, val);
++        }
++    }
++    *csr_val = init_val;
++}
++
++void andes_csr_configs(CPURISCVState *env)
++{
++    /* Update mmsc_cfg */
++    target_ulong mmsc_init_val = env->andes_csr.csrno[CSR_MMSC_CFG];
++    andes_csr_from_config(csr_mmsc_cfg_map,
++        sizeof(csr_mmsc_cfg_map) / sizeof(AndesCsrConfigInfo), &mmsc_init_val);
++    env->andes_csr.csrno[CSR_MMSC_CFG] = mmsc_init_val;
++    /* Update mmsc_cfg2 for RV32 */
++    if (riscv_cpu_mxl(env) == MXL_RV32) {
++        target_ulong mmsc2_init_val = env->andes_csr.csrno[CSR_MMSC_CFG2];
++        andes_csr_from_config(csr_mmsc_cfg2_map,
++            sizeof(csr_mmsc_cfg2_map) / sizeof(AndesCsrConfigInfo),
++            &mmsc2_init_val);
++        env->andes_csr.csrno[CSR_MMSC_CFG2] = mmsc2_init_val;
++    }
++    /* Update mvev_cfg */
++    target_ulong mvec_init_val = env->andes_csr.csrno[CSR_MVEC_CFG];
++    andes_csr_from_config(csr_mvec_cfg_map,
++        sizeof(csr_mvec_cfg_map) / sizeof(AndesCsrConfigInfo), &mvec_init_val);
++    env->andes_csr.csrno[CSR_MVEC_CFG] = mvec_init_val;
++}
++#endif
++
+ void andes_csr_init(AndesCsr *andes_csr)
+ {
+     int i;
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index c57b396e77..9a0b5a0e73 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -231,8 +231,12 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define MASK_MHSP_CTL_M                     (0x1 << 5)
+ 
+ /* umisc_ctl */
+-#define MASK_UMISC_CTL_FP_MODE              (0x1)
+-#define MASK_UMISC_CTL_CMR_CTL              (0x1 << 2)
++#define MASK_UMISC_CTL_FP_MODE              (0x3)
++#define MASK_UMISC_CTL_CMR_CTL              (0x3 << 2)
++
++/* mvec_cfg */
++#define MASK_MVEC_CFG_MISEW                 (0x3 << 14)
++#define MASK_MVEC_CFG_MFSEW                 (0x3 << 16)
+ 
+ /* write masks */
+ #define WRITE_MASK_CSR_MECC_CODE_32         0x7F
+@@ -257,6 +261,7 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define WRITE_MASK_CSR_SMISC_CTL            0x30
+ #define WRITE_MASK_CSR_MCACHE_CTL           0x7FFFFF
+ 
++void andes_csr_configs(CPURISCVState *env);
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+ void andes_cpu_do_interrupt_post(CPUState *cpu);
+-- 
+2.34.1
+

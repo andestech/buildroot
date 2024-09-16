@@ -1,0 +1,67 @@
+From aa7bd2bd12cc73f58ccaae94a6a89f8c6abd2963 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 8 Dec 2023 13:22:55 +0800
+Subject: [PATCH 133/241] target/riscv: Fixed RV32 will check RV64 CSR
+ mmsc_cfg.X after they had checked CSR mmsc_cfg2 issue
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/insn_trans/trans_xandesv5ops.c.inc | 15 ++++++++++-----
+ 1 file changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/target/riscv/insn_trans/trans_xandesv5ops.c.inc b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+index 88de6d3c7a..549ad472cb 100644
+--- a/target/riscv/insn_trans/trans_xandesv5ops.c.inc
++++ b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+@@ -21,8 +21,9 @@
+ #define REQUIRE_BF16CVT do { \
+     if (cpu_env(ctx->cs)->misa_mxl == MXL_RV32) { \
+         REQUIRE_CFG(CSR_MMSC_CFG2, MASK_MMSC_CFG2_BF16CVT) \
++    } else { \
++        REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_BF16CVT) \
+     } \
+-    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_BF16CVT) \
+ } while (0)
+ 
+ #define MASK_MVEC_CFG_MFSEW (0x3 << 16)
+@@ -32,29 +33,33 @@
+ #define REQUIRE_VPFH do { \
+     if (cpu_env(ctx->cs)->misa_mxl == MXL_RV32) { \
+         REQUIRE_CFG(CSR_MMSC_CFG2, MASK_MMSC_CFG2_VPFH) \
++    } else { \
++        REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VPFH) \
+     } \
+-    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VPFH) \
+ } while (0)
+ 
+ #define REQUIRE_VL4 do { \
+     if (cpu_env(ctx->cs)->misa_mxl == MXL_RV32) { \
+         REQUIRE_CFG(CSR_MMSC_CFG2, MASK_MMSC_CFG2_VL4) \
++    } else { \
++        REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VL4) \
+     } \
+-    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VL4) \
+ } while (0)
+ 
+ #define REQUIRE_VDOT do { \
+     if (cpu_env(ctx->cs)->misa_mxl == MXL_RV32) { \
+         REQUIRE_CFG(CSR_MMSC_CFG2, MASK_MMSC_CFG2_VDOT) \
++    } else { \
++        REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VDOT) \
+     } \
+-    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VDOT) \
+ } while (0)
+ 
+ #define REQUIRE_VSIH do { \
+     if (cpu_env(ctx->cs)->misa_mxl == MXL_RV32) { \
+         REQUIRE_CFG(CSR_MMSC_CFG2, MASK_MMSC_CFG2_VSIH) \
++    } else { \
++        REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VSIH) \
+     } \
+-    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VSIH) \
+ } while (0)
+ 
+ enum andes_v5_inst_id {
+-- 
+2.34.1
+

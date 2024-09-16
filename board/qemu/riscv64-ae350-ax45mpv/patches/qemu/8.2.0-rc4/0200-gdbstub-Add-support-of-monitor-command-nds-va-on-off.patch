@@ -1,0 +1,70 @@
+From 854755746e0cdfed90e37ae5608cf1cffc98a16e Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Thu, 1 Feb 2024 11:15:27 +0800
+Subject: [PATCH 200/241] gdbstub: Add support of monitor command "nds va
+ on/off". (#118) (#119)
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/119
+Reviewed-by: Dylan Dai-Rong Jhong <dylan@andestech.com>
+Reviewed-by: Foxes Cheng-Hung Hung <foxes687@andestech.com>
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ gdbstub/andes_ace_gdb.c.inc | 14 ++++++++++++++
+ gdbstub/system.c            |  2 +-
+ 2 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/gdbstub/andes_ace_gdb.c.inc b/gdbstub/andes_ace_gdb.c.inc
+index 68d9977bba..288c904ea2 100644
+--- a/gdbstub/andes_ace_gdb.c.inc
++++ b/gdbstub/andes_ace_gdb.c.inc
+@@ -113,6 +113,7 @@ int32_t gdb_ace_get_file_name_for_gdb(unsigned char *platform, char *soname)
+ #define NDS_QUERY_ENDIAN_CMD    "nds query endian"
+ #define NDS_QUERY_CPUID_CMD     "nds query cpuid"
+ #define NDS_ACE_CMD             "nds ace "
++#define NDS_VA_CMD              "nds va "
+ #define NDS_OTHER_CMD           "nds "
+ 
+ int gdb_handle_query_rcmd_nds_query(GArray *params, void *user_ctx)
+@@ -161,11 +162,24 @@ int gdb_handle_query_rcmd_nds_query(GArray *params, void *user_ctx)
+         gdb_put_strbuf();
+         return 0;
+     }
++    if (!strncmp((const char *)gdbserver_state.mem_buf->data,
++        NDS_VA_CMD, strlen(NDS_VA_CMD))) {
++        /*
++         * This command is implemented as a hmp command so we will let
++         * qemu monitor handle the command.
++         */
++        return -1;
++    }
+     if (!strncmp((const char *)gdbserver_state.mem_buf->data,
+         NDS_OTHER_CMD, strlen(NDS_OTHER_CMD))) {
+         gdb_put_packet("OK");
+         return 0;
+     }
++    /*
++     * Returning -1 will let the caller(gdb_handle_query_rcmd) knows
++     * the command was not handled here and will write this command
++     * to the chardev of qemu monitor.
++     */
+     return -1;
+ }
+ #endif
+diff --git a/gdbstub/system.c b/gdbstub/system.c
+index 3d4a3809c8..d02738ff3a 100644
+--- a/gdbstub/system.c
++++ b/gdbstub/system.c
+@@ -535,7 +535,7 @@ void gdb_handle_query_rcmd(GArray *params, void *user_ctx)
+     len = len / 2;
+     gdb_hextomem(gdbserver_state.mem_buf, get_param(params, 0)->data, len);
+     g_byte_array_append(gdbserver_state.mem_buf, &zero, 1);
+-    /* process 'nds query' commands */
++    /* process 'nds xxx' commands */
+     if (gdb_handle_query_rcmd_nds_query(params, user_ctx) == 0) {
+         return;
+     }
+-- 
+2.34.1
+

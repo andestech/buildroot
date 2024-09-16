@@ -1,0 +1,97 @@
+From 563581cb604eb7f9c895e46bac4ab4dced408aa7 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 15 Apr 2024 13:20:44 +0800
+Subject: [PATCH 221/241] target/riscv: raise an exception when CSRRS/CSRRC
+ writes a read-only CSR
+
+Both CSRRS and CSRRC always read the addressed CSR and cause any read side
+effects regardless of rs1 and rd fields. Note that if rs1 specifies a register
+holding a zero value other than x0, the instruction will still attempt to write
+the unmodified value back to the CSR and will cause any attendant side effects.
+
+So if CSRRS or CSRRC tries to write a read-only CSR with rs1 which specifies
+a register holding a zero value, an illegal instruction exception should be
+raised.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.h       |  2 ++
+ target/riscv/csr.c       | 17 ++++++++++++++---
+ target/riscv/op_helper.c |  2 +-
+ 3 files changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index 56019f36f7..012629d944 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -721,6 +721,8 @@ void cpu_get_tb_cpu_state(CPURISCVState *env, vaddr *pc,
+ 
+ void riscv_cpu_update_mask(CPURISCVState *env);
+ 
++RISCVException riscv_csrr(CPURISCVState *env, int csrno,
++                          target_ulong *ret_value);
+ RISCVException riscv_csrrw(CPURISCVState *env, int csrno,
+                            target_ulong *ret_value,
+                            target_ulong new_value, target_ulong write_mask);
+diff --git a/target/riscv/csr.c b/target/riscv/csr.c
+index 667c88c994..7aab267916 100644
+--- a/target/riscv/csr.c
++++ b/target/riscv/csr.c
+@@ -4408,7 +4408,7 @@ static RISCVException rmw_seed(CPURISCVState *env, int csrno,
+ 
+ static inline RISCVException riscv_csrrw_check(CPURISCVState *env,
+                                                int csrno,
+-                                               bool write_mask)
++                                               bool write)
+ {
+     /* check privileges and return RISCV_EXCP_ILLEGAL_INST if check fails */
+     bool read_only = get_field(csrno, 0xC00) == 3;
+@@ -4430,7 +4430,7 @@ static inline RISCVException riscv_csrrw_check(CPURISCVState *env,
+     }
+ 
+     /* read / write check */
+-    if (write_mask && read_only) {
++    if (write && read_only) {
+         return RISCV_EXCP_ILLEGAL_INST;
+     }
+ 
+@@ -4517,11 +4517,22 @@ static RISCVException riscv_csrrw_do64(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++RISCVException riscv_csrr(CPURISCVState *env, int csrno,
++                           target_ulong *ret_value)
++{
++    RISCVException ret = riscv_csrrw_check(env, csrno, false);
++    if (ret != RISCV_EXCP_NONE) {
++        return ret;
++    }
++
++    return riscv_csrrw_do64(env, csrno, ret_value, 0, 0);
++}
++
+ RISCVException riscv_csrrw(CPURISCVState *env, int csrno,
+                            target_ulong *ret_value,
+                            target_ulong new_value, target_ulong write_mask)
+ {
+-    RISCVException ret = riscv_csrrw_check(env, csrno, write_mask);
++    RISCVException ret = riscv_csrrw_check(env, csrno, true);
+     if (ret != RISCV_EXCP_NONE) {
+         return ret;
+     }
+diff --git a/target/riscv/op_helper.c b/target/riscv/op_helper.c
+index 37f9f64ffc..9c1b9a3560 100644
+--- a/target/riscv/op_helper.c
++++ b/target/riscv/op_helper.c
+@@ -51,7 +51,7 @@ target_ulong helper_csrr(CPURISCVState *env, int csr)
+     }
+ 
+     target_ulong val = 0;
+-    RISCVException ret = riscv_csrrw(env, csr, &val, 0, 0);
++    RISCVException ret = riscv_csrr(env, csr, &val);
+ 
+     if (ret != RISCV_EXCP_NONE) {
+         riscv_raise_exception(env, ret, GETPC());
+-- 
+2.34.1
+

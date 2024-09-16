@@ -1,0 +1,124 @@
+From cce21a5a313832df60c713685f7133585ec3c818 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 21 Feb 2024 16:10:39 +0800
+Subject: [PATCH 207/241] target/riscv: Check mslideleg to decide the
+ read/write behaviors of slie/slip. (#122)
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/122
+Reviewed-by: Alvin Che-Chia Chang <alvinga@andestech.com>
+Reviewed-by: Foxes Cheng-Hung Hung <foxes687@andestech.com>
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c | 54 ++++++++++++++++++++++++++++++++++------
+ target/riscv/csr_andes.h |  7 ++++++
+ 2 files changed, 54 insertions(+), 7 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 25ef71e2d1..91c9e892cf 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -671,17 +671,56 @@ static RISCVException write_shpmevent(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
+-static RISCVException write_slie(CPURISCVState *env, int csrno,
+-                                 target_ulong val)
++static RISCVException write_mslideleg(CPURISCVState *env, int csrno,
++                                      target_ulong val)
+ {
+     env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_SLIE;
+     return RISCV_EXCP_NONE;
+ }
+ 
+-static RISCVException write_slip(CPURISCVState *env, int csrno,
++static RISCVException read_slix(CPURISCVState *env, int csrno,
++                                target_ulong *val)
++{
++#ifndef CONFIG_USER_ONLY
++    target_ulong deleg = env->andes_csr.csrno[CSR_MSLIDELEG];
++    target_ulong slix = env->andes_csr.csrno[csrno];
++
++    if (env->priv == PRV_M) {
++        *val = slix;
++    } else {
++        *val = deleg & slix;
++    }
++#else
++    *val = env->andes_csr.csrno[csrno];
++#endif
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_slix(CPURISCVState *env, int csrno,
+                                  target_ulong val)
+ {
+-    env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_SLIP;
++    target_ulong mask;
++
++    if (csrno == CSR_SLIP) {
++        mask = WRITE_MASK_CSR_SLIP;
++    } else {
++        mask = WRITE_MASK_CSR_SLIE;
++    }
++
++#ifndef CONFIG_USER_ONLY
++    target_ulong deleg = env->andes_csr.csrno[CSR_MSLIDELEG];
++    target_ulong slix = env->andes_csr.csrno[csrno];
++
++    if (env->priv == PRV_M) {
++        env->andes_csr.csrno[csrno] = val & mask;
++    } else {
++        deleg &= mask;
++        slix = (slix & ~deleg) | (val & deleg);
++        env->andes_csr.csrno[csrno] = slix;
++    }
++#else
++    env->andes_csr.csrno[csrno] = val & mask;
++#endif
+     return RISCV_EXCP_NONE;
+ }
+ 
+@@ -1047,7 +1086,8 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+                                                        write_mxstatus         },
+     [CSR_MDCAUSE]      = { "mdcause",             any, read_csr,
+                                                        write_smdcause         },
+-    [CSR_MSLIDELEG]    = { "mslideleg",           any, read_csr, write_csr    },
++    [CSR_MSLIDELEG]    = { "mslideleg",           any, read_csr,
++                                                       write_mslideleg        },
+     [CSR_MSAVESTATUS]  = { "msavestatus",         any, read_csr, write_csr    },
+     [CSR_MSAVEEPC1]    = { "msaveepc1",           any, read_csr, write_csr    },
+     [CSR_MSAVECAUSE1]  = { "msavecause1",         any, read_csr, write_csr    },
+@@ -1108,8 +1148,8 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+ 
+     /* ================ AndeStar V5 supervisor mode CSRs ================ */
+     /* Supervisor trap registers */
+-    [CSR_SLIE]    = { "slie",                     smode, read_csr, write_slie},
+-    [CSR_SLIP]    = { "slip",                     smode, read_csr, write_slip},
++    [CSR_SLIE]    = { "slie",                     smode, read_slix, write_slix},
++    [CSR_SLIP]    = { "slip",                     smode, read_slix, write_slix},
+     [CSR_SDCAUSE] = { "sdcause",                  smode, read_csr,
+                                                          write_smdcause       },
+ 
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 3eee5fc0d5..8b2d402392 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -240,6 +240,13 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define MASK_MVEC_CFG_MISEW                 (0x3 << 14)
+ #define MASK_MVEC_CFG_MFSEW                 (0x3 << 16)
+ 
++/* mslideleg */
++#define MASK_MSLIDELEG_IMECCI               (0x1 << 16)
++#define MASK_MSLIDELEG_BWEI                 (0x1 << 17)
++#define MASK_MSLIDELEG_PMOVI                (0x1 << 18)
++#define MASK_MSLIDELEG_IMECCDMR             (0x1 << 19)
++#define MASK_MSLIDELEG_ACEERR               (0x1 << 24)
++
+ /* counters */
+ #define MASK_COUNTER_CY                     (0x1)
+ #define MASK_COUNTER_TM                     (0x1 << 1)
+-- 
+2.34.1
+

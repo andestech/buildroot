@@ -1,0 +1,135 @@
+From 91bb5dd32e4271bf1c1d9137dc1cec18518a0af9 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 19 Jan 2024 15:25:19 +0800
+Subject: [PATCH 180/241] hw: Move andes_atcsmu codes from hw/riscv to hw/misc
+ to meet QEMU directorty structure
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ hw/misc/Kconfig                           | 3 +++
+ hw/{riscv => misc}/andes_atcsmu.c         | 2 +-
+ hw/misc/meson.build                       | 1 +
+ hw/riscv/Kconfig                          | 3 ---
+ hw/riscv/andes_ae350.c                    | 2 +-
+ hw/riscv/meson.build                      | 1 -
+ hw/watchdog/atcwdt200.c                   | 2 +-
+ include/hw/{riscv => misc}/andes_atcsmu.h | 0
+ include/hw/riscv/andes_ae350.h            | 2 +-
+ 9 files changed, 8 insertions(+), 8 deletions(-)
+ rename hw/{riscv => misc}/andes_atcsmu.c (99%)
+ rename include/hw/{riscv => misc}/andes_atcsmu.h (100%)
+
+diff --git a/hw/misc/Kconfig b/hw/misc/Kconfig
+index cc8a8c1418..28b5c5a93b 100644
+--- a/hw/misc/Kconfig
++++ b/hw/misc/Kconfig
+@@ -20,6 +20,9 @@ config ISA_TESTDEV
+     default y if TEST_DEVICES
+     depends on ISA_BUS
+ 
++config ATCSMU
++    bool
++
+ config PCI_TESTDEV
+     bool
+     default y if TEST_DEVICES
+diff --git a/hw/riscv/andes_atcsmu.c b/hw/misc/andes_atcsmu.c
+similarity index 99%
+rename from hw/riscv/andes_atcsmu.c
+rename to hw/misc/andes_atcsmu.c
+index 54a486a3e5..0b35751937 100644
+--- a/hw/riscv/andes_atcsmu.c
++++ b/hw/misc/andes_atcsmu.c
+@@ -22,7 +22,7 @@
+ #include "hw/sysbus.h"
+ #include "sysemu/runstate.h"
+ #include "hw/qdev-properties.h"
+-#include "hw/riscv/andes_atcsmu.h"
++#include "hw/misc/andes_atcsmu.h"
+ #include "target/riscv/cpu.h"
+ 
+ /* #define DEBUG_ATCSMU */
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 36c20d5637..587c30f573 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -27,6 +27,7 @@ system_ss.add(when: 'CONFIG_IOSB', if_true: files('iosb.c'))
+ system_ss.add(when: 'CONFIG_VIRT_CTRL', if_true: files('virt_ctrl.c'))
+ 
+ # RISC-V devices
++specific_ss.add(when: 'CONFIG_ATCSMU', if_true: files('andes_atcsmu.c'))
+ system_ss.add(when: 'CONFIG_MCHP_PFSOC_DMC', if_true: files('mchp_pfsoc_dmc.c'))
+ system_ss.add(when: 'CONFIG_MCHP_PFSOC_IOSCB', if_true: files('mchp_pfsoc_ioscb.c'))
+ system_ss.add(when: 'CONFIG_MCHP_PFSOC_SYSREG', if_true: files('mchp_pfsoc_sysreg.c'))
+diff --git a/hw/riscv/Kconfig b/hw/riscv/Kconfig
+index d82270a708..e2eb470f71 100644
+--- a/hw/riscv/Kconfig
++++ b/hw/riscv/Kconfig
+@@ -5,9 +5,6 @@ config IBEX
+     bool
+ 
+ # RISC-V machines in alphabetical order
+-config ATCSMU
+-    bool
+-
+ config ANDES_AE350
+     bool
+     select ANDES_PLIC
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 84b50cd051..3e13761870 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -48,7 +48,7 @@
+ #include "hw/timer/andes_plmt.h"
+ #include "hw/timer/atcpit100.h"
+ #include "hw/riscv/andes_ae350.h"
+-#include "hw/riscv/andes_atcsmu.h"
++#include "hw/misc/andes_atcsmu.h"
+ #include "hw/sd/atfsdc010.h"
+ #include "hw/rtc/atcrtc100.h"
+ #include "hw/watchdog/atcwdt200.h"
+diff --git a/hw/riscv/meson.build b/hw/riscv/meson.build
+index bac871b083..e86409c16b 100644
+--- a/hw/riscv/meson.build
++++ b/hw/riscv/meson.build
+@@ -2,7 +2,6 @@ riscv_ss = ss.source_set()
+ riscv_ss.add(files('boot.c'), fdt)
+ riscv_ss.add(when: 'CONFIG_RISCV_NUMA', if_true: files('numa.c'))
+ riscv_ss.add(files('riscv_hart.c'))
+-riscv_ss.add(when: 'CONFIG_ATCSMU', if_true: files('andes_atcsmu.c'))
+ riscv_ss.add(when: 'CONFIG_ANDES_AE350', if_true: files('andes_ae350.c'))
+ riscv_ss.add(when: 'CONFIG_OPENTITAN', if_true: files('opentitan.c'))
+ riscv_ss.add(when: 'CONFIG_RISCV_VIRT', if_true: files('virt.c'))
+diff --git a/hw/watchdog/atcwdt200.c b/hw/watchdog/atcwdt200.c
+index fe176ecfbd..960213de43 100644
+--- a/hw/watchdog/atcwdt200.c
++++ b/hw/watchdog/atcwdt200.c
+@@ -36,7 +36,7 @@
+ #include "sysemu/runstate.h"
+ #include "qapi/qapi-commands-run-state.h"
+ #include "hw/watchdog/atcwdt200.h"
+-#include "hw/riscv/andes_atcsmu.h"
++#include "hw/misc/andes_atcsmu.h"
+ 
+ 
+ #define xLOG(x...)
+diff --git a/include/hw/riscv/andes_atcsmu.h b/include/hw/misc/andes_atcsmu.h
+similarity index 100%
+rename from include/hw/riscv/andes_atcsmu.h
+rename to include/hw/misc/andes_atcsmu.h
+diff --git a/include/hw/riscv/andes_ae350.h b/include/hw/riscv/andes_ae350.h
+index 74e7f17966..8f38e47d82 100644
+--- a/include/hw/riscv/andes_ae350.h
++++ b/include/hw/riscv/andes_ae350.h
+@@ -27,7 +27,7 @@
+ #include "hw/dma/atcdmac300.h"
+ #include "hw/net/atfmac100.h"
+ #include "hw/sd/atfsdc010.h"
+-#include "hw/riscv/andes_atcsmu.h"
++#include "hw/misc/andes_atcsmu.h"
+ 
+ #define ANDES_CPUS_MAX 8
+ 
+-- 
+2.34.1
+

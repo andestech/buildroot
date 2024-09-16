@@ -1,0 +1,51 @@
+From a8501428fff943a70dd90416e5cb63000ee53343 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Wed, 23 Aug 2023 15:50:08 +0800
+Subject: [PATCH 066/241] atcdmac300: Add the suffix "_POS" to the bit position
+ macros whose names end with "MASK"
+
+Avoid confusing about bit postion and mask
+
+Author: Ethan Chen <ethan84@andestech.com>
+---
+ hw/dma/atcdmac300.c         | 6 ++++--
+ include/hw/dma/atcdmac300.h | 6 +++---
+ 2 files changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/hw/dma/atcdmac300.c b/hw/dma/atcdmac300.c
+index 07a3976a4e..bb236405b9 100644
+--- a/hw/dma/atcdmac300.c
++++ b/hw/dma/atcdmac300.c
+@@ -129,8 +129,10 @@ static void atcdmac300_write(void *opaque, hwaddr offset, uint64_t value,
+             dst_width = (1 << dst_width);
+             burst_size = (1 << burst_size);
+             remain_size = (s->chan[ch].ChnTranSize * src_width);
+-            int_tc_mask = (s->chan[ch].ChnCtrl >> CHAN_CTL_INT_TC_MASK) & 0x1;
+-            int_err_mask = (s->chan[ch].ChnCtrl >> CHAN_CTL_INT_ERR_MASK) & 0x1;
++            int_tc_mask = (s->chan[ch].ChnCtrl >> CHAN_CTL_INT_TC_MASK_POS)
++                          & 0x1;
++            int_err_mask = (s->chan[ch].ChnCtrl >> CHAN_CTL_INT_ERR_MASK_POS)
++                           & 0x1;
+             if (remain_size && burst_size < (1 << 11) &&
+                 src_width < (1 << 6) && dst_width < (1 << 6) &&
+                 (src_addr & (src_width - 1)) == 0 &&
+diff --git a/include/hw/dma/atcdmac300.h b/include/hw/dma/atcdmac300.h
+index 8ae14aecdd..9d0320a140 100644
+--- a/include/hw/dma/atcdmac300.h
++++ b/include/hw/dma/atcdmac300.h
+@@ -67,9 +67,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(ATCDMAC300State, ATCDMAC300)
+ #define CHAN_CTL_DST_ADDR_CTL           12
+ #define CHAN_CTL_SRC_REQ_SEL            8
+ #define CHAN_CTL_DST_REQ_SEL            4
+-#define CHAN_CTL_INT_ABT_MASK           3
+-#define CHAN_CTL_INT_ERR_MASK           2
+-#define CHAN_CTL_INT_TC_MASK            1
++#define CHAN_CTL_INT_ABT_MASK_POS       3
++#define CHAN_CTL_INT_ERR_MASK_POS       2
++#define CHAN_CTL_INT_TC_MASK_POS        1
+ #define CHAN_CTL_ENABLE                 0
+ 
+ #define CHAN_CTL_SRC_WIDTH_MASK         0x7
+-- 
+2.34.1
+

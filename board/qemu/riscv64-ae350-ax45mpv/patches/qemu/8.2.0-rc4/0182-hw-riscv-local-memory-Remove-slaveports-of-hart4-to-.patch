@@ -1,0 +1,83 @@
+From ccf6b2b1a4377ee7aa5cd9ca17dbab517773a41b Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Wed, 24 Jan 2024 16:35:21 +0800
+Subject: [PATCH 182/241] hw/riscv: local memory: Remove slaveports of hart4 to
+ hart7 (#114)
+
+Hart4 to hart7 have local memories but no slaveports.
+Remove slaveports of hart4 to hart7 to comply with hardware design.
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/114
+Reviewed-by: Yuming Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-by: Alvin Che-Chia Chang <alvinga@andestech.com>
+Reviewed-by: Foxes Cheng-Hung Hung <foxes687@andestech.com>
+Co-authored-by: Ethan Chen <ethan84@andestech.com>
+Co-committed-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/andes_ae350.c         | 11 ++---------
+ include/hw/riscv/andes_ae350.h | 11 +++--------
+ 2 files changed, 5 insertions(+), 17 deletions(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 3e13761870..ef257c8bef 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -69,14 +69,6 @@ static const struct MemmapEntry {
+     [ANDES_AE350_SLAVEPORT2_DLM] = { 0xa0a00000,   0x200000 },
+     [ANDES_AE350_SLAVEPORT3_ILM] = { 0xa0c00000,   0x200000 },
+     [ANDES_AE350_SLAVEPORT3_DLM] = { 0xa0e00000,   0x200000 },
+-    [ANDES_AE350_SLAVEPORT4_ILM] = { 0xa1000000,   0x200000 },
+-    [ANDES_AE350_SLAVEPORT4_DLM] = { 0xa1200000,   0x200000 },
+-    [ANDES_AE350_SLAVEPORT5_ILM] = { 0xa1400000,   0x200000 },
+-    [ANDES_AE350_SLAVEPORT5_DLM] = { 0xa1600000,   0x200000 },
+-    [ANDES_AE350_SLAVEPORT6_ILM] = { 0xa1800000,   0x200000 },
+-    [ANDES_AE350_SLAVEPORT6_DLM] = { 0xa1a00000,   0x200000 },
+-    [ANDES_AE350_SLAVEPORT7_ILM] = { 0xa1c00000,   0x200000 },
+-    [ANDES_AE350_SLAVEPORT7_DLM] = { 0xa1e00000,   0x200000 },
+     [ANDES_AE350_NOR]       = { 0x88000000,  0x4000000 },
+     [ANDES_AE350_MAC]       = { 0xe0100000,   0x100000 },
+     [ANDES_AE350_LCD]       = { 0xe0200000,   0x100000 },
+@@ -667,7 +659,8 @@ static void andes_ae350_machine_init(MachineState *machine)
+     memory_region_set_readonly(mask_l2c, false);
+     memory_region_add_subregion(system_memory, memmap[ANDES_AE350_L2C].base,
+                                 mask_l2c);
+-    for (int i = 0 ; i < ANDES_CPUS_MAX; i++) {
++
++    for (int i = 0 ; i < ANDES_LM_SLAVEPORTS_MAX; i++) {
+         struct MemmapEntry silm_map =
+             memmap[ANDES_AE350_SLAVEPORT0_ILM + i * 2];
+         struct MemmapEntry sdlm_map =
+diff --git a/include/hw/riscv/andes_ae350.h b/include/hw/riscv/andes_ae350.h
+index 8f38e47d82..a651852e48 100644
+--- a/include/hw/riscv/andes_ae350.h
++++ b/include/hw/riscv/andes_ae350.h
+@@ -81,14 +81,6 @@ enum {
+     ANDES_AE350_SLAVEPORT2_DLM,
+     ANDES_AE350_SLAVEPORT3_ILM,
+     ANDES_AE350_SLAVEPORT3_DLM,
+-    ANDES_AE350_SLAVEPORT4_ILM,
+-    ANDES_AE350_SLAVEPORT4_DLM,
+-    ANDES_AE350_SLAVEPORT5_ILM,
+-    ANDES_AE350_SLAVEPORT5_DLM,
+-    ANDES_AE350_SLAVEPORT6_ILM,
+-    ANDES_AE350_SLAVEPORT6_DLM,
+-    ANDES_AE350_SLAVEPORT7_ILM,
+-    ANDES_AE350_SLAVEPORT7_DLM,
+     ANDES_AE350_NOR,
+     ANDES_AE350_MAC,
+     ANDES_AE350_LCD,
+@@ -129,6 +121,9 @@ enum {
+ #define ANDES_UART_REG_SHIFT    0x2
+ #define ANDES_UART_REG_OFFSET   0x20
+ 
++/* Hart 4~7 do not have slaveports */
++#define ANDES_LM_SLAVEPORTS_MAX 4
++
+ #if defined(TARGET_RISCV32)
+ #define VIRT_CPU TYPE_RISCV_CPU_BASE32
+ #elif defined(TARGET_RISCV64)
+-- 
+2.34.1
+

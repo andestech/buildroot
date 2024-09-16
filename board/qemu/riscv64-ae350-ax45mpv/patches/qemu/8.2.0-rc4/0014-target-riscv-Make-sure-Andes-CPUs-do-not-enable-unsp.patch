@@ -1,0 +1,160 @@
+From 0ef7b97a852d788756b66741c8c55443993bff83 Mon Sep 17 00:00:00 2001
+From: Dylan Dai-Rong Jhong <dylan@andestech.com>
+Date: Tue, 18 Apr 2023 15:57:37 +0800
+Subject: [PATCH 014/241] target/riscv: Make sure Andes CPUs do not enable
+ unspecified extensions (#32)
+
+The original code sequence would enable the default extensions of
+RISC-V QEMU and allow us to dynamically configure extensions through
+the command line. Although this is convenient, but it is not correct
+and may potentially result in unexpected errors.
+
+This patch fixes this issue and provides more precise configuration
+for some CSRs, such as $SATP. We ensure that the satp mode of N-Series
+CPUs is set to "bare".
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+
+Co-authored-by: Dylan Jhong <dylan@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/32
+---
+ target/riscv/cpu.c | 52 +++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 38 insertions(+), 14 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 1c8a95d3ee..3e57285a33 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -558,11 +558,14 @@ static void rv64_andes_ax25_cpu_init(Object *obj)
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
++    if (!env->misa_ext) {
++        set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
++    }
+     register_cpu_props(obj);
+-    set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     set_priv_version(env, PRIV_VERSION_1_12_0);
++
+ #ifndef CONFIG_USER_ONLY
+-    set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_SV57);
++    set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_SV48);
+ #endif
+ 
+     /* Setup Andes Custom CSR */
+@@ -580,9 +583,6 @@ static void rv64_andes_ax25_cpu_init(Object *obj)
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x8a25;
+-
+-    /* Disable non-supported extension */
+-    cfg->ext_sstc = false;
+ }
+ 
+ static void rv64_andes_ax27_cpu_init(Object *obj)
+@@ -610,9 +610,13 @@ static void rv64_andes_nx25_cpu_init(Object *obj)
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+-    rv64_andes_ax25_cpu_init(obj);
+     set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVU);
++    rv64_andes_ax25_cpu_init(obj);
+     cfg->mmu = false;
++#ifndef CONFIG_USER_ONLY
++    memset(&cfg->satp_mode, 0, sizeof(RISCVSATPMap));
++    set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_MBARE);
++#endif
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x8025;
+@@ -623,9 +627,17 @@ static void rv64_andes_nx27v_cpu_init(Object *obj)
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+-    rv64_andes_ax25_cpu_init(obj);
+     set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVU | RVV);
++    rv64_andes_ax25_cpu_init(obj);
+     cfg->mmu = false;
++#ifndef CONFIG_USER_ONLY
++    memset(&cfg->satp_mode, 0, sizeof(RISCVSATPMap));
++    set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_MBARE);
++#endif
++
++    /* RVV extension */
++    cfg->vlen = 512;
++    cfg->elen = 64;
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x8027;
+@@ -636,9 +648,13 @@ static void rv64_andes_nx45_cpu_init(Object *obj)
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+-    rv64_andes_ax25_cpu_init(obj);
+     set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVU);
++    rv64_andes_ax25_cpu_init(obj);
+     cfg->mmu = false;
++#ifndef CONFIG_USER_ONLY
++    memset(&cfg->satp_mode, 0, sizeof(RISCVSATPMap));
++    set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_MBARE);
++#endif
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x8045;
+@@ -730,9 +746,12 @@ static void rv32_andes_a25_cpu_init(Object *obj)
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
++    if (!env->misa_ext) {
++        set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
++    }
+     register_cpu_props(obj);
+-    set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     set_priv_version(env, PRIV_VERSION_1_12_0);
++
+ #ifndef CONFIG_USER_ONLY
+     set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_SV32);
+ #endif
+@@ -752,9 +771,6 @@ static void rv32_andes_a25_cpu_init(Object *obj)
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0a25;
+-
+-    /* Disable non-supported extension */
+-    cfg->ext_sstc = false;
+ }
+ 
+ static void rv32_andes_a27_cpu_init(Object *obj)
+@@ -782,9 +798,13 @@ static void rv32_andes_n25_cpu_init(Object *obj)
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+-    rv32_andes_a25_cpu_init(obj);
+     set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVU);
++    rv32_andes_a25_cpu_init(obj);
+     cfg->mmu = false;
++#ifndef CONFIG_USER_ONLY
++    memset(&cfg->satp_mode, 0, sizeof(RISCVSATPMap));
++    set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_MBARE);
++#endif
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0025;
+@@ -795,9 +815,13 @@ static void rv32_andes_n45_cpu_init(Object *obj)
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+-    rv32_andes_a25_cpu_init(obj);
+     set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVU);
++    rv32_andes_a25_cpu_init(obj);
+     cfg->mmu = false;
++#ifndef CONFIG_USER_ONLY
++    memset(&cfg->satp_mode, 0, sizeof(RISCVSATPMap));
++    set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_MBARE);
++#endif
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0045;
+-- 
+2.34.1
+

@@ -1,0 +1,46 @@
+From 9082510fdd5df37b7879cb59555e3466440407ef Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Tue, 30 Apr 2024 16:06:23 +0800
+Subject: [PATCH 230/241] target/riscv: Add write mask of mcounteren for Andes
+ cores.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr.c       | 8 ++++++--
+ target/riscv/csr_andes.h | 1 +
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/target/riscv/csr.c b/target/riscv/csr.c
+index 96accc1549..9e6c7df3ee 100644
+--- a/target/riscv/csr.c
++++ b/target/riscv/csr.c
+@@ -2007,8 +2007,12 @@ static RISCVException write_mcounteren(CPURISCVState *env, int csrno,
+     RISCVCPU *cpu = env_archcpu(env);
+ 
+     /* WARL register - disable unavailable counters */
+-    env->mcounteren = val & (cpu->pmu_avail_ctrs | COUNTEREN_CY | COUNTEREN_TM |
+-                             COUNTEREN_IR);
++    if (riscv_cpu_cfg(env)->ext_XAndesV5Ops) {
++        env->mcounteren = val & WRITE_MASK_CSR_MCOUNTEREN;
++    } else {
++        env->mcounteren = val & (cpu->pmu_avail_ctrs | COUNTEREN_CY | COUNTEREN_TM |
++                                COUNTEREN_IR);
++    }
+     return RISCV_EXCP_NONE;
+ }
+ 
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index ef1799c584..a670ee47c4 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -344,6 +344,7 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define MASK_LOCAL_IRQ_ACCERR               (0x1 << 24)
+ 
+ /* write masks */
++#define WRITE_MASK_CSR_MCOUNTEREN           0x7F
+ #define WRITE_MASK_CSR_MECC_CODE_32         0x7F
+ #define WRITE_MASK_CSR_MECC_CODE_64         0xFF
+ #define WRITE_MASK_CSR_UITB_32              0xFFFFFFFC
+-- 
+2.34.1
+

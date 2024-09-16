@@ -1,0 +1,61 @@
+From 9690565924d71deddb86eb4141790de6d628be14 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Mon, 4 Sep 2023 17:40:08 +0800
+Subject: [PATCH 054/241] target/riscv: local memory: Increase slaveport number
+ to 8
+
+---
+ hw/riscv/andes_ae350.c         | 10 +++++++++-
+ include/hw/riscv/andes_ae350.h |  8 ++++++++
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 20330857da..8ccda7c7a9 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -68,6 +68,14 @@ static const struct MemmapEntry {
+     [ANDES_AE350_SLAVEPORT2_DLM] = { 0xa0a00000,   0x200000 },
+     [ANDES_AE350_SLAVEPORT3_ILM] = { 0xa0c00000,   0x200000 },
+     [ANDES_AE350_SLAVEPORT3_DLM] = { 0xa0e00000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT4_ILM] = { 0xa1000000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT4_DLM] = { 0xa1200000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT5_ILM] = { 0xa1400000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT5_DLM] = { 0xa1600000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT6_ILM] = { 0xa1800000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT6_DLM] = { 0xa1a00000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT7_ILM] = { 0xa1c00000,   0x200000 },
++    [ANDES_AE350_SLAVEPORT7_DLM] = { 0xa1e00000,   0x200000 },
+     [ANDES_AE350_NOR]       = { 0x88000000,  0x4000000 },
+     [ANDES_AE350_MAC]       = { 0xe0100000,   0x100000 },
+     [ANDES_AE350_LCD]       = { 0xe0200000,   0x100000 },
+@@ -635,7 +643,7 @@ static void andes_ae350_machine_init(MachineState *machine)
+     memory_region_set_readonly(mask_l2c, false);
+     memory_region_add_subregion(system_memory, memmap[ANDES_AE350_L2C].base,
+                                 mask_l2c);
+-    for (int i = 0 ; i < 4; i++) {
++    for (int i = 0 ; i < ANDES_CPUS_MAX; i++) {
+         struct MemmapEntry silm_map =
+             memmap[ANDES_AE350_SLAVEPORT0_ILM + i * 2];
+         struct MemmapEntry sdlm_map =
+diff --git a/include/hw/riscv/andes_ae350.h b/include/hw/riscv/andes_ae350.h
+index 50c124da88..42071db199 100644
+--- a/include/hw/riscv/andes_ae350.h
++++ b/include/hw/riscv/andes_ae350.h
+@@ -80,6 +80,14 @@ enum {
+     ANDES_AE350_SLAVEPORT2_DLM,
+     ANDES_AE350_SLAVEPORT3_ILM,
+     ANDES_AE350_SLAVEPORT3_DLM,
++    ANDES_AE350_SLAVEPORT4_ILM,
++    ANDES_AE350_SLAVEPORT4_DLM,
++    ANDES_AE350_SLAVEPORT5_ILM,
++    ANDES_AE350_SLAVEPORT5_DLM,
++    ANDES_AE350_SLAVEPORT6_ILM,
++    ANDES_AE350_SLAVEPORT6_DLM,
++    ANDES_AE350_SLAVEPORT7_ILM,
++    ANDES_AE350_SLAVEPORT7_DLM,
+     ANDES_AE350_NOR,
+     ANDES_AE350_MAC,
+     ANDES_AE350_LCD,
+-- 
+2.34.1
+

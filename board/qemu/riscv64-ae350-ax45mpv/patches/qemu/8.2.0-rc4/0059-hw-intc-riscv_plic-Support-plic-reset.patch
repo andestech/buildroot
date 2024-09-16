@@ -1,0 +1,43 @@
+From 6212a478d9ac33c51388e9a81a345a37e74a7cb2 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Tue, 5 Sep 2023 11:05:21 +0800
+Subject: [PATCH 059/241] hw/intc/riscv_plic: Support plic reset
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/intc/riscv_plic.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/hw/intc/riscv_plic.c b/hw/intc/riscv_plic.c
+index 5a06980b35..1ea94a1bc6 100644
+--- a/hw/intc/riscv_plic.c
++++ b/hw/intc/riscv_plic.c
+@@ -613,6 +613,17 @@ static const VMStateDescription vmstate_riscv_plic = {
+         }
+ };
+ 
++static void riscv_plic_reset(DeviceState *dev)
++{
++    RISCVPLICState *plic = RISCV_PLIC(dev);
++
++    memset(plic->source_priority, 0, sizeof(uint32_t) * plic->num_sources);
++    memset(plic->target_priority, 0, sizeof(uint32_t) * plic->num_addrs);
++    memset(plic->pending, 0, sizeof(uint32_t) * plic->bitfield_words);
++    memset(plic->claimed, 0, sizeof(uint32_t) * plic->bitfield_words);
++    memset(plic->enable, 0, sizeof(uint32_t) * plic->num_enables);
++}
++
+ static void riscv_plic_class_init(ObjectClass *klass, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
+@@ -620,6 +631,7 @@ static void riscv_plic_class_init(ObjectClass *klass, void *data)
+     device_class_set_props(dc, riscv_plic_properties);
+     dc->realize = riscv_plic_realize;
+     dc->vmsd = &vmstate_riscv_plic;
++    dc->reset = riscv_plic_reset;
+ }
+ 
+ static const TypeInfo riscv_plic_info = {
+-- 
+2.34.1
+

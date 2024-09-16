@@ -1,0 +1,89 @@
+From 6a79f626a6e583bd02ccbb69ed6f11cc751eea55 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Thu, 7 Dec 2023 16:37:15 +0800
+Subject: [PATCH 148/241] target/riscv: Add definitions for trigger mode fields
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 10 +++++-----
+ target/riscv/debug.h |  8 ++++++++
+ 2 files changed, 13 insertions(+), 5 deletions(-)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index c4bc420e6c..565bc3a70d 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -484,19 +484,19 @@ static bool trigger_mode_match(CPURISCVState *env, trigger_type_t type,
+             return false;
+         }
+         /* check U/S/M bit against current privilege level */
+-        if ((ctrl >> 3) & BIT(env->priv)) {
++        if ((ctrl >> TYPE2_U_SHIFT) & BIT(env->priv)) {
+             return true;
+         }
+         break;
+     case TRIGGER_TYPE_AD_MATCH6:
+         if (env->virt_enabled) {
+             /* check VU/VS bit against current privilege level */
+-            if ((ctrl >> 23) & BIT(env->priv)) {
++            if ((ctrl >> TYPE6_VU_SHIFT) & BIT(env->priv)) {
+                 return true;
+             }
+         } else {
+             /* check U/S/M bit against current privilege level */
+-            if ((ctrl >> 3) & BIT(env->priv)) {
++            if ((ctrl >> TYPE6_U_SHIFT) & BIT(env->priv)) {
+                 return true;
+             }
+         }
+@@ -504,12 +504,12 @@ static bool trigger_mode_match(CPURISCVState *env, trigger_type_t type,
+     case TRIGGER_TYPE_INST_CNT:
+         if (env->virt_enabled) {
+             /* check VU/VS bit against current privilege level */
+-            if ((ctrl >> 25) & BIT(env->priv)) {
++            if ((ctrl >> ITRIGGER_VU_SHIFT) & BIT(env->priv)) {
+                 return true;
+             }
+         } else {
+             /* check U/S/M bit against current privilege level */
+-            if ((ctrl >> 6) & BIT(env->priv)) {
++            if ((ctrl >> ITRIGGER_U_SHIFT) & BIT(env->priv)) {
+                 return true;
+             }
+         }
+diff --git a/target/riscv/debug.h b/target/riscv/debug.h
+index 5794aa6ee5..47ccc20cc3 100644
+--- a/target/riscv/debug.h
++++ b/target/riscv/debug.h
+@@ -85,6 +85,8 @@ typedef enum {
+ #define TYPE2_HIT       BIT(20)
+ #define TYPE2_SIZEHI    (0x3 << 21) /* RV64 only */
+ 
++#define TYPE2_U_SHIFT   3
++
+ /* mcontrol6 field masks */
+ 
+ #define TYPE6_LOAD      BIT(0)
+@@ -103,6 +105,9 @@ typedef enum {
+ #define TYPE6_VU        BIT(23)
+ #define TYPE6_VS        BIT(24)
+ 
++#define TYPE6_U_SHIFT   3
++#define TYPE6_VU_SHIFT  23
++
+ /* access size */
+ enum {
+     SIZE_ANY = 0,
+@@ -129,6 +134,9 @@ enum {
+ #define ITRIGGER_VU           BIT(25)
+ #define ITRIGGER_VS           BIT(26)
+ 
++#define ITRIGGER_U_SHIFT      6
++#define ITRIGGER_VU_SHIFT     25
++
+ bool tdata_available(CPURISCVState *env, int tdata_index);
+ 
+ target_ulong tselect_csr_read(CPURISCVState *env);
+-- 
+2.34.1
+

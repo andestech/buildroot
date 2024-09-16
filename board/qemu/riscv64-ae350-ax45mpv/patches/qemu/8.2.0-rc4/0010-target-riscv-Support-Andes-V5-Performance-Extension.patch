@@ -1,0 +1,813 @@
+From 17d56c70090b1054c9569ed2f053cef74f3dd6eb Mon Sep 17 00:00:00 2001
+From: Dylan Jhong <dylan@andestech.com>
+Date: Mon, 26 Sep 2022 18:07:26 +0800
+Subject: [PATCH 010/241] target/riscv: Support Andes V5 Performance Extension
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+---
+ target/riscv/XAndesV5Ops.decode               | 125 ++++++
+ target/riscv/andes_helper.c                   | 131 ++++++
+ target/riscv/andes_helper.h                   |   2 +
+ target/riscv/cpu.c                            |   9 +
+ target/riscv/cpu_cfg.h                        |   3 +
+ target/riscv/helper.h                         |   1 +
+ .../riscv/insn_trans/trans_xandesv5ops.c.inc  | 378 ++++++++++++++++++
+ target/riscv/meson.build                      |   2 +
+ target/riscv/translate.c                      |   8 +
+ 9 files changed, 659 insertions(+)
+ create mode 100644 target/riscv/XAndesV5Ops.decode
+ create mode 100644 target/riscv/andes_helper.c
+ create mode 100644 target/riscv/andes_helper.h
+ create mode 100644 target/riscv/insn_trans/trans_xandesv5ops.c.inc
+
+diff --git a/target/riscv/XAndesV5Ops.decode b/target/riscv/XAndesV5Ops.decode
+new file mode 100644
+index 0000000000..a94b021b65
+--- /dev/null
++++ b/target/riscv/XAndesV5Ops.decode
+@@ -0,0 +1,125 @@
++#
++# RISC-V translation routines for the RVXI Base Integer Instruction Set.
++#
++# Copyright (c) 2018 Peer Adelt, peer.adelt@hni.uni-paderborn.de
++#                    Bastian Koppelmann, kbastian@mail.uni-paderborn.de
++#
++# This program is free software; you can redistribute it and/or modify it
++# under the terms and conditions of the GNU General Public License,
++# version 2 or later, as published by the Free Software Foundation.
++#
++# This program is distributed in the hope it will be useful, but WITHOUT
++# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++# more details.
++#
++# You should have received a copy of the GNU General Public License along with
++# this program.  If not, see <http://www.gnu.org/licenses/>.
++
++# Fields:
++%rs3       27:5
++%rs2       20:5
++%rs1       15:5
++%rd        7:5
++
++%sh10    20:10
++%csr    20:12
++%rm     12:3
++
++# immediates:
++%imm_i    20:s12
++%imm_s    25:s7 7:5
++%imm_b    31:s1 7:1 25:6 8:4     !function=ex_shift_1
++%imm_j    31:s1 12:8 20:1 21:10  !function=ex_shift_1
++
++# Argument sets:
++&b_andes    imm rs2 rs1
++&i_andes    imm rs1 rd
++&j_andes    imm rd
++&r_andes    rd rs1 rs2
++&s_andes    imm rs1 rs2
++&u_andes    imm rd
++&shift_andes     shamt rs1 rd
++&atomic_andes    aq rl rs2 rs1 rd
++
++# Formats 32:
++@r       .......   ..... ..... ... ..... ....... &r_andes                %rs2 %rs1 %rd
++
++# *** Custom 0 instructions ***
++## Similar to U-type
++%imm_u1 31:s1 15:2 17:3 20:1 21:10 14:1
++@u1     . .......... . ... .. . .. ..... ....... &u_andes      imm=%imm_u1         %rd
++addigp  . .......... . ... .. . 01 ..... 0001011 @u1 #0x01
++lbgp    . .......... . ... .. . 00 ..... 0001011 @u1 #0x00
++lbugp   . .......... . ... .. . 10 ..... 0001011 @u1 #0x02
++
++## Similar to B-type
++%imm_u2 31:s1 15:2 17:3 7:1 25:6 8:4 14:1
++&u_andes2    imm rs2
++@u2     . .......... . ... .. . .. .... . ....... &u_andes2      imm=%imm_u2 %rs2
++sbgp    . ...... ..... ... .. . 11 .... . 0001011 @u2 #0x03
++
++# *** Custom 1 instructions ***
++## Similar to U-type
++%imm_ld 31:s1 21:2 15:2 17:3 20:1 23:8	!function=ex_shift_3
++%imm_lw 31:s1 21:1 15:2 17:3 20:1 22:9	!function=ex_shift_2
++%imm_lh 31:s1 15:2 17:3 20:1 21:10		!function=ex_shift_1
++&u_andes_c1 imm_c1 rd
++@uc1_d   .................      ... .....   ....... &u_andes_c1      imm_c1=%imm_ld  %rd
++@uc1_w   .................      ... .....   ....... &u_andes_c1      imm_c1=%imm_lw  %rd
++@uc1     .................      ... .....   ....... &u_andes_c1      imm_c1=%imm_lh  %rd
++lhgp     . .......... .  ... .. 001 .....   0101011 @uc1 #0x01
++lhugp    . .......... .  ... .. 101 .....   0101011 @uc1 #0x05
++lwgp     . ......... . . ... .. 010 .....   0101011 @uc1_w #0x02
++lwugp    . ......... . . ... .. 110 .....   0101011 @uc1_w #0x06
++ldgp     . ........ .. . ... .. 011 .....   0101011 @uc1_d #0x03
++
++## Similar to B-type
++%imm_sd 31:s1 8:2 15:2 17:3 7:1 25:6 10:2	!function=ex_shift_3
++%imm_sw 31:s1 8:1 15:2 17:3 7:1 25:6 9:3	!function=ex_shift_2
++%imm_sh 31:s1 15:2 17:3 7:1 25:6 8:4		!function=ex_shift_1
++&b_andes_c1 imm_c1 rs2
++@bc1_d  . ...... .....  ... .. ... .....   ....... &b_andes_c1      imm_c1=%imm_sd  %rs2
++@bc1_w  . ...... .....  ... .. ... .....   ....... &b_andes_c1      imm_c1=%imm_sw  %rs2
++@bc1    . ...... .....  ... .. ... .....   ....... &b_andes_c1      imm_c1=%imm_sh  %rs2
++shgp    . ...... .....  ... .. 000 .... .  0101011 @bc1 #0x00
++swgp    . ...... .....  ... .. 100 ... . . 0101011 @bc1_w #0x04
++sdgp    . ...... .....  ... .. 111 .. .. . 0101011 @bc1_d #0x07
++
++# *** Custom 2 instructions (32bit) ***
++## Similar to B-type
++%imm_b_a  31:s1 25:5 8:4         !function=ex_shift_1
++%cimml    30:1 7:1 20:5
++&b_a_cl  imm cimml rs1
++@b_a_cl  . . ..... ..... ..... ... .... . ....... &b_a_cl imm=%imm_b_a  %cimml %rs1
++
++beqc      . . ..... ..... ..... 101 .... . 1011011 @b_a_cl #0x05
++bnec      . . ..... ..... ..... 110 .... . 1011011 @b_a_cl #0x06
++
++%cimms    7:1 20:5
++&b_a_cs  imm cimms rs1
++@b_a_cs  . . ..... ..... ..... ... .... . ....... &b_a_cs imm=%imm_b_a  %cimms %rs1
++
++bbx_bbc   . 0 ..... ..... ..... 111 .... . 1011011 @b_a_cs #0x00
++bbx_bbs   . 1 ..... ..... ..... 111 .... . 1011011 @b_a_cs #0x01
++
++## Similar to I-Type
++%mbfob    26:6
++%lbfob    20:6
++&i_b mbfob lbfob rs1 rd
++@i_bfo    . ..... . ..... ..... ... ..... .......  &i_b %mbfob %lbfob %rs1 %rd
++bfos      . ..... . ..... ..... 011 .....  1011011 @i_bfo #0x03
++bfoz      . ..... . ..... ..... 010 .....  1011011 @i_bfo #0x02
++
++## Similar to R-type
++lea_h     0000101   ..... ..... 000 .....  1011011 @r #0x05
++lea_w     0000110   ..... ..... 000 .....  1011011 @r #0x06
++lea_d     0000111   ..... ..... 000 .....  1011011 @r #0x07
++lea_b_ze  0001000   ..... ..... 000 .....  1011011 @r #0x08
++lea_h_ze  0001001   ..... ..... 000 .....  1011011 @r #0x09
++lea_w_ze  0001010   ..... ..... 000 .....  1011011 @r #0x0a
++lea_d_ze  0001011   ..... ..... 000 .....  1011011 @r #0x0b
++f_ffb     0010000   ..... ..... 000 .....  1011011 @r #0x10
++f_ffzmism 0010001   ..... ..... 000 .....  1011011 @r #0x11
++f_ffmism  0010010   ..... ..... 000 .....  1011011 @r #0x12
++f_flmism  0010011   ..... ..... 000 .....  1011011 @r #0x13
+diff --git a/target/riscv/andes_helper.c b/target/riscv/andes_helper.c
+new file mode 100644
+index 0000000000..dbd4810b78
+--- /dev/null
++++ b/target/riscv/andes_helper.c
+@@ -0,0 +1,131 @@
++#include "qemu/osdep.h"
++#include "cpu.h"
++#include "qemu/host-utils.h"
++#include "exec/exec-all.h"
++#include "exec/helper-proto.h"
++#include "fpu/softfloat.h"
++#include "internals.h"
++typedef int (*test_function)(uint8_t a, uint8_t b);
++target_ulong helper_andes_v5_bfo_x(target_ulong rd, target_ulong rs1,
++                                   target_ulong insn)
++{
++    int msb, lsb, is_se;
++    int lsbp1, msbm1, lsbm1, lenm1;
++    uint64_t se;
++    uint64_t nxrd = rd; /* for safety sake */
++
++    msb = extract64(insn, 26, 6);
++    lsb = extract64(insn, 20, 6);
++    is_se = 0x3 == (0x7 & (insn >> 12)); /* BFOS */
++    lsbp1 = lsb + 1;
++    msbm1 = msb - 1;
++    lsbm1 = lsb - 1;
++
++    if (msb == 0) {
++        nxrd = deposit64(nxrd, lsb, 1, 1 & rs1);
++        if (lsb > 0) {
++            nxrd = deposit64(nxrd, 0, lsbm1 + 1, 0);
++        }
++        if (lsb < 63) {
++            se = (is_se && (1 & rs1)) ? -1LL : 0;
++            nxrd = deposit64(nxrd, lsbp1, 64 - lsbp1, se);
++        }
++    } else if (msb < lsb) {
++        lenm1 = lsb - msb;
++        nxrd = deposit64(nxrd, msb, lenm1 + 1, rs1 >> 0);
++        if (lsb < 63) {
++            se = (is_se && (1 & (rs1 >> lenm1))) ? -1LL : 0;
++            nxrd = deposit64(nxrd, lsbp1, 64 - lsbp1, se);
++        }
++        nxrd = deposit64(nxrd, 0, msbm1 + 1, 0);
++    } else { /* msb >= lsb */
++        lenm1 = msb - lsb;
++        nxrd = deposit64(nxrd, 0, lenm1 + 1, rs1 >> lsb);
++        se = (is_se && (1 & (rs1 >> msb))) ? -1LL : 0;
++        nxrd = deposit64(nxrd, lenm1 + 1, 63 - lenm1, se);
++    }
++
++    return (target_long)nxrd;
++}
++
++static int andes_v5_fb_x_internal(uint8_t *bytes1, uint8_t *bytes2, int size,
++                             int is_little_endian, test_function test)
++{
++    int i, found;
++
++    found = 0;
++
++    if (is_little_endian) {
++        for (i = 0; i < size; ++i) {
++            if (test(bytes1[i], bytes2[i])) {
++                found = i - size;
++                break;
++            }
++        }
++    } else { /* is_big_endian */
++        for (i = size - 1; i >= 0; --i) {
++            if (test(bytes1[i], bytes2[i])) {
++                found = i - size;
++                break;
++            }
++        }
++    }
++
++    return found;
++}
++
++static int andes_v5_test_match(uint8_t a, uint8_t b)
++{
++    return (a == b);
++}
++
++static int andes_v5_test_mismatch(uint8_t a, uint8_t b)
++{
++    return (a != b);
++}
++
++static int andes_v5_test_zero_mismatch(uint8_t a, uint8_t b)
++{
++    return (a == 0) || (a != b);
++}
++
++target_ulong helper_andes_v5_fb_x(target_ulong rs1, target_ulong rs2,
++                                  target_ulong op)
++{
++    target_ulong rd;
++    uint8_t *pa, *pb;
++    uint size;
++
++    size = sizeof(target_ulong);
++    pa = (uint8_t *)&rs1;
++    pb = (uint8_t *)&rs2;
++    rd = 0;
++
++    switch (op) {
++    case 0x10: /* FFB */
++        /* Each byte in Rs1 is matched with the value in Rs2[7:0].  */
++        memset(pb, *pb, size);
++        rd = andes_v5_fb_x_internal(pa, pb, size, 1, andes_v5_test_match);
++        break;
++    case 0x11: /* FFZMISM */
++        rd = andes_v5_fb_x_internal(pa, pb, size, 1,
++                                    andes_v5_test_zero_mismatch);
++        break;
++    case 0x12: /* FFMISM */
++        rd = andes_v5_fb_x_internal(pa, pb, size, 1, andes_v5_test_mismatch);
++        break;
++    case 0x13: /* FLMISM */
++        /*
++         * tricky!
++         *   # reverse endian to find last
++         *   # patch result
++         */
++        rd = andes_v5_fb_x_internal(pa, pb, size, 0, andes_v5_test_mismatch);
++        break;
++    default:
++        /* helper_raise_exception(env, RISCV_EXCP_ILLEGAL_INST); */
++        break;
++    }
++
++    return rd;
++}
+diff --git a/target/riscv/andes_helper.h b/target/riscv/andes_helper.h
+new file mode 100644
+index 0000000000..fe1d105337
+--- /dev/null
++++ b/target/riscv/andes_helper.h
+@@ -0,0 +1,2 @@
++DEF_HELPER_FLAGS_3(andes_v5_bfo_x, TCG_CALL_NO_RWG, tl, tl, tl, tl)
++DEF_HELPER_FLAGS_3(andes_v5_fb_x , TCG_CALL_NO_RWG, tl, tl, tl, tl)
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 84aaf63af8..a77819f28e 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -568,6 +568,9 @@ static void rv64_andes_ax25_cpu_init(Object *obj)
+     /* Setup Andes Custom CSR */
+     andes_csr_init(&env->andes_csr);
+ 
++    /* Enable Andes Custom extension */
++    cfg->ext_XAndesV5Ops = true;
++
+     /* Set vendor ID */
+     cfg->mvendorid = 0x0000031e;
+ 
+@@ -720,6 +723,7 @@ static void rv32_imafcu_nommu_cpu_init(Object *obj)
+ 
+ static void rv32_andes_a25_cpu_init(Object *obj)
+ {
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     register_cpu_props(obj);
+@@ -732,6 +736,9 @@ static void rv32_andes_a25_cpu_init(Object *obj)
+     /* Setup Andes Custom CSR */
+     andes_csr_init(&env->andes_csr);
+ 
++    /* Enable Andes Custom extension */
++    cfg->ext_XAndesV5Ops = true;
++
+     /* Set vendor ID */
+     cfg->mvendorid = 0x0000031e;
+ 
+@@ -1510,6 +1517,7 @@ const RISCVCPUMultiExtConfig riscv_cpu_extensions[] = {
+     MULTI_EXT_CFG_BOOL("zcmt", ext_zcmt, false),
+     MULTI_EXT_CFG_BOOL("zicond", ext_zicond, false),
+ 
++<<<<<<< HEAD
+     /* Vector cryptography extensions */
+     MULTI_EXT_CFG_BOOL("zvbb", ext_zvbb, false),
+     MULTI_EXT_CFG_BOOL("zvbc", ext_zvbc, false),
+@@ -1544,6 +1552,7 @@ const RISCVCPUMultiExtConfig riscv_cpu_vendor_exts[] = {
+     MULTI_EXT_CFG_BOOL("xtheadmempair", ext_xtheadmempair, false),
+     MULTI_EXT_CFG_BOOL("xtheadsync", ext_xtheadsync, false),
+     MULTI_EXT_CFG_BOOL("xventanacondops", ext_XVentanaCondOps, false),
++    MULTI_EXT_CFG_BOOL("xandesv5ops", ext_XAndesV5Ops, false),
+ 
+     DEFINE_PROP_END_OF_LIST(),
+ };
+diff --git a/target/riscv/cpu_cfg.h b/target/riscv/cpu_cfg.h
+index f4605fb190..b178f77ae7 100644
+--- a/target/riscv/cpu_cfg.h
++++ b/target/riscv/cpu_cfg.h
+@@ -133,6 +133,8 @@ struct RISCVCPUConfig {
+     bool ext_xtheadmempair;
+     bool ext_xtheadsync;
+     bool ext_XVentanaCondOps;
++    bool ext_XVentanaCondOps;
++    bool ext_XAndesV5Ops;
+ 
+     uint32_t pmu_mask;
+     char *priv_spec;
+@@ -192,5 +194,6 @@ MATERIALISE_EXT_PREDICATE(xtheadmemidx)
+ MATERIALISE_EXT_PREDICATE(xtheadmempair)
+ MATERIALISE_EXT_PREDICATE(xtheadsync)
+ MATERIALISE_EXT_PREDICATE(XVentanaCondOps)
++MATERIALISE_EXT_PREDICATE(XAndesV5Ops);
+ 
+ #endif
+diff --git a/target/riscv/helper.h b/target/riscv/helper.h
+index 8a63523851..fad570c25a 100644
+--- a/target/riscv/helper.h
++++ b/target/riscv/helper.h
+@@ -1280,3 +1280,4 @@ DEF_HELPER_4(vgmul_vv, void, ptr, ptr, env, i32)
+ DEF_HELPER_5(vsm4k_vi, void, ptr, ptr, i32, env, i32)
+ DEF_HELPER_4(vsm4r_vv, void, ptr, ptr, env, i32)
+ DEF_HELPER_4(vsm4r_vs, void, ptr, ptr, env, i32)
++#include "andes_helper.h"
+diff --git a/target/riscv/insn_trans/trans_xandesv5ops.c.inc b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+new file mode 100644
+index 0000000000..77d25beb14
+--- /dev/null
++++ b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+@@ -0,0 +1,378 @@
++#define GP 3
++
++enum andes_v5_inst_id {
++    /* Code Dense Extension */
++    EXEC_IT = (0x8000),
++
++    /* V5 Performance Extension */
++    /* custom 0 */
++    ADDIGP = 0x01,
++    LBGP = 0x00,
++    LBUGP = 0x02,
++    SBGP = 0x03,
++
++    /* custom 1 */
++    LHGP = 0x01,
++    LHUGP = 0x05,
++    LWGP = 0x02,
++    LWUGP = 0x06,
++    LDGP = 0x03,
++    SHGP = 0x00,
++    SWGP = 0x04,
++    SDGP = 0x07,
++
++    /* custom 2 */
++    BBX = 0x07,
++    BBX_BBC = 0x00,
++    BBX_BBS = 0x01,
++    BEQC = 0x05,
++    BNEC = 0x06,
++    BFOS = 0x03,
++    BFOZ = 0x02,
++    LEAF = 0x00,
++    LEA_H = 0x05,
++    LEA_W = 0x06,
++    LEA_D = 0x07,
++    LEA_B_ZE = 0x08,
++    LEA_H_ZE = 0x09,
++    LEA_W_ZE = 0x0a,
++    LEA_D_ZE = 0x0b,
++    F_FFB = 0x10,
++    F_FFZMISM = 0x11,
++    F_FFMISM = 0x12,
++    F_FLMISM = 0x13,
++
++    /* custom 3 */
++    /* empty by now */
++};
++
++/*** Custom-2 Instructions ***/
++static void andes_v5_gen_branch_tcgv(DisasContext *ctx, uint32_t opc,
++                            TCGv source1, TCGv source2, target_long imm)
++{
++    TCGLabel *label = gen_new_label();
++
++    switch (opc) {
++    case OPC_RISC_BEQ:
++        tcg_gen_brcond_tl(TCG_COND_EQ, source1, source2, label);
++        break;
++    case OPC_RISC_BNE:
++        tcg_gen_brcond_tl(TCG_COND_NE, source1, source2, label);
++        break;
++    case OPC_RISC_BLT:
++        tcg_gen_brcond_tl(TCG_COND_LT, source1, source2, label);
++        break;
++    case OPC_RISC_BGE:
++        tcg_gen_brcond_tl(TCG_COND_GE, source1, source2, label);
++        break;
++    case OPC_RISC_BLTU:
++        tcg_gen_brcond_tl(TCG_COND_LTU, source1, source2, label);
++        break;
++    case OPC_RISC_BGEU:
++        tcg_gen_brcond_tl(TCG_COND_GEU, source1, source2, label);
++        break;
++    default:
++        gen_exception_illegal(ctx);
++        return;
++    }
++
++    gen_goto_tb(ctx, 1, ctx->pc_succ_insn);
++    gen_set_label(label); /* branch taken */
++    if (!has_ext(ctx, RVC) && ((ctx->base.pc_next + imm) & 0x3)) {
++        /* misaligned */
++        gen_exception_inst_addr_mis(ctx);
++    } else {
++        gen_goto_tb(ctx, 0, ctx->base.pc_next + imm);
++    }
++    ctx->base.is_jmp = DISAS_NORETURN;
++}
++
++static bool trans_bbx_bbc(DisasContext *ctx, arg_bbx_bbc *a)
++{
++    TCGv v0, v1, src;
++
++    /* XXX: make it use tcg_constant_* instead */
++    v0 = tcg_constant_tl(0);
++    v1 = tcg_temp_new();
++    src = get_gpr(ctx, a->rs1, EXT_NONE);
++    tcg_gen_andi_tl(v1, src, (target_ulong)1u << a->cimms);
++    andes_v5_gen_branch_tcgv(ctx, OPC_RISC_BEQ, v0, v1, a->imm);
++    return true;
++}
++
++static bool trans_bbx_bbs(DisasContext *ctx, arg_bbx_bbs *a)
++{
++    TCGv v0, v1, src;
++    v0 = tcg_constant_tl(0);
++    v1 = tcg_temp_new();
++    src = get_gpr(ctx, a->rs1, EXT_NONE);
++    tcg_gen_andi_tl(v1, src, (target_ulong)1u << a->cimms);
++    andes_v5_gen_branch_tcgv(ctx, OPC_RISC_BNE, v0, v1, a->imm);
++    return true;
++}
++
++static bool trans_beqc(DisasContext *ctx, arg_beqc *a)
++{
++    TCGv v0, src;
++    v0 = tcg_constant_tl(a->cimml);
++    src = get_gpr(ctx, a->rs1, EXT_NONE);
++    andes_v5_gen_branch_tcgv(ctx, OPC_RISC_BEQ, v0, src, a->imm);
++    return true;
++}
++
++static bool trans_bnec(DisasContext *ctx, arg_bnec *a)
++{
++    TCGv v0, src;
++    v0 = tcg_constant_tl(a->cimml);
++    src = get_gpr(ctx, a->rs1, EXT_NONE);
++    andes_v5_gen_branch_tcgv(ctx, OPC_RISC_BNE, v0, src, a->imm);
++    return true;
++}
++
++static bool trans_bfos(DisasContext *ctx, arg_bfos *a)
++{
++    TCGv src, v1, opc;
++    opc = tcg_constant_tl(ctx->opcode);
++    src = get_gpr(ctx, a->rs1, EXT_NONE);
++    v1 = get_gpr(ctx, a->rd, EXT_NONE);
++    gen_helper_andes_v5_bfo_x(v1, v1, src, opc);
++    return true;
++}
++
++static bool trans_bfoz(DisasContext *ctx, arg_bfoz *a)
++{
++    TCGv src, v1, opc;
++    opc = tcg_constant_tl(ctx->opcode);
++    src = get_gpr(ctx, a->rs1, EXT_NONE);
++    v1 = get_gpr(ctx, a->rd,  EXT_NONE);
++    gen_helper_andes_v5_bfo_x(v1, v1, src, opc);
++    return true;
++}
++
++static bool translate_andes_lea(DisasContext *ctx, int rd,
++                                int rs1, int rs2, int func)
++{
++    TCGv src1, src2, temp;
++
++    temp = tcg_temp_new();
++    src1 = get_gpr(ctx, rs1, EXT_NONE);
++    src2 = get_gpr(ctx, rs2, EXT_NONE);
++
++    switch (func) {
++    case LEA_H: /* lea.h rd, rs1, rs2 */
++    case LEA_W: /* lea.w rd, rs1, rs2 */
++    case LEA_D: /* lea.d rd, rs1, rs2 */
++        tcg_gen_shli_tl(temp, src2, func - LEA_H + 1);
++        tcg_gen_add_tl(temp, src1, temp);
++        break;
++#if defined(TARGET_RISCV64)
++    case LEA_B_ZE: /* lea.b.ze rd, rs1, rs2 */
++    case LEA_H_ZE: /* lea.h.ze rd, rs1, rs2 */
++    case LEA_W_ZE: /* lea.w.ze rd, rs1, rs2 */
++    case LEA_D_ZE: /* lea.d.ze rd, rs1, rs2 */
++        tcg_gen_ext32u_tl(temp, src2);
++        tcg_gen_shli_tl(temp, temp, func - LEA_B_ZE);
++        tcg_gen_add_tl(temp, src1, temp);
++        break;
++#endif
++    default:
++        /*
++         * Seems to be an opcode collision,
++         * fall through for official decoder
++         */
++        return false;
++    }
++    gen_set_gpr(ctx, rd, temp);
++
++    return true;
++}
++static bool trans_lea_h(DisasContext *ctx, arg_lea_h *a)
++{
++    return translate_andes_lea(ctx, a->rd, a->rs1, a->rs2, LEA_H);
++}
++static bool trans_lea_w(DisasContext *ctx, arg_lea_w *a)
++{
++    return translate_andes_lea(ctx, a->rd, a->rs1, a->rs2, LEA_W);
++}
++static bool trans_lea_d(DisasContext *ctx, arg_lea_d *a)
++{
++    return translate_andes_lea(ctx, a->rd, a->rs1, a->rs2, LEA_D);
++}
++static bool trans_lea_b_ze(DisasContext *ctx, arg_lea_b_ze *a)
++{
++    return translate_andes_lea(ctx, a->rd, a->rs1, a->rs2, LEA_B_ZE);
++}
++static bool trans_lea_h_ze(DisasContext *ctx, arg_lea_h_ze *a)
++{
++    return translate_andes_lea(ctx, a->rd, a->rs1, a->rs2, LEA_H_ZE);
++}
++static bool trans_lea_w_ze(DisasContext *ctx, arg_lea_w_ze *a)
++{
++    return translate_andes_lea(ctx, a->rd, a->rs1, a->rs2, LEA_W_ZE);
++}
++static bool trans_lea_d_ze(DisasContext *ctx, arg_lea_d_ze *a)
++{
++    return translate_andes_lea(ctx, a->rd, a->rs1, a->rs2, LEA_D_ZE);
++}
++
++static bool trans_find_first_x(DisasContext *ctx, int rd,
++                               int rs1, int rs2, int func)
++{
++    TCGv src1, src2, dest, tmp;
++    src1 = get_gpr(ctx, rs1, EXT_NONE);
++    src2 = get_gpr(ctx, rs2, EXT_NONE);
++    dest = get_gpr(ctx, rd,  EXT_NONE);
++    tmp = tcg_constant_tl(func);
++    gen_helper_andes_v5_fb_x(dest, src1, src2, tmp);
++    return true;
++}
++static bool trans_f_ffb(DisasContext *ctx, arg_f_ffb *a)
++{
++    return trans_find_first_x(ctx, a->rd, a->rs1, a->rs2, F_FFB);
++}
++static bool trans_f_ffzmism(DisasContext *ctx, arg_f_ffzmism *a)
++{
++    return trans_find_first_x(ctx, a->rd, a->rs1, a->rs2, F_FFZMISM);
++}
++static bool trans_f_ffmism(DisasContext *ctx, arg_f_ffmism *a)
++{
++    return trans_find_first_x(ctx, a->rd, a->rs1, a->rs2, F_FFMISM);
++}
++static bool trans_f_flmism(DisasContext *ctx, arg_f_flmism *a)
++{
++    return trans_find_first_x(ctx, a->rd, a->rs1, a->rs2, F_FLMISM);
++}
++
++/*** Custom-0 instructions ***/
++static void gen_store_legacy(DisasContext *ctx, uint32_t opc, int rs1,
++                             int rs2, target_long imm)
++{
++    TCGv t0, dat, base;
++    int memop;
++    const int tcg_memop_lookup_local[8] = {
++        [0 ... 7] = -1,
++        [0] = MO_SB,
++        [1] = MO_TESW,
++        [2] = MO_TESL,
++        [4] = MO_UB,
++        [5] = MO_TEUW,
++    #ifdef TARGET_RISCV64
++        [3] = MO_TESQ,
++        [6] = MO_TEUL,
++    #endif
++    };
++
++    memop = tcg_memop_lookup_local[(opc >> 12) & 0x7];
++
++    if (memop < 0) {
++        gen_exception_illegal(ctx);
++        return;
++    }
++
++    t0 = tcg_temp_new();
++    base = get_gpr(ctx, rs1, EXT_NONE);
++    dat = get_gpr(ctx, rs2, EXT_NONE);
++    tcg_gen_addi_tl(t0, base, imm);
++    tcg_gen_qemu_st_tl(dat, t0, ctx->mem_idx, memop);
++}
++
++static void gen_load_legacy(DisasContext *ctx, uint32_t opc, int rd,
++                            int rs1, target_long imm)
++{
++    TCGv t0, base, dat;
++    int memop;
++    const int tcg_memop_lookup_local[8] = {
++        [0 ... 7] = -1,
++        [0] = MO_SB,
++        [1] = MO_TESW,
++        [2] = MO_TESL,
++        [4] = MO_UB,
++        [5] = MO_TEUW,
++    #ifdef TARGET_RISCV64
++        [3] = MO_TEUQ,
++        [6] = MO_TEUL,
++    #endif
++    };
++
++    memop = tcg_memop_lookup_local[(opc >> 12) & 0x7];
++
++    if (memop < 0) {
++        gen_exception_illegal(ctx);
++        return;
++    }
++
++    t0 = tcg_temp_new();
++    base = get_gpr(ctx, rs1, EXT_NONE);
++    dat = get_gpr(ctx, rd, EXT_NONE);
++    tcg_gen_addi_tl(t0, base, imm);
++    tcg_gen_qemu_ld_tl(dat, t0, ctx->mem_idx, memop);
++}
++
++static bool trans_addigp(DisasContext *ctx, arg_addigp *a)
++{
++    TCGv gp, v0;
++    gp = get_gpr(ctx, GP, EXT_NONE);
++    v0 = tcg_temp_new();
++    tcg_gen_addi_tl(v0, gp, a->imm);
++    gen_set_gpr(ctx, a->rd, v0);
++    return true;
++}
++
++static bool trans_lbgp(DisasContext *ctx, arg_lbgp *a)
++{
++    gen_load_legacy(ctx, OPC_RISC_LB, a->rd, GP, a->imm);
++    return true;
++}
++static bool trans_lbugp(DisasContext *ctx, arg_lbugp *a)
++{
++    gen_load_legacy(ctx, OPC_RISC_LBU, a->rd, GP, a->imm);
++    return true;
++}
++static bool trans_sbgp(DisasContext *ctx, arg_sbgp *a)
++{
++    gen_store_legacy(ctx, OPC_RISC_SB, GP, a->rs2, a->imm);
++    return true;
++}
++
++/*** Custom-1 instructions ***/
++static bool trans_lhgp(DisasContext *ctx, arg_lhgp *a)
++{
++    gen_load_legacy(ctx, OPC_RISC_LH, a->rd, GP, a->imm_c1);
++    return true;
++}
++static bool trans_lhugp(DisasContext *ctx, arg_lhugp *a)
++{
++    gen_load_legacy(ctx, OPC_RISC_LHU, a->rd, GP, a->imm_c1);
++    return true;
++}
++static bool trans_lwgp(DisasContext *ctx, arg_lwgp *a)
++{
++    gen_load_legacy(ctx, OPC_RISC_LW, a->rd, GP, a->imm_c1);
++    return true;
++}
++static bool trans_lwugp(DisasContext *ctx, arg_lwugp *a)
++{
++    gen_load_legacy(ctx, OPC_RISC_LWU, a->rd, GP, a->imm_c1);
++    return true;
++}
++static bool trans_ldgp(DisasContext *ctx, arg_ldgp *a)
++{
++    gen_load_legacy(ctx, OPC_RISC_LD, a->rd, GP, a->imm_c1);
++    return true;
++}
++static bool trans_shgp(DisasContext *ctx, arg_shgp *a)
++{
++    gen_store_legacy(ctx, OPC_RISC_SH, GP, a->rs2, a->imm_c1);
++    return true;
++}
++static bool trans_swgp(DisasContext *ctx, arg_swgp *a)
++{
++    gen_store_legacy(ctx, OPC_RISC_SW, GP, a->rs2, a->imm_c1);
++    return true;
++}
++static bool trans_sdgp(DisasContext *ctx, arg_sdgp *a)
++{
++    gen_store_legacy(ctx, OPC_RISC_SD, GP, a->rs2, a->imm_c1);
++    return true;
++}
++
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index f703b915f6..b1e1d36098 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -4,11 +4,13 @@ gen = [
+   decodetree.process('insn32.decode', extra_args: '--static-decode=decode_insn32'),
+   decodetree.process('xthead.decode', extra_args: '--static-decode=decode_xthead'),
+   decodetree.process('XVentanaCondOps.decode', extra_args: '--static-decode=decode_XVentanaCodeOps'),
++  decodetree.process('XAndesV5Ops.decode', extra_args: ['--static-decode=decode_XAndesV5Ops']),
+ ]
+ 
+ riscv_ss = ss.source_set()
+ riscv_ss.add(gen)
+ riscv_ss.add(files(
++  'andes_helper.c',
+   'csr_andes.inc.c',
+   'cpu.c',
+   'cpu_helper.c',
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index f0be79bb16..dd355cdd96 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -1079,6 +1079,12 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+     return cpu_ldl_code(env, pc);
+ }
+ 
++/* Include the auto-generated decoder for 16 bit insn */
++#include "decode-insn16.c.inc"
++/* Include decoders for factored-out extensions */
++#include "decode-XVentanaCondOps.c.inc"
++#include "decode-XAndesV5Ops.c.inc"
++
+ /* Include insn module translation function */
+ #include "insn_trans/trans_rvi.c.inc"
+ #include "insn_trans/trans_rvm.c.inc"
+@@ -1108,6 +1114,7 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+ 
+ /* Include decoders for factored-out extensions */
+ #include "decode-XVentanaCondOps.c.inc"
++#include "insn_trans/trans_xandesv5ops.c.inc"
+ 
+ /* The specification allows for longer insns, but not supported by qemu. */
+ #define MAX_INSN_LEN  4
+@@ -1130,6 +1137,7 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
+         { always_true_p,  decode_insn32 },
+         { has_xthead_p, decode_xthead },
+         { has_XVentanaCondOps_p,  decode_XVentanaCodeOps },
++        { has_XAndesV5Ops_p,  decode_XAndesV5Ops },
+     };
+ 
+     ctx->virt_inst_excp = false;
+-- 
+2.34.1
+

@@ -1,0 +1,43 @@
+From effb1258bb45fde2664b08969b0e0357c6d874d7 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 15 Dec 2023 17:03:53 +0800
+Subject: [PATCH 145/241] Revert "target/riscv: Fix Andes CPU cannot set
+ default extension since V8.2 only non-dynamic CPU can set this"
+
+This reverts commit e2e273646160b836c5985ff0dcf4416a36fd4e13.
+---
+ target/riscv/cpu.c         | 4 ++--
+ target/riscv/tcg/tcg-cpu.c | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index c3f5bf0e43..360fc08cbf 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -2103,8 +2103,8 @@ const RISCVCPUMultiExtConfig riscv_cpu_vendor_exts[] = {
+     MULTI_EXT_CFG_BOOL("xtheadmempair", ext_xtheadmempair, false),
+     MULTI_EXT_CFG_BOOL("xtheadsync", ext_xtheadsync, false),
+     MULTI_EXT_CFG_BOOL("xventanacondops", ext_XVentanaCondOps, false),
+-    MULTI_EXT_CFG_BOOL("xandesv5ops", ext_XAndesV5Ops, true),
+-    MULTI_EXT_CFG_BOOL("xandescodenseops", ext_XAndesCodenseOps, true),
++    MULTI_EXT_CFG_BOOL("xandesv5ops", ext_XAndesV5Ops, false),
++    MULTI_EXT_CFG_BOOL("xandescodenseops", ext_XAndesCodenseOps, false),
+     MULTI_EXT_CFG_BOOL("xandesace", ext_XAndesAce, false),
+     MULTI_EXT_CFG_BOOL("xandesacemulti", ext_XAndesAceMulti, false),
+ 
+diff --git a/target/riscv/tcg/tcg-cpu.c b/target/riscv/tcg/tcg-cpu.c
+index e1390c4365..2c8bdedced 100644
+--- a/target/riscv/tcg/tcg-cpu.c
++++ b/target/riscv/tcg/tcg-cpu.c
+@@ -947,7 +947,7 @@ static void cpu_add_multi_ext_prop(Object *cpu_obj,
+                         cpu_set_multi_ext_cfg,
+                         NULL, (void *)multi_cfg);
+ 
+-    if ((!generic_cpu && !is_andes_riscv_cpu_type(cpu_obj)) || deprecated_ext) {
++    if (!generic_cpu || deprecated_ext) {
+         return;
+     }
+ 
+-- 
+2.34.1
+

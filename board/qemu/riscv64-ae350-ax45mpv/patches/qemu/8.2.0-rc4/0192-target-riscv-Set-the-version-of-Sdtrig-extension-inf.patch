@@ -1,0 +1,62 @@
+From 9ff71d003f3a0c7359982bb3f6876bf8a47387bb Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Thu, 25 Jan 2024 11:01:16 +0800
+Subject: [PATCH 192/241] target/riscv: Set the version of Sdtrig extension
+ info CSR tinfo
+
+We are implementing Sdtrig extension version 1.0 of RISC-V debug
+specification. Therefore, set the version field of CSR tinfo to 1.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 11 ++++++++---
+ target/riscv/debug.h |  4 ++++
+ 2 files changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index 405ec370fd..b33650ec44 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -1171,9 +1171,14 @@ void tdata_csr_write(CPURISCVState *env, int tdata_index, target_ulong val)
+ target_ulong tinfo_csr_read(CPURISCVState *env)
+ {
+     /* assume all triggers support the same types of triggers */
+-    return BIT(TRIGGER_TYPE_AD_MATCH) |
+-           BIT(TRIGGER_TYPE_INST_CNT) |
+-           BIT(TRIGGER_TYPE_AD_MATCH6);
++    target_ulong tinfo;
++
++    tinfo = BIT(TRIGGER_TYPE_AD_MATCH) |
++            BIT(TRIGGER_TYPE_INST_CNT) |
++            BIT(TRIGGER_TYPE_AD_MATCH6);
++    tinfo = set_field(tinfo, TINFO_VERSION, RV_SDTRIG_VERSION);
++
++    return tinfo;
+ }
+ 
+ void riscv_cpu_debug_excp_handler(CPUState *cs)
+diff --git a/target/riscv/debug.h b/target/riscv/debug.h
+index a6d94b26ab..07a47ce682 100644
+--- a/target/riscv/debug.h
++++ b/target/riscv/debug.h
+@@ -23,6 +23,7 @@
+ #define RISCV_DEBUG_H
+ 
+ #define RV_MAX_TRIGGERS         2
++#define RV_SDTRIG_VERSION       1
+ 
+ /* register index of tdata CSRs */
+ enum {
+@@ -137,6 +138,9 @@ enum {
+ #define ITRIGGER_U_SHIFT      6
+ #define ITRIGGER_VU_SHIFT     25
+ 
++/* tinfo field masks */
++#define TINFO_VERSION         (0xff << 24)
++
+ bool tdata_available(CPURISCVState *env, int tdata_index);
+ 
+ target_ulong tselect_csr_read(CPURISCVState *env);
+-- 
+2.34.1
+

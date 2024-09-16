@@ -1,0 +1,54 @@
+From 889fb79ae344cafb290bb0ba0886a13bd88ce535 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 2 Aug 2023 15:46:37 +0800
+Subject: [PATCH 026/241] target/riscv: remove write_csr() from read-only CSRs.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c       | 14 +++++++-------
+ target/riscv/csr_andes_nx45v.c |  2 +-
+ 2 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 52d96814aa..1da4ab21e9 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -108,15 +108,15 @@ void andes_cpu_do_interrupt_post(CPUState *cs)
+ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     /* ================== AndeStar V5 machine mode CSRs ================== */
+     /* Configuration Registers */
+-    [CSR_MICM_CFG]  = { "micm_cfg",          any, read_csr,      write_csr},
+-    [CSR_MDCM_CFG]  = { "mdcm_cfg",          any, read_csr,      write_csr},
+-    [CSR_MMSC_CFG]  = { "mmsc_cfg",          any, read_csr,      write_csr},
+-    [CSR_MMSC_CFG2] = { "mmsc_cfg2",         any, read_csr,      write_csr},
+-    [CSR_MVEC_CFG]  = { "mvec_cfg",          any, read_csr,      write_csr},
++    [CSR_MICM_CFG]  = { "micm_cfg",          any, read_csr },
++    [CSR_MDCM_CFG]  = { "mdcm_cfg",          any, read_csr },
++    [CSR_MMSC_CFG]  = { "mmsc_cfg",          any, read_csr },
++    [CSR_MMSC_CFG2] = { "mmsc_cfg2",         any, read_csr },
++    [CSR_MVEC_CFG]  = { "mvec_cfg",          any, read_csr },
+ 
+     /* Crash Debug CSRs */
+-    [CSR_MCRASH_STATESAVE]  = { "mcrash_statesave",  any, read_csr, write_csr},
+-    [CSR_MSTATUS_CRASHSAVE] = { "mstatus_crashsave", any, read_csr, write_csr},
++    [CSR_MCRASH_STATESAVE]  = { "mcrash_statesave",  any, read_csr },
++    [CSR_MSTATUS_CRASHSAVE] = { "mstatus_crashsave", any, read_csr },
+ 
+     /* Memory CSRs */
+     [CSR_MILMB]          = { "milmb",             any, read_csr, write_csr},
+diff --git a/target/riscv/csr_andes_nx45v.c b/target/riscv/csr_andes_nx45v.c
+index f1864967f0..3f7560bec5 100644
+--- a/target/riscv/csr_andes_nx45v.c
++++ b/target/riscv/csr_andes_nx45v.c
+@@ -14,7 +14,7 @@ static RISCVException write_mecc_code(CPURISCVState *env, int csrno,
+ 
+ void andes_spec_csr_init_nx45v(AndesCsr *andes_csr)
+ {
+-    andes_csr->csrno[0] = 0;
++    andes_csr->csrno[CSR_MECC_CODE] = 0;
+ 
+     andes_csr_ops[CSR_MECC_CODE].write = write_mecc_code;
+ }
+-- 
+2.34.1
+

@@ -1,0 +1,308 @@
+From b4a210e85ca2c0ea7306aea429ceaceeaf4ec99b Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Wed, 23 Aug 2023 16:49:50 +0800
+Subject: [PATCH 068/241] atcsmu: Add reset vector, wrsr, scratch, pcsm_scratch
+ support
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/andes_atcsmu.c         | 196 ++++++++++++++++++++++++++++++++
+ include/hw/riscv/andes_atcsmu.h |  36 +++++-
+ 2 files changed, 231 insertions(+), 1 deletion(-)
+
+diff --git a/hw/riscv/andes_atcsmu.c b/hw/riscv/andes_atcsmu.c
+index 5ae1ebcbf2..989f205fab 100644
+--- a/hw/riscv/andes_atcsmu.c
++++ b/hw/riscv/andes_atcsmu.c
+@@ -23,6 +23,7 @@
+ #include "sysemu/runstate.h"
+ #include "hw/qdev-properties.h"
+ #include "hw/riscv/andes_atcsmu.h"
++#include "target/riscv/cpu.h"
+ 
+ /* #define DEBUG_ATCSMU */
+ /* #define MORE_HOOK */
+@@ -39,19 +40,190 @@
+ #define LOG(x...) yLOG(x)
+ #endif
+ 
++static uint32_t
++reset_vector_read(int hartid, bool data_hi)
++{
++    CPUState *cpu = qemu_get_cpu(hartid);
++    if (cpu) {
++        CPURISCVState *env = cpu->env_ptr;
++        if (data_hi) {
++            return env->resetvec = (env->resetvec >> 32) ;
++        } else {
++            return env->resetvec & (UINT32_MAX);
++        }
++    }
++    return 0;
++}
++
++
++static void
++reset_vector_write(int hartid, uint64_t value, bool data_hi)
++{
++    CPUState *cpu = qemu_get_cpu(hartid);
++    if (cpu) {
++        CPURISCVState *env = cpu->env_ptr;
++        if (data_hi) {
++            env->resetvec = (env->resetvec << 32 >> 32) |
++                            ((value & UINT32_MAX) << 32);
++        } else {
++            env->resetvec = (env->resetvec >> 32 << 32) | (value & UINT32_MAX);
++        }
++    }
++}
++
++
+ static uint64_t
+ andes_atcsmu_read(void *opaque, hwaddr addr, unsigned size)
+ {
++    AndesATCSMUState *smu = ANDES_ATCSMU(opaque);
++    switch (addr) {
++    case ATCSMU_WRSR:
++        return smu->wrsr;
++        break;
++    case ATCSMU_SCRATCH:
++        return smu->scratch;
++        break;
++    case ATCSMU_HART0_RESET_VECTOR_LO:
++        return reset_vector_read(0, 0);
++        break;
++    case ATCSMU_HART1_RESET_VECTOR_LO:
++        return reset_vector_read(1, 0);
++        break;
++    case ATCSMU_HART2_RESET_VECTOR_LO:
++        return reset_vector_read(2, 0);
++        break;
++    case ATCSMU_HART3_RESET_VECTOR_LO:
++        return reset_vector_read(3, 0);
++        break;
++    case ATCSMU_HART4_RESET_VECTOR_LO:
++        return reset_vector_read(4, 0);
++        break;
++    case ATCSMU_HART5_RESET_VECTOR_LO:
++        return reset_vector_read(5, 0);
++        break;
++    case ATCSMU_HART6_RESET_VECTOR_LO:
++        return reset_vector_read(6, 0);
++        break;
++    case ATCSMU_HART7_RESET_VECTOR_LO:
++        return reset_vector_read(7, 0);
++        break;
++    case ATCSMU_HART0_RESET_VECTOR_HI:
++        return reset_vector_read(0, 1);
++        break;
++    case ATCSMU_HART1_RESET_VECTOR_HI:
++        return reset_vector_read(1, 1);
++        break;
++    case ATCSMU_HART2_RESET_VECTOR_HI:
++        return reset_vector_read(2, 1);
++        break;
++    case ATCSMU_HART3_RESET_VECTOR_HI:
++        return reset_vector_read(3, 1);
++        break;
++    case ATCSMU_HART4_RESET_VECTOR_HI:
++        return reset_vector_read(4, 1);
++        break;
++    case ATCSMU_HART5_RESET_VECTOR_HI:
++        return reset_vector_read(5, 1);
++        break;
++    case ATCSMU_HART6_RESET_VECTOR_HI:
++        return reset_vector_read(6, 1);
++        break;
++    case ATCSMU_HART7_RESET_VECTOR_HI:
++        return reset_vector_read(7, 1);
++        break;
++    case ATCSMU_PCS3_SCRATCH:
++        return smu->pcs_regs[0].pcs_scratch;
++        break;
++    case ATCSMU_PCS4_SCRATCH:
++        return smu->pcs_regs[1].pcs_scratch;
++        break;
++    case ATCSMU_PCS5_SCRATCH:
++        return smu->pcs_regs[2].pcs_scratch;
++        break;
++    case ATCSMU_PCS6_SCRATCH:
++        return smu->pcs_regs[3].pcs_scratch;
++        break;
++    case ATCSMU_PCS7_SCRATCH:
++        return smu->pcs_regs[4].pcs_scratch;
++        break;
++    case ATCSMU_PCS8_SCRATCH:
++        return smu->pcs_regs[5].pcs_scratch;
++        break;
++    case ATCSMU_PCS9_SCRATCH:
++        return smu->pcs_regs[6].pcs_scratch;
++        break;
++    case ATCSMU_PCS10_SCRATCH:
++        return smu->pcs_regs[7].pcs_scratch;
++        break;
++    default:
++        LOGGE("%s: Bad addr %x\n", __func__, (int)addr);
++    }
+     return 0;
+ }
+ 
+ static void
+ andes_atcsmu_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+ {
++    AndesATCSMUState *smu = ANDES_ATCSMU(opaque);
+     switch (addr) {
++    case ATCSMU_WRSR:
++        smu->wrsr &= ~value;
++        break;
++    case ATCSMU_SCRATCH:
++        smu->scratch = value;
++        break;
++    case ATCSMU_HART0_RESET_VECTOR_LO:
++        reset_vector_write(0, value, 0);
++        break;
++    case ATCSMU_HART1_RESET_VECTOR_LO:
++        reset_vector_write(1, value, 0);
++        break;
++    case ATCSMU_HART2_RESET_VECTOR_LO:
++        reset_vector_write(2, value, 0);
++        break;
++    case ATCSMU_HART3_RESET_VECTOR_LO:
++        reset_vector_write(3, value, 0);
++        break;
++    case ATCSMU_HART4_RESET_VECTOR_LO:
++        reset_vector_write(4, value, 0);
++        break;
++    case ATCSMU_HART5_RESET_VECTOR_LO:
++        reset_vector_write(5, value, 0);
++        break;
++    case ATCSMU_HART6_RESET_VECTOR_LO:
++        reset_vector_write(6, value, 0);
++        break;
++    case ATCSMU_HART7_RESET_VECTOR_LO:
++        reset_vector_write(7, value, 0);
++        break;
++    case ATCSMU_HART0_RESET_VECTOR_HI:
++        reset_vector_write(0, value, 1);
++        break;
++    case ATCSMU_HART1_RESET_VECTOR_HI:
++        reset_vector_write(1, value, 1);
++        break;
++    case ATCSMU_HART2_RESET_VECTOR_HI:
++        reset_vector_write(2, value, 1);
++        break;
++    case ATCSMU_HART3_RESET_VECTOR_HI:
++        reset_vector_write(3, value, 1);
++        break;
++    case ATCSMU_HART4_RESET_VECTOR_HI:
++        reset_vector_write(4, value, 1);
++        break;
++    case ATCSMU_HART5_RESET_VECTOR_HI:
++        reset_vector_write(5, value, 1);
++        break;
++    case ATCSMU_HART6_RESET_VECTOR_HI:
++        reset_vector_write(6, value, 1);
++        break;
++    case ATCSMU_HART7_RESET_VECTOR_HI:
++        reset_vector_write(7, value, 1);
++        break;
+     case ATCSMU_SMUCR:
+         switch (value) {
+         case SMUCMD_RESET:
++            smu->wrsr |= 0x10;
+             qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+             break;
+         case SMUCMD_POWEROFF:
+@@ -59,6 +231,30 @@ andes_atcsmu_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+             break;
+         }
+         break;
++    case ATCSMU_PCS3_SCRATCH:
++        smu->pcs_regs[0].pcs_scratch = value;
++        break;
++    case ATCSMU_PCS4_SCRATCH:
++        smu->pcs_regs[1].pcs_scratch = value;
++        break;
++    case ATCSMU_PCS5_SCRATCH:
++        smu->pcs_regs[2].pcs_scratch = value;
++        break;
++    case ATCSMU_PCS6_SCRATCH:
++        smu->pcs_regs[3].pcs_scratch = value;
++        break;
++    case ATCSMU_PCS7_SCRATCH:
++        smu->pcs_regs[4].pcs_scratch = value;
++        break;
++    case ATCSMU_PCS8_SCRATCH:
++        smu->pcs_regs[5].pcs_scratch = value;
++        break;
++    case ATCSMU_PCS9_SCRATCH:
++        smu->pcs_regs[6].pcs_scratch = value;
++        break;
++    case ATCSMU_PCS10_SCRATCH:
++        smu->pcs_regs[7].pcs_scratch = value;
++        break;
+     default:
+         LOGGE("%s: Bad addr %x (value %x)\n", __func__, (int)addr, (int)value);
+     }
+diff --git a/include/hw/riscv/andes_atcsmu.h b/include/hw/riscv/andes_atcsmu.h
+index 42d916bf98..b77e9a4359 100644
+--- a/include/hw/riscv/andes_atcsmu.h
++++ b/include/hw/riscv/andes_atcsmu.h
+@@ -24,19 +24,53 @@
+ #define ANDES_ATCSMU(obj) \
+     OBJECT_CHECK(AndesATCSMUState, (obj), TYPE_ANDES_ATCSMU)
+ 
++typedef struct pcs_registers {
++    uint32_t pcs_scratch;
++} pcs_registers;
++
+ typedef struct AndesATCSMUState {
+     /*< private >*/
+     SysBusDevice parent_obj;
+ 
+     /*< public >*/
+     MemoryRegion mmio;
+-
++    uint32_t wrsr;
+     /* config */
+     uint32_t smu_base_addr;
+     uint32_t smu_base_size;
++    uint32_t scratch;
++    pcs_registers pcs_regs[8];
+ } AndesATCSMUState;
+ 
++#define ATCSMU_WRSR         0x10
+ #define ATCSMU_SMUCR        0x14
++#define ATCSMU_SCRATCH      0x40
++#define ATCSMU_HART0_RESET_VECTOR_LO 0x50
++#define ATCSMU_HART1_RESET_VECTOR_LO 0x54
++#define ATCSMU_HART2_RESET_VECTOR_LO 0x58
++#define ATCSMU_HART3_RESET_VECTOR_LO 0x5C
++#define ATCSMU_HART0_RESET_VECTOR_HI 0x60
++#define ATCSMU_HART1_RESET_VECTOR_HI 0x64
++#define ATCSMU_HART2_RESET_VECTOR_HI 0x68
++#define ATCSMU_HART3_RESET_VECTOR_HI 0x6C
++
++#define ATCSMU_PCS3_SCRATCH          0x84
++#define ATCSMU_PCS4_SCRATCH          0xA4
++#define ATCSMU_PCS5_SCRATCH          0xC4
++#define ATCSMU_PCS6_SCRATCH          0xE4
++#define ATCSMU_PCS7_SCRATCH          0x104
++#define ATCSMU_PCS8_SCRATCH          0x124
++#define ATCSMU_PCS9_SCRATCH          0x164
++#define ATCSMU_PCS10_SCRATCH         0x184
++
++#define ATCSMU_HART4_RESET_VECTOR_LO 0x200
++#define ATCSMU_HART5_RESET_VECTOR_LO 0x204
++#define ATCSMU_HART6_RESET_VECTOR_LO 0x208
++#define ATCSMU_HART7_RESET_VECTOR_LO 0x20C
++#define ATCSMU_HART4_RESET_VECTOR_HI 0x210
++#define ATCSMU_HART5_RESET_VECTOR_HI 0x214
++#define ATCSMU_HART6_RESET_VECTOR_HI 0x218
++#define ATCSMU_HART7_RESET_VECTOR_HI 0x21C
+ 
+ /* SMUCR */
+ #define SMUCMD_RESET        0x3c
+-- 
+2.34.1
+

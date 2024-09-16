@@ -1,0 +1,240 @@
+From 2fea38712cb782645bb4b21e5f03e3164304523a Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 4 Aug 2023 15:02:21 +0800
+Subject: [PATCH 029/241] target/riscv: Add mmsc_cfg/mmsc_cfg2 CSR support.    
+           Add mecc_code CSR availability check.               Change CSR data
+ type to 'target_ulong'.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c                  |  2 +-
+ target/riscv/csr_andes.c            | 17 ++++++--
+ target/riscv/csr_andes.h            | 66 ++++++++++++++++++++++++++++-
+ target/riscv/csr_andes_nx45v.c      |  9 ----
+ target/riscv/csr_andes_nx45v_meta.c | 37 ++++++++++++++++
+ target/riscv/meson.build            |  2 +-
+ 6 files changed, 117 insertions(+), 16 deletions(-)
+ delete mode 100644 target/riscv/csr_andes_nx45v.c
+ create mode 100644 target/riscv/csr_andes_nx45v_meta.c
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index fcc3578638..7195e3e6da 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -729,7 +729,7 @@ static void rv64_andes_nx45v_cpu_init(Object *obj)
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVU | RVV | RVX);
+-    rv64_andes_common_cpu_init(obj, andes_spec_csr_init_nx45v);
++    rv64_andes_common_cpu_init(obj, andes_spec_csr_init_nx45v_meta);
+     cfg->mmu = false;
+ #ifndef CONFIG_USER_ONLY
+     memset(&cfg->satp_mode, 0, sizeof(RISCVSATPMap));
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 55e2908a62..6cbe8bdeec 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -18,6 +18,17 @@ static RISCVException any(CPURISCVState *env,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException ecc(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_ECC) == 0) {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++    else {
++        return RISCV_EXCP_NONE;
++    }
++}
++
+ static RISCVException write_mcache_ctl(CPURISCVState *env,
+                                        int csrno,
+                                        target_ulong val)
+@@ -101,8 +112,8 @@ void andes_csr_init(AndesCsr *andes_csr)
+                                         (1UL << V5_MMISC_CTL_MSA_OR_UNA);
+     andes_csr->csrno[CSR_MCACHE_CTL] =  (1UL << V5_MCACHE_CTL_IC_FIRST_WORD) |
+                                         (1UL << V5_MCACHE_CTL_DC_FIRST_WORD);
+-    andes_csr->csrno[CSR_MSP_BOUND] =   ~((target_long)0);  // all-one reset value
+-    andes_csr->csrno[CSR_MSP_BASE] =    ~((target_long)0);
++    andes_csr->csrno[CSR_MSP_BOUND] =   ~((target_ulong)0);  // all-one reset value
++    andes_csr->csrno[CSR_MSP_BASE] =    ~((target_ulong)0);
+ }
+ 
+ void andes_vec_init(AndesVec *andes_vec)
+@@ -157,7 +168,7 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     /* Memory CSRs */
+     [CSR_MILMB]          = { "milmb",             any, read_csr, write_csr},
+     [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_csr},
+-    [CSR_MECC_CODE]      = { "mecc_code",         any, read_csr,
++    [CSR_MECC_CODE]      = { "mecc_code",         ecc, read_csr,
+                                                        write_mecc_code    },
+     [CSR_MNVEC]          = { "mnvec",             any, read_csr,
+                                                        write_all_ignore   },
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 3954aa2146..72cdb7eda9 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -6,7 +6,7 @@
+ #define ANDES_CSR_TABLE_SIZE 0x1000
+ 
+ typedef struct andes_csr {
+-    target_long csrno[ANDES_CSR_TABLE_SIZE];
++    target_ulong csrno[ANDES_CSR_TABLE_SIZE];
+ } AndesCsr;
+ 
+ typedef struct AndesVec {
+@@ -33,6 +33,68 @@ typedef struct AndesVec {
+ #define V5_MCACHE_CTL_DC_COHEN              19
+ #define V5_MCACHE_CTL_DC_COHSTA             20
+ 
++/* mmsc_cfg */
++#define MASK_MMSC_CFG_ECC                   (0x01)
++#define MASK_MMSC_CFG_TLB_ECC               (0x03 << 1)
++#define MASK_MMSC_CFG_ECD                   (0x01 << 3)
++#define MASK_MMSC_CFG_PFT                   (0x01 << 4)
++#define MASK_MMSC_CFG_HSP                   (0x01 << 5)
++#define MASK_MMSC_CFG_ACE                   (0x01 << 6)
++#define MASK_MMSC_CFG_ADDPMC                (0x1F << 7)
++#define MASK_MMSC_CFG_VPLIC                 (0x01 << 12)
++#define MASK_MMSC_CFG_EV5PE                 (0x01 << 13)
++#define MASK_MMSC_CFG_LMSLVP                (0x01 << 14)
++#define MASK_MMSC_CFG_PMNDS                 (0x01 << 15)
++#define MASK_MMSC_CFG_CCTLCSR               (0x01 << 16)
++#define MASK_MMSC_CFG_EFHW                  (0x01 << 17)
++#define MASK_MMSC_CFG_VCCTL                 (0x03 << 18)
++#define MASK_MMSC_CFG_EXCSLVL               (0x03 << 20)
++#define MASK_MMSC_CFG_NOPMC                 (0x01 << 22)
++#define MASK_MMSC_CFG_SPE_AFT               (0x01 << 23)
++#define MASK_MMSC_CFG_ESLEEP                (0x01 << 24)
++#define MASK_MMSC_CFG_PPI                   (0x01 << 25)
++#define MASK_MMSC_CFG_FIO                   (0x01 << 26)
++#define MASK_MMSC_CFG_CLIC                  (0x01 << 27)
++#define MASK_MMSC_CFG_ECLIC                 (0x01 << 28)
++#define MASK_MMSC_CFG_EDSP                  (0x01 << 29)
++#define MASK_MMSC_CFG_PPMA                  (0x01 << 30)
++#define MASK_MMSC_CFG_MSC_EXT               (0x01 << 31)
++/* for 64-bit mmsc_cfg */
++#define MASK_MMSC_CFG_BF16CVT               ((uint64_t)0x01 << 32)
++#define MASK_MMSC_CFG_ZFH                   ((uint64_t)0x01 << 33)
++#define MASK_MMSC_CFG_VL4                   ((uint64_t)0x01 << 34)
++#define MASK_MMSC_CFG_CRASHSAVE             ((uint64_t)0x01 << 35)
++#define MASK_MMSC_CFG_VECCFG                ((uint64_t)0x01 << 36)
++#define MASK_MMSC_CFG_FINV                  ((uint64_t)0x01 << 37)
++#define MASK_MMSC_CFG_PP16                  ((uint64_t)0x01 << 38)
++#define MASK_MMSC_CFG_VSIH                  ((uint64_t)0x01 << 40)
++#define MASK_MMSC_CFG_ECDV                  ((uint64_t)0x03 << 41)
++#define MASK_MMSC_CFG_VDOT                  ((uint64_t)0x01 << 43)
++#define MASK_MMSC_CFG_VPFH                  ((uint64_t)0x01 << 44)
++#define MASK_MMSC_CFG_CCACHEMP_CFG          ((uint64_t)0x01 << 45)
++#define MASK_MMSC_CFG_CCACHE                ((uint64_t)0x01 << 46)
++#define MASK_MMSC_CFG_IO_COHP               ((uint64_t)0x01 << 47)
++#define MASK_MMSC_CFG_CORE_PCLUS            ((uint64_t)0x0F << 48)
++#define MASK_MMSC_CFG_RVARCH                ((uint64_t)0x01 << 52)
++
++/* mmsc_cfg_2 */
++#define MASK_MMSC_CFG_2_BF16CVT             (0x01)
++#define MASK_MMSC_CFG_2_ZFH                 (0x01 << 1)
++#define MASK_MMSC_CFG_2_VL4                 (0x01 << 2)
++#define MASK_MMSC_CFG_2_CRASHSAVE           (0x01 << 3)
++#define MASK_MMSC_CFG_2_VECCFG              (0x01 << 4)
++#define MASK_MMSC_CFG_2_FINV                (0x01 << 5)
++#define MASK_MMSC_CFG_2_PP16                (0x01 << 6)
++#define MASK_MMSC_CFG_2_VSIH                (0x01 << 8)
++#define MASK_MMSC_CFG_2_ECDV                (0x03 << 9)
++#define MASK_MMSC_CFG_2_VDOT                (0x01 << 11)
++#define MASK_MMSC_CFG_2_VPFH                (0x01 << 12)
++#define MASK_MMSC_CFG_2_CCACHEMP_CFG        (0x01 << 13)
++#define MASK_MMSC_CFG_2_CCACHE              (0x01 << 14)
++#define MASK_MMSC_CFG_2_IO_COHP             (0x01 << 15)
++#define MASK_MMSC_CFG_2_CORE_PCLUS          (0x0F << 16)
++#define MASK_MMSC_CFG_2_RVARCH              (0x01 << 20)
++
+ #define WRITE_MASK_CSR_MECC_CODE            0xFF
+ #define WRITE_MASK_CSR_UITB                 0xFFFFFFFC
+ #define WRITE_MASK_CSR_MPFT_CTL             0x1F0
+@@ -42,6 +104,6 @@ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+ void andes_cpu_do_interrupt_post(CPUState *cpu);
+ 
+-void andes_spec_csr_init_nx45v(AndesCsr *);
++void andes_spec_csr_init_nx45v_meta(AndesCsr *);
+ 
+ #endif /* RISCV_CSR_ANDES_INC_H */
+diff --git a/target/riscv/csr_andes_nx45v.c b/target/riscv/csr_andes_nx45v.c
+deleted file mode 100644
+index 786aa340eb..0000000000
+--- a/target/riscv/csr_andes_nx45v.c
++++ /dev/null
+@@ -1,9 +0,0 @@
+-#include "qemu/osdep.h"
+-#include "cpu.h"
+-#include "csr_andes.h"
+-
+-
+-void andes_spec_csr_init_nx45v(AndesCsr *andes_csr)
+-{
+-    andes_csr->csrno[CSR_MECC_CODE] = 0;
+-}
+\ No newline at end of file
+diff --git a/target/riscv/csr_andes_nx45v_meta.c b/target/riscv/csr_andes_nx45v_meta.c
+new file mode 100644
+index 0000000000..a59201c0ea
+--- /dev/null
++++ b/target/riscv/csr_andes_nx45v_meta.c
+@@ -0,0 +1,37 @@
++#include "qemu/osdep.h"
++#include "cpu.h"
++#include "csr_andes.h"
++
++
++#define MASK_MMSC_CFG_L2CMP_CFG    ((uint64_t)0x1 << 45)
++#define MASK_MMSC_CFG_L2C          ((uint64_t)0x1 << 46)
++#define MASK_MMSC_CFG_IOCP         ((uint64_t)0x1 << 46)
++
++static RISCVException read_mmsc_cfg(CPURISCVState *env, int csrno,
++                                    target_ulong *val)
++{
++    static target_ulong mask = MASK_MMSC_CFG_ECC     | MASK_MMSC_CFG_ECD
++                             | MASK_MMSC_CFG_PFT     | MASK_MMSC_CFG_HSP
++                             | MASK_MMSC_CFG_ACE     | MASK_MMSC_CFG_VPLIC
++                             | MASK_MMSC_CFG_EV5PE   | MASK_MMSC_CFG_LMSLVP
++                             | MASK_MMSC_CFG_PMNDS   | MASK_MMSC_CFG_CCTLCSR
++                             | MASK_MMSC_CFG_VCCTL   | MASK_MMSC_CFG_NOPMC
++                             | MASK_MMSC_CFG_EDSP    | MASK_MMSC_CFG_PPMA
++                             | MASK_MMSC_CFG_BF16CVT | MASK_MMSC_CFG_ZFH
++                             | MASK_MMSC_CFG_VL4     | MASK_MMSC_CFG_VECCFG
++                             | MASK_MMSC_CFG_VSIH    | MASK_MMSC_CFG_VDOT
++                             | MASK_MMSC_CFG_VPFH    | MASK_MMSC_CFG_L2CMP_CFG
++                             | MASK_MMSC_CFG_L2C     | MASK_MMSC_CFG_IOCP
++                             | MASK_MMSC_CFG_CORE_PCLUS
++                             | MASK_MMSC_CFG_RVARCH;
++
++    *val = env->andes_csr.csrno[CSR_MMSC_CFG] & mask;
++    return RISCV_EXCP_NONE;
++}
++
++void andes_spec_csr_init_nx45v_meta(AndesCsr *andes_csr)
++{
++    andes_csr->csrno[CSR_MECC_CODE] = 0;
++
++    andes_csr_ops[CSR_MMSC_CFG].read = read_mmsc_cfg;
++}
+\ No newline at end of file
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index ce537f15a5..99c9f5294f 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -14,7 +14,7 @@ riscv_ss.add(gen)
+ riscv_ss.add(files(
+   'andes_helper.c',
+   'csr_andes.c',
+-  'csr_andes_nx45v.c',
++  'csr_andes_nx45v_meta.c',
+   'cpu.c',
+   'cpu_helper.c',
+   'csr.c',
+-- 
+2.34.1
+

@@ -1,0 +1,169 @@
+From 13e092468ec9b94dcef7f3a153ca264198ceb84b Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 16 Aug 2023 15:01:40 +0800
+Subject: [PATCH 039/241] target/riscv: Add support of PMA CSRs.              
+ Add spec_csr_init arg to rv32_andes_common_cpu_init().               Fix
+ typos.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c             | 17 ++++++++----
+ target/riscv/csr_andes.c       | 51 +++++++++++++++++++++-------------
+ target/riscv/csr_andes_nx45v.c |  2 +-
+ 3 files changed, 43 insertions(+), 27 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 02ac6fe0ba..30d0565703 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -822,7 +822,9 @@ static void rv32_imafcu_nommu_cpu_init(Object *obj)
+     cpu->cfg.pmp = true;
+ }
+ 
+-static void rv32_andes_common_cpu_init(Object *obj)
++typedef void (*fp_csr_init_fn)(AndesCsr *);
++
++static void rv32_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+@@ -839,6 +841,9 @@ static void rv32_andes_common_cpu_init(Object *obj)
+ 
+     /* Setup Andes Custom CSR */
+     andes_csr_init(&env->andes_csr);
++    if (spec_csr_init != NULL) {
++        spec_csr_init(&env->andes_csr);
++    }
+     andes_vec_init(&env->andes_vec);
+ 
+     env->do_interrupt_post = andes_cpu_do_interrupt_post;
+@@ -854,7 +859,7 @@ static void rv32_andes_common_cpu_init(Object *obj)
+ static void rv32_andes_a25_cpu_init(Object *obj) {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+ 
+-    rv32_andes_common_cpu_init(obj);
++    rv32_andes_common_cpu_init(obj, NULL);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0a25;
+@@ -864,7 +869,7 @@ static void rv32_andes_a27_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+ 
+-    rv32_andes_common_cpu_init(obj);
++    rv32_andes_common_cpu_init(obj, NULL);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0a27;
+@@ -875,7 +880,7 @@ static void rv32_andes_a45_cpu_init(Object *obj)
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     AndesCsr *andes_csr = &RISCV_CPU(obj)->env.andes_csr;
+ 
+-    rv32_andes_common_cpu_init(obj);
++    rv32_andes_common_cpu_init(obj, NULL);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0a45;
+@@ -890,7 +895,7 @@ static void rv32_andes_n25_cpu_init(Object *obj)
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVU);
+-    rv32_andes_common_cpu_init(obj);
++    rv32_andes_common_cpu_init(obj, NULL);
+     cfg->mmu = false;
+ #ifndef CONFIG_USER_ONLY
+     memset(&cfg->satp_mode, 0, sizeof(RISCVSATPMap));
+@@ -907,7 +912,7 @@ static void rv32_andes_n45_cpu_init(Object *obj)
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVU);
+-    rv32_andes_common_cpu_init(obj);
++    rv32_andes_common_cpu_init(obj, NULL);
+     cfg->mmu = false;
+ #ifndef CONFIG_USER_ONLY
+     memset(&cfg->satp_mode, 0, sizeof(RISCVSATPMap));
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 1feab66016..054017e57f 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -82,6 +82,17 @@ static RISCVException ppi(CPURISCVState *env, int csrno)
+     }
+ }
+ 
++static RISCVException ppma(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    if (get_field(csr->csrno[CSR_MMSC_CFG], MASK_MMSC_CFG_PPMA) == 0) {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++    else {
++        return RISCV_EXCP_NONE;
++    }
++}
++
+ static RISCVException pmnds(CPURISCVState *env, int csrno)
+ {
+     AndesCsr *csr = &env->andes_csr;
+@@ -466,26 +477,26 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_PUSHMXSTATUS] = { "pushmxstatus",        any, read_csr, write_csr},
+ 
+     /* Andes Physical Memory Attribute(PMA) CSRs */
+-    [CSR_PMACFG0]   = { "pmacfg0",                any, read_csr, write_csr},
+-    [CSR_PMACFG1]   = { "pmacfg1",                any, read_csr, write_csr},
+-    [CSR_PMACFG2]   = { "pmacfg2",                any, read_csr, write_csr},
+-    [CSR_PMACFG3]   = { "pmacfg3",                any, read_csr, write_csr},
+-    [CSR_PMAADDR0]  = { "pmaaddr0",               any, read_csr, write_csr},
+-    [CSR_PMAADDR1]  = { "pmaaddr1",               any, read_csr, write_csr},
+-    [CSR_PMAADDR2]  = { "pmaaddr2",               any, read_csr, write_csr},
+-    [CSR_PMAADDR3]  = { "pmaaddr3",               any, read_csr, write_csr},
+-    [CSR_PMAADDR4]  = { "pmaaddr4",               any, read_csr, write_csr},
+-    [CSR_PMAADDR5]  = { "pmaaddr5",               any, read_csr, write_csr},
+-    [CSR_PMAADDR6]  = { "pmaaddr6",               any, read_csr, write_csr},
+-    [CSR_PMAADDR7]  = { "pmaaddr7",               any, read_csr, write_csr},
+-    [CSR_PMAADDR8]  = { "pmaaddr8",               any, read_csr, write_csr},
+-    [CSR_PMAADDR9]  = { "pmaaddr9",               any, read_csr, write_csr},
+-    [CSR_PMAADDR10] = { "pmaaddr10",              any, read_csr, write_csr},
+-    [CSR_PMAADDR11] = { "pmaaddr11",              any, read_csr, write_csr},
+-    [CSR_PMAADDR12] = { "pmaaddr12",              any, read_csr, write_csr},
+-    [CSR_PMAADDR13] = { "pmaaddr13",              any, read_csr, write_csr},
+-    [CSR_PMAADDR14] = { "pmaaddr14",              any, read_csr, write_csr},
+-    [CSR_PMAADDR15] = { "pmaaddr15",              any, read_csr, write_csr},
++    [CSR_PMACFG0]   = { "pmacfg0",                ppma, read_csr, write_csr},
++    [CSR_PMACFG1]   = { "pmacfg1",                ppma, read_csr, write_csr},
++    [CSR_PMACFG2]   = { "pmacfg2",                ppma, read_csr, write_csr},
++    [CSR_PMACFG3]   = { "pmacfg3",                ppma, read_csr, write_csr},
++    [CSR_PMAADDR0]  = { "pmaaddr0",               ppma, read_csr, write_csr},
++    [CSR_PMAADDR1]  = { "pmaaddr1",               ppma, read_csr, write_csr},
++    [CSR_PMAADDR2]  = { "pmaaddr2",               ppma, read_csr, write_csr},
++    [CSR_PMAADDR3]  = { "pmaaddr3",               ppma, read_csr, write_csr},
++    [CSR_PMAADDR4]  = { "pmaaddr4",               ppma, read_csr, write_csr},
++    [CSR_PMAADDR5]  = { "pmaaddr5",               ppma, read_csr, write_csr},
++    [CSR_PMAADDR6]  = { "pmaaddr6",               ppma, read_csr, write_csr},
++    [CSR_PMAADDR7]  = { "pmaaddr7",               ppma, read_csr, write_csr},
++    [CSR_PMAADDR8]  = { "pmaaddr8",               ppma, read_csr, write_csr},
++    [CSR_PMAADDR9]  = { "pmaaddr9",               ppma, read_csr, write_csr},
++    [CSR_PMAADDR10] = { "pmaaddr10",              ppma, read_csr, write_csr},
++    [CSR_PMAADDR11] = { "pmaaddr11",              ppma, read_csr, write_csr},
++    [CSR_PMAADDR12] = { "pmaaddr12",              ppma, read_csr, write_csr},
++    [CSR_PMAADDR13] = { "pmaaddr13",              ppma, read_csr, write_csr},
++    [CSR_PMAADDR14] = { "pmaaddr14",              ppma, read_csr, write_csr},
++    [CSR_PMAADDR15] = { "pmaaddr15",              ppma, read_csr, write_csr},
+ 
+     /* Debug/Trace Registers (shared with Debug Mode) */
+     [CSR_TSELECT] = { "tselect",                  any, read_csr, write_csr},
+diff --git a/target/riscv/csr_andes_nx45v.c b/target/riscv/csr_andes_nx45v.c
+index 3177507332..86f6ffc75f 100644
+--- a/target/riscv/csr_andes_nx45v.c
++++ b/target/riscv/csr_andes_nx45v.c
+@@ -5,7 +5,7 @@
+ 
+ #define MASK_MMSC_CFG_L2CMP_CFG    ((uint64_t)0x1 << 45)
+ #define MASK_MMSC_CFG_L2C          ((uint64_t)0x1 << 46)
+-#define MASK_MMSC_CFG_IOCP         ((uint64_t)0x1 << 46)
++#define MASK_MMSC_CFG_IOCP         ((uint64_t)0x1 << 47)
+ 
+ static RISCVException read_mmsc_cfg_nx45v(CPURISCVState *env, int csrno,
+                                           target_ulong *val)
+-- 
+2.34.1
+

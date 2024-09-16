@@ -1,0 +1,294 @@
+From 258458cb345cfeb899133874d67a8ed07e01d694 Mon Sep 17 00:00:00 2001
+From: Dylan Jhong <dylan@andestech.com>
+Date: Wed, 28 Sep 2022 18:01:16 +0800
+Subject: [PATCH 011/241] target/riscv: Support Andes Code Dense(Codense)
+ Extension
+
+ref:
+    eed293fefa target/riscv: Fix wrong ARRAY_SIZE() used in decoding compressed instruction (#31)
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+---
+ target/riscv/XAndesCodenseOps.decode          |  23 ++++
+ target/riscv/cpu.c                            |   4 +-
+ target/riscv/cpu_cfg.h                        |   2 +
+ .../insn_trans/trans_xandescodenseops.c.inc   | 109 ++++++++++++++++++
+ target/riscv/meson.build                      |   2 +
+ target/riscv/translate.c                      |  29 +++--
+ 6 files changed, 160 insertions(+), 9 deletions(-)
+ create mode 100644 target/riscv/XAndesCodenseOps.decode
+ create mode 100644 target/riscv/insn_trans/trans_xandescodenseops.c.inc
+
+diff --git a/target/riscv/XAndesCodenseOps.decode b/target/riscv/XAndesCodenseOps.decode
+new file mode 100644
+index 0000000000..5f69f0d882
+--- /dev/null
++++ b/target/riscv/XAndesCodenseOps.decode
+@@ -0,0 +1,23 @@
++#
++# RISC-V translation routines for the RVXI Base Integer Instruction Set.
++#
++# Copyright (c) 2018 Peer Adelt, peer.adelt@hni.uni-paderborn.de
++#                    Bastian Koppelmann, kbastian@mail.uni-paderborn.de
++#
++# This program is free software; you can redistribute it and/or modify it
++# under the terms and conditions of the GNU General Public License,
++# version 2 or later, as published by the Free Software Foundation.
++#
++# This program is distributed in the hope it will be useful, but WITHOUT
++# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
++# more details.
++#
++# You should have received a copy of the GNU General Public License along with
++# this program.  If not, see <http://www.gnu.org/licenses/>.
++
++
++%imm_ex10 8:1 12:1 3:1 9:1 5:2 2:1 10:2 4:1
++&codense imm_codense
++@ex10     ... .... . . ..... .. &codense imm_codense=%imm_ex10
++execit    100 .... . 0 ..... 00 @ex10
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index a77819f28e..a2377d16e2 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -570,6 +570,7 @@ static void rv64_andes_ax25_cpu_init(Object *obj)
+ 
+     /* Enable Andes Custom extension */
+     cfg->ext_XAndesV5Ops = true;
++    cfg->ext_XAndesCodenseOps = true;
+ 
+     /* Set vendor ID */
+     cfg->mvendorid = 0x0000031e;
+@@ -738,6 +739,7 @@ static void rv32_andes_a25_cpu_init(Object *obj)
+ 
+     /* Enable Andes Custom extension */
+     cfg->ext_XAndesV5Ops = true;
++    cfg->ext_XAndesCodenseOps = true;
+ 
+     /* Set vendor ID */
+     cfg->mvendorid = 0x0000031e;
+@@ -1517,7 +1519,6 @@ const RISCVCPUMultiExtConfig riscv_cpu_extensions[] = {
+     MULTI_EXT_CFG_BOOL("zcmt", ext_zcmt, false),
+     MULTI_EXT_CFG_BOOL("zicond", ext_zicond, false),
+ 
+-<<<<<<< HEAD
+     /* Vector cryptography extensions */
+     MULTI_EXT_CFG_BOOL("zvbb", ext_zvbb, false),
+     MULTI_EXT_CFG_BOOL("zvbc", ext_zvbc, false),
+@@ -1553,6 +1554,7 @@ const RISCVCPUMultiExtConfig riscv_cpu_vendor_exts[] = {
+     MULTI_EXT_CFG_BOOL("xtheadsync", ext_xtheadsync, false),
+     MULTI_EXT_CFG_BOOL("xventanacondops", ext_XVentanaCondOps, false),
+     MULTI_EXT_CFG_BOOL("xandesv5ops", ext_XAndesV5Ops, false),
++    MULTI_EXT_CFG_BOOL("xandescodenseops", ext_XAndesCodenseOps, false),
+ 
+     DEFINE_PROP_END_OF_LIST(),
+ };
+diff --git a/target/riscv/cpu_cfg.h b/target/riscv/cpu_cfg.h
+index b178f77ae7..1cfe4746b0 100644
+--- a/target/riscv/cpu_cfg.h
++++ b/target/riscv/cpu_cfg.h
+@@ -135,6 +135,7 @@ struct RISCVCPUConfig {
+     bool ext_XVentanaCondOps;
+     bool ext_XVentanaCondOps;
+     bool ext_XAndesV5Ops;
++    bool ext_XAndesCodenseOps;
+ 
+     uint32_t pmu_mask;
+     char *priv_spec;
+@@ -195,5 +196,6 @@ MATERIALISE_EXT_PREDICATE(xtheadmempair)
+ MATERIALISE_EXT_PREDICATE(xtheadsync)
+ MATERIALISE_EXT_PREDICATE(XVentanaCondOps)
+ MATERIALISE_EXT_PREDICATE(XAndesV5Ops);
++MATERIALISE_EXT_PREDICATE(XAndesCodenseOps);
+ 
+ #endif
+diff --git a/target/riscv/insn_trans/trans_xandescodenseops.c.inc b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+new file mode 100644
+index 0000000000..df90eab780
+--- /dev/null
++++ b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+@@ -0,0 +1,109 @@
++#include "andes_cpu_bits.h"
++
++#define ANDES_V5_GET_JAL_UIMM(inst) ((extract32(inst, 21, 10) << 1) \
++                           | (extract32(inst, 20, 1) << 11) \
++                           | (extract32(inst, 12, 8) << 12) \
++                           | (extract32(inst, 31, 1) << 20))
++
++static void decode_opc_andes(CPURISCVState *env,
++                             DisasContext *ctx,
++                             uint32_t opcode)
++{
++    /*
++     * A table with predicate (i.e., guard) functions and decoder functions
++     * that are tested in-order until a decoder matches onto the opcode.
++     */
++    static const struct {
++        bool (*guard_func)(DisasContext *);
++        bool (*decode_func)(DisasContext *, uint32_t);
++    } decoders[] = {
++        { always_true_p,  decode_insn32 },
++        { has_XVentanaCondOps_p,  decode_XVentanaCodeOps },
++        { has_XAndesV5Ops_p,  decode_XAndesV5Ops },
++    };
++
++    static const struct {
++        bool (*guard_func)(DisasContext *);
++        bool (*decode_func)(DisasContext *, uint16_t);
++    } decoders_16[] = {
++        { always_true_p,  decode_insn16 },
++        { has_XAndesCodenseOps_p, decode_XAndesCodenseOps },
++    };
++
++    /* Check for compressed insn */
++    uint16_t opcode16 = opcode;
++    if (extract16(opcode16, 0, 2) != 3) {
++        if (!has_ext(ctx, RVC)) {
++            gen_exception_illegal(ctx);
++        } else {
++            ctx->opcode = opcode16;
++
++            for (size_t i = 0; i < ARRAY_SIZE(decoders_16); ++i) {
++                if (decoders_16[i].guard_func(ctx) &&
++                    decoders_16[i].decode_func(ctx, opcode16)) {
++                    return;
++                }
++            }
++        }
++    } else {
++        ctx->opcode = opcode;
++        for (size_t i = 0; i < ARRAY_SIZE(decoders); ++i) {
++            if (decoders[i].guard_func(ctx) &&
++                decoders[i].decode_func(ctx, opcode)) {
++                return;
++            }
++        }
++    }
++
++    gen_exception_illegal(ctx);
++}
++
++static int andes_v5_gen_codense_exec_it(DisasContext *ctx,
++                                        arg_execit *a)
++{
++    uint32_t insn;
++    uint32_t imm_ex10 = a->imm_codense;
++    CPURISCVState *env = ctx->cs->env_ptr;
++    target_ulong uitb_val = 0;
++    riscv_csrrw(env, CSR_UITB, &uitb_val, 0, 0);
++
++    if (extract32(uitb_val, 0, 1)) { /* UTIB.HW == 1 */
++        qemu_log_mask(LOG_GUEST_ERROR,
++            "exec.it: UITB.HW == 1 is not supported by now!\n");
++        gen_exception_illegal(ctx);
++        uint32_t instruction_table[0];
++        insn = instruction_table[imm_ex10 >> 2];
++        return false;
++    } else { /* UTIB.HW == 0 */
++        target_ulong vaddr = (uitb_val & ~0x3) + (imm_ex10 << 2);
++        insn = cpu_ldl_code(env, vaddr);
++    }
++
++    /*
++     * Execute(insn)
++     * do as the replaced instruction, even exceptions,
++     * except ctx->pc_succ_insn value (2).
++     */
++    uint32_t op = MASK_OP_MAJOR(insn);
++    if (op == OPC_RISC_JAL) {
++        /* implement this by hack imm */
++        /* Direct calculate rd and imm instead of decode_insn32_extract_j */
++        int rd = GET_RD(insn);
++        target_long imm = ANDES_V5_GET_JAL_UIMM(insn);
++        target_ulong next_pc = (ctx->base.pc_next >> 21 << 21) | imm;
++        imm = next_pc - ctx->base.pc_next;
++        gen_jal(ctx, rd, imm);
++    } else {
++        /* JARL done as SPEC already */
++        /* presume ctx->pc_succ_insn not changed in any ISA extension */
++        decode_opc_andes(env, ctx, insn);
++    }
++    return true;
++}
++
++static bool trans_execit(DisasContext *ctx, arg_execit *a)
++{
++    andes_v5_gen_codense_exec_it(ctx, a);
++    return true;
++}
++
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index b1e1d36098..07da4793ed 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -5,6 +5,8 @@ gen = [
+   decodetree.process('xthead.decode', extra_args: '--static-decode=decode_xthead'),
+   decodetree.process('XVentanaCondOps.decode', extra_args: '--static-decode=decode_XVentanaCodeOps'),
+   decodetree.process('XAndesV5Ops.decode', extra_args: ['--static-decode=decode_XAndesV5Ops']),
++  decodetree.process('XAndesCodenseOps.decode',extra_args: ['--static-decode=decode_XAndesCodenseOps',
++                                                             '--insnwidth=16']),
+ ]
+ 
+ riscv_ss = ss.source_set()
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index dd355cdd96..77cec14b90 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -1084,6 +1084,7 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+ /* Include decoders for factored-out extensions */
+ #include "decode-XVentanaCondOps.c.inc"
+ #include "decode-XAndesV5Ops.c.inc"
++#include "decode-XAndesCodenseOps.c.inc"
+ 
+ /* Include insn module translation function */
+ #include "insn_trans/trans_rvi.c.inc"
+@@ -1115,6 +1116,7 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+ /* Include decoders for factored-out extensions */
+ #include "decode-XVentanaCondOps.c.inc"
+ #include "insn_trans/trans_xandesv5ops.c.inc"
++#include "insn_trans/trans_xandescodenseops.c.inc"
+ 
+ /* The specification allows for longer insns, but not supported by qemu. */
+ #define MAX_INSN_LEN  4
+@@ -1140,18 +1142,29 @@ static void decode_opc(CPURISCVState *env, DisasContext *ctx, uint16_t opcode)
+         { has_XAndesV5Ops_p,  decode_XAndesV5Ops },
+     };
+ 
++    static const struct {
++        bool (*guard_func)(DisasContext *);
++        bool (*decode_func)(DisasContext *, uint16_t);
++    } decoders_16[] = {
++        { always_true_p,  decode_insn16 },
++        { has_XAndesCodenseOps_p, decode_XAndesCodenseOps },
++    };
++
+     ctx->virt_inst_excp = false;
+     ctx->cur_insn_len = insn_len(opcode);
+     /* Check for compressed insn */
+     if (ctx->cur_insn_len == 2) {
+-        ctx->opcode = opcode;
+-        /*
+-         * The Zca extension is added as way to refer to instructions in the C
+-         * extension that do not include the floating-point loads and stores
+-         */
+-        if ((has_ext(ctx, RVC) || ctx->cfg_ptr->ext_zca) &&
+-            decode_insn16(ctx, opcode)) {
+-            return;
++        if (!has_ext(ctx, RVC) && !ctx->cfg_ptr->ext_zca) {
++            gen_exception_illegal(ctx);
++        } else {
++            ctx->opcode = opcode;
++
++            for (size_t i = 0; i < ARRAY_SIZE(decoders_16); ++i) {
++                if (decoders_16[i].guard_func(ctx) &&
++                    decoders_16[i].decode_func(ctx, opcode)) {
++                    return;
++                }
++            }
+         }
+     } else {
+         uint32_t opcode32 = opcode;
+-- 
+2.34.1
+

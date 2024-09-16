@@ -1,0 +1,1447 @@
+From 6f10a951b82954cec3f7a9c59f99576949394d74 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Mon, 30 Oct 2023 11:28:50 +0800
+Subject: [PATCH 108/241] target/riscv: Add AndStar V5 v1.5 instructions
+ support configs/targets: Add AndesCodene NEXEC.IT configuration support
+
+  Support below new AndeStar V5 v1.5 extensions:
+    1. New Code Dense (NEXEC.IT)
+    2. INT4 Vector Load (VLN8.V/VLNU8.V)
+    3. Scalar BFLOAT16 Conversion (FCVT.S.BF16/FCVT.BF16.S)
+    4. Vector BFLOAT16 Conversion (VFWCVT.S.BF16/VFNCVT.BF16.S)
+    5. Vector Packed FP16 (VFPMADT.VF/VFPMADB.VF)
+    6. Vector Dot Product (VD4DOTS.VV/VD4DOTU.VV/VD4DOTSU.VV)
+    7. Vector Small INT Handling (VLE4.V/VFWCVT.F.NU.V/VFWCVT.F.B.V/VFWCVT.F.BU.V/VZEXT.VF2/VZEXT.VF4/VZEXT.VF8/VSEXT.VF2/VSEXT.VF4/VSEXT.VF8)
+    8. Vector Quad-Widening Integer Multiply-Add (VQMACCU.VV/VQMACCU.VX/VQMACC.VV/VQMACC.VC/VQMACCSU.VV)
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ configs/targets/riscv32-softmmu.mak           |   1 +
+ configs/targets/riscv64-softmmu.mak           |   1 +
+ target/riscv/XAndesCodenseOps.decode          |  17 +-
+ target/riscv/XAndesCodenseV2Ops.decode        |  12 +
+ target/riscv/XAndesV5Ops.decode               |  69 ++-
+ target/riscv/andes_helper.c                   |  20 +
+ target/riscv/andes_helper.h                   |  44 +-
+ target/riscv/insn_trans/trans_rvv.c.inc       |  19 +-
+ .../insn_trans/trans_xandescodenseops.c.inc   |   7 +-
+ .../riscv/insn_trans/trans_xandesv5ops.c.inc  | 578 ++++++++++++++++++
+ target/riscv/meson.build                      |  11 +
+ target/riscv/translate.c                      |   4 +
+ target/riscv/vector_helper.c                  | 445 ++++++++++++++
+ 13 files changed, 1192 insertions(+), 36 deletions(-)
+ create mode 100644 target/riscv/XAndesCodenseV2Ops.decode
+
+diff --git a/configs/targets/riscv32-softmmu.mak b/configs/targets/riscv32-softmmu.mak
+index d8b71cddcd..a12c2d3d4e 100644
+--- a/configs/targets/riscv32-softmmu.mak
++++ b/configs/targets/riscv32-softmmu.mak
+@@ -3,3 +3,4 @@ TARGET_BASE_ARCH=riscv
+ TARGET_SUPPORTS_MTTCG=y
+ TARGET_XML_FILES= gdb-xml/riscv-32bit-cpu.xml gdb-xml/riscv-32bit-fpu.xml gdb-xml/riscv-64bit-fpu.xml gdb-xml/riscv-32bit-virtual.xml
+ TARGET_NEED_FDT=y
++CONFIG_CODENSE_NEXECIT=y
+diff --git a/configs/targets/riscv64-softmmu.mak b/configs/targets/riscv64-softmmu.mak
+index 7c0e7eeb42..16a696f58f 100644
+--- a/configs/targets/riscv64-softmmu.mak
++++ b/configs/targets/riscv64-softmmu.mak
+@@ -3,3 +3,4 @@ TARGET_BASE_ARCH=riscv
+ TARGET_SUPPORTS_MTTCG=y
+ TARGET_XML_FILES= gdb-xml/riscv-64bit-cpu.xml gdb-xml/riscv-32bit-fpu.xml gdb-xml/riscv-64bit-fpu.xml gdb-xml/riscv-64bit-virtual.xml
+ TARGET_NEED_FDT=y
++CONFIG_CODENSE_NEXECIT=y
+diff --git a/target/riscv/XAndesCodenseOps.decode b/target/riscv/XAndesCodenseOps.decode
+index 5f69f0d882..699530657c 100644
+--- a/target/riscv/XAndesCodenseOps.decode
++++ b/target/riscv/XAndesCodenseOps.decode
+@@ -1,20 +1,9 @@
+ #
+-# RISC-V translation routines for the RVXI Base Integer Instruction Set.
++# RISC-V translation routines for Andes CoDense
+ #
+-# Copyright (c) 2018 Peer Adelt, peer.adelt@hni.uni-paderborn.de
+-#                    Bastian Koppelmann, kbastian@mail.uni-paderborn.de
++# Copyright (c) 2023 Andes Technology Corp.
++# SPDX-License-Identifier: GPL-2.0-or-later
+ #
+-# This program is free software; you can redistribute it and/or modify it
+-# under the terms and conditions of the GNU General Public License,
+-# version 2 or later, as published by the Free Software Foundation.
+-#
+-# This program is distributed in the hope it will be useful, but WITHOUT
+-# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+-# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+-# more details.
+-#
+-# You should have received a copy of the GNU General Public License along with
+-# this program.  If not, see <http://www.gnu.org/licenses/>.
+ 
+ 
+ %imm_ex10 8:1 12:1 3:1 9:1 5:2 2:1 10:2 4:1
+diff --git a/target/riscv/XAndesCodenseV2Ops.decode b/target/riscv/XAndesCodenseV2Ops.decode
+new file mode 100644
+index 0000000000..afc81bbf14
+--- /dev/null
++++ b/target/riscv/XAndesCodenseV2Ops.decode
+@@ -0,0 +1,12 @@
++#
++# RISC-V translation routines for Andes CoDense
++#
++# Copyright (c) 2023 Andes Technology Corp.
++# SPDX-License-Identifier: GPL-2.0-or-later
++#
++
++#NEXEC.IT imm10 is different with EXEC.IT
++%imm_nex10 8:1 7:1 3:1 9:1 5:2 2:1 10:2 4:1
++&codense imm_codense
++@nex10    ... .... . . ..... .. &codense imm_codense=%imm_nex10
++execit    100 1 ... . . ..... 00 @nex10
+diff --git a/target/riscv/XAndesV5Ops.decode b/target/riscv/XAndesV5Ops.decode
+index a94b021b65..19e7636d3c 100644
+--- a/target/riscv/XAndesV5Ops.decode
++++ b/target/riscv/XAndesV5Ops.decode
+@@ -1,20 +1,10 @@
+ #
+-# RISC-V translation routines for the RVXI Base Integer Instruction Set.
++# RISC-V translation routines for AndeStar V5
+ #
+-# Copyright (c) 2018 Peer Adelt, peer.adelt@hni.uni-paderborn.de
+-#                    Bastian Koppelmann, kbastian@mail.uni-paderborn.de
++# Copyright (c) 2023 Andes Technology Corp.
++# SPDX-License-Identifier: GPL-2.0-or-later
+ #
+-# This program is free software; you can redistribute it and/or modify it
+-# under the terms and conditions of the GNU General Public License,
+-# version 2 or later, as published by the Free Software Foundation.
+-#
+-# This program is distributed in the hope it will be useful, but WITHOUT
+-# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+-# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+-# more details.
+-#
+-# You should have received a copy of the GNU General Public License along with
+-# this program.  If not, see <http://www.gnu.org/licenses/>.
++
+ 
+ # Fields:
+ %rs3       27:5
+@@ -39,11 +29,18 @@
+ &r_andes    rd rs1 rs2
+ &s_andes    imm rs1 rs2
+ &u_andes    imm rd
++&rmr_andes        vm rd rs1
++&rmr2_andes       vm rd rs2
++&rmrr_andes       vm rd rs1 rs2
++&rr         rd rs1
++&rr2        rd rs2
+ &shift_andes     shamt rs1 rd
+ &atomic_andes    aq rl rs2 rs1 rd
+ 
+ # Formats 32:
+ @r       .......   ..... ..... ... ..... ....... &r_andes                %rs2 %rs1 %rd
++@rr      .......   ..... ..... ... ..... ....... &rr                     %rs1 %rd
++@rr2     .......   ..... ..... ... ..... ....... &rr2                    %rs2 %rd
+ 
+ # *** Custom 0 instructions ***
+ ## Similar to U-type
+@@ -123,3 +120,47 @@ f_ffb     0010000   ..... ..... 000 .....  1011011 @r #0x10
+ f_ffzmism 0010001   ..... ..... 000 .....  1011011 @r #0x11
+ f_ffmism  0010010   ..... ..... 000 .....  1011011 @r #0x12
+ f_flmism  0010011   ..... ..... 000 .....  1011011 @r #0x13
++
++## VMR-type
++@vmr            ...... vm:1 ..... ..... ... ..... ....... &rmr_andes %rs1 %rd
++@vmr2           ...... vm:1 ..... ..... ... ..... ....... &rmr2_andes %rs2 %rd
++@vmrr           ...... vm:1 ..... ..... ... ..... ....... &rmrr_andes %rs2 %rs1 %rd
++#Andes INT4 Vector Load Extension
++#vln_v          000001 . 00000 ..... 100 ..... 1011011 @vmr
++#vlnu_v         000001 . 00001 ..... 100 ..... 1011011 @vmr
++vln8_v          000001 . 00010 ..... 100 ..... 1011011 @vmr
++vlnu8_v         000001 . 00011 ..... 100 ..... 1011011 @vmr
++
++#Andes Scalar BFLOAT16 Conversion Extension
++nfcvt_s_bf16     0000000 ..... 00010 100 ..... 1011011 @rr2
++nfcvt_bf16_s     0000000 ..... 00011 100 ..... 1011011 @rr2
++
++#Andes Vector BFLOAT16 Conversion Extension
++vfwcvt_s_bf16   0000000 ..... 00000 100 ..... 1011011 @rr2
++vfncvt_bf16_s   0000000 ..... 00001 100 ..... 1011011 @rr2
++
++#Andes V5 Vector Packed FP16 extension
++vfpmadt_vf      000010 . ..... ..... 100 ..... 1011011 @vmrr
++vfpmadb_vf      000011 . ..... ..... 100 ..... 1011011 @vmrr
++
++#Andes V5 Vector Dot Product extension
++vd4dots_vv      000100 . ..... ..... 100 ..... 1011011 @vmrr
++vd4dotu_vv      000111 . ..... ..... 100 ..... 1011011 @vmrr
++vd4dotsu_vv     000101 . ..... ..... 100 ..... 1011011 @vmrr
++
++#Andes V5 Vector Small INT Handling extension
++vle4_v          000001 1 00000 ..... 100 ..... 1011011 @rr
++vfwcvt_f_n_v    000000 . ..... 00100 100 ..... 1011011 @vmr2
++vfwcvt_f_nu_v   000000 . ..... 00101 100 ..... 1011011 @vmr2
++vfwcvt_f_b_v    000000 . ..... 00110 100 ..... 1011011 @vmr2
++vfwcvt_f_bu_v   000000 . ..... 00111 100 ..... 1011011 @vmr2
++
++#Andes Vector Quad-Widening Integer Multiply-Add extension
++vqmaccu_vv      111100 . ..... ..... 000 ..... 1010111 @vmrr
++vqmaccu_vx      111100 . ..... ..... 100 ..... 1010111 @vmrr
++vqmacc_vv       111101 . ..... ..... 000 ..... 1010111 @vmrr
++vqmacc_vx       111101 . ..... ..... 100 ..... 1010111 @vmrr
++vqmaccsu_vv     111111 . ..... ..... 000 ..... 1010111 @vmrr
++vqmaccsu_vx     111111 . ..... ..... 100 ..... 1010111 @vmrr
++vqmaccus_vx     111110 . ..... ..... 100 ..... 1010111 @vmrr
++
+diff --git a/target/riscv/andes_helper.c b/target/riscv/andes_helper.c
+index dbd4810b78..ce74164ec1 100644
+--- a/target/riscv/andes_helper.c
++++ b/target/riscv/andes_helper.c
+@@ -1,3 +1,10 @@
++/*
++ * RISC-V Andes Extension Helpers for QEMU
++ *
++ * Copyright (c) 2023 Andes Technology Corp.
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
+ #include "qemu/osdep.h"
+ #include "cpu.h"
+ #include "qemu/host-utils.h"
+@@ -129,3 +136,16 @@ target_ulong helper_andes_v5_fb_x(target_ulong rs1, target_ulong rs2,
+ 
+     return rd;
+ }
++
++uint64_t helper_andes_nfcvt_bf16_s(CPURISCVState *env, uint64_t rs2)
++{
++    float32 frs = check_nanbox_s(env, rs2);
++    return nanbox_h(env, float32_to_bfloat16(frs, &env->fp_status));
++}
++
++uint64_t helper_andes_nfcvt_s_bf16(CPURISCVState *env, uint64_t rs2)
++{
++    float16 frs = check_nanbox_h(env, rs2);
++    return nanbox_s(env, bfloat16_to_float32(frs, &env->fp_status));
++}
++
+diff --git a/target/riscv/andes_helper.h b/target/riscv/andes_helper.h
+index fe1d105337..260889b814 100644
+--- a/target/riscv/andes_helper.h
++++ b/target/riscv/andes_helper.h
+@@ -1,2 +1,44 @@
+ DEF_HELPER_FLAGS_3(andes_v5_bfo_x, TCG_CALL_NO_RWG, tl, tl, tl, tl)
+-DEF_HELPER_FLAGS_3(andes_v5_fb_x , TCG_CALL_NO_RWG, tl, tl, tl, tl)
++DEF_HELPER_FLAGS_3(andes_v5_fb_x, TCG_CALL_NO_RWG, tl, tl, tl, tl)
++DEF_HELPER_FLAGS_2(andes_nfcvt_bf16_s, TCG_CALL_NO_RWG, i64, env, i64)
++DEF_HELPER_FLAGS_2(andes_nfcvt_s_bf16, TCG_CALL_NO_RWG, i64, env, i64)
++DEF_HELPER_5(andes_vfwcvt_s_bf16, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(andes_vfncvt_bf16_s, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_7(vfpmad_vf, void, ptr, ptr, i64, i64, ptr, env, i32)
++DEF_HELPER_6(vln8_v, void, ptr, ptr, tl, i32, env, i32)
++DEF_HELPER_6(vln8_v_mask, void, ptr, ptr, tl, i32, env, i32)
++DEF_HELPER_6(vd4dots_vv_w, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vd4dots_vv_d, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vd4dotu_vv_w, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vd4dotu_vv_d, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vd4dotsu_vv_w, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vd4dotsu_vv_d, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vzext_vf2_b, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vzext_vf4_h, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vzext_vf8_w, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vsext_vf2_b, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vsext_vf4_h, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vsext_vf8_w, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_4(vle4_v, void, ptr, tl, env, i32)
++DEF_HELPER_5(vfwcvt_f_n_v16, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vfwcvt_f_n_v32, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vfwcvt_f_nu_v16, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vfwcvt_f_nu_v32, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vfwcvt_f_b_v16, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vfwcvt_f_b_v32, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vfwcvt_f_bu_v16, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_5(vfwcvt_f_bu_v32, void, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vqmaccu_vv_b, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vqmaccu_vv_h, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vqmacc_vv_b, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vqmacc_vv_h, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vqmaccsu_vv_b, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vqmaccsu_vv_h, void, ptr, ptr, ptr, ptr, env, i32)
++DEF_HELPER_6(vqmaccu_vx_b, void, ptr, ptr, tl, ptr, env, i32)
++DEF_HELPER_6(vqmaccu_vx_h, void, ptr, ptr, tl, ptr, env, i32)
++DEF_HELPER_6(vqmacc_vx_b, void, ptr, ptr, tl, ptr, env, i32)
++DEF_HELPER_6(vqmacc_vx_h, void, ptr, ptr, tl, ptr, env, i32)
++DEF_HELPER_6(vqmaccsu_vx_b, void, ptr, ptr, tl, ptr, env, i32)
++DEF_HELPER_6(vqmaccsu_vx_h, void, ptr, ptr, tl, ptr, env, i32)
++DEF_HELPER_6(vqmaccus_vx_b, void, ptr, ptr, tl, ptr, env, i32)
++DEF_HELPER_6(vqmaccus_vx_h, void, ptr, ptr, tl, ptr, env, i32)
+diff --git a/target/riscv/insn_trans/trans_rvv.c.inc b/target/riscv/insn_trans/trans_rvv.c.inc
+index 78bd363310..2d57a2deeb 100644
+--- a/target/riscv/insn_trans/trans_rvv.c.inc
++++ b/target/riscv/insn_trans/trans_rvv.c.inc
+@@ -3664,9 +3664,16 @@ GEN_VMV_WHOLE_TRANS(vmv2r_v, 2)
+ GEN_VMV_WHOLE_TRANS(vmv4r_v, 4)
+ GEN_VMV_WHOLE_TRANS(vmv8r_v, 8)
+ 
++/* Andes VSIH cfg check */
++bool vsih_check(DisasContext *ctx);
++
+ static bool int_ext_check(DisasContext *s, arg_rmr *a, uint8_t div)
+ {
+     uint8_t from = (s->sew + 3) - div;
++    /* If enable Andes VSIH config */
++    if (vsih_check(s)) {
++        from = (s->sew + 4) - div;
++    }
+     bool ret = require_rvv(s) &&
+         (from >= 3 && from <= 8) &&
+         (a->rd != a->rs2) &&
+@@ -3686,28 +3693,28 @@ static bool int_ext_op(DisasContext *s, arg_rmr *a, uint8_t seq)
+ 
+     static gen_helper_gvec_3_ptr * const fns[6][4] = {
+         {
+-            NULL, gen_helper_vzext_vf2_h,
++            gen_helper_vzext_vf2_b, gen_helper_vzext_vf2_h,
+             gen_helper_vzext_vf2_w, gen_helper_vzext_vf2_d
+         },
+         {
+-            NULL, NULL,
++            NULL, gen_helper_vzext_vf4_h,
+             gen_helper_vzext_vf4_w, gen_helper_vzext_vf4_d,
+         },
+         {
+             NULL, NULL,
+-            NULL, gen_helper_vzext_vf8_d
++            gen_helper_vzext_vf8_w, gen_helper_vzext_vf8_d
+         },
+         {
+-            NULL, gen_helper_vsext_vf2_h,
++            gen_helper_vsext_vf2_b, gen_helper_vsext_vf2_h,
+             gen_helper_vsext_vf2_w, gen_helper_vsext_vf2_d
+         },
+         {
+-            NULL, NULL,
++            NULL, gen_helper_vsext_vf4_h,
+             gen_helper_vsext_vf4_w, gen_helper_vsext_vf4_d,
+         },
+         {
+             NULL, NULL,
+-            NULL, gen_helper_vsext_vf8_d
++            gen_helper_vsext_vf8_w, gen_helper_vsext_vf8_d
+         }
+     };
+ 
+diff --git a/target/riscv/insn_trans/trans_xandescodenseops.c.inc b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+index 5a329cf9cc..bc8c8f24f8 100644
+--- a/target/riscv/insn_trans/trans_xandescodenseops.c.inc
++++ b/target/riscv/insn_trans/trans_xandescodenseops.c.inc
+@@ -1,3 +1,9 @@
++/*
++ * RISC-V translation routines for Andes CoDense
++ *
++ * Copyright (c) 2023 Andes Technology Corp.
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
+ #include "andes_cpu_bits.h"
+ 
+ #define ANDES_V5_GET_JAL_UIMM(inst) ((extract32(inst, 21, 10) << 1) \
+@@ -106,4 +112,3 @@ static bool trans_execit(DisasContext *ctx, arg_execit *a)
+     andes_v5_gen_codense_exec_it(ctx, a);
+     return true;
+ }
+-
+diff --git a/target/riscv/insn_trans/trans_xandesv5ops.c.inc b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+index 939772f41c..0f7e2561a5 100644
+--- a/target/riscv/insn_trans/trans_xandesv5ops.c.inc
++++ b/target/riscv/insn_trans/trans_xandesv5ops.c.inc
+@@ -1,5 +1,66 @@
++/*
++ * RISC-V translation routines for Andes V5 instructions
++ *
++ * Copyright (c) 2023 Andes Technology Corp.
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
+ #define GP 3
+ 
++#define REQUIRE_CFG(CSRNO, CSRFIELD) do {\
++    CPURISCVState *env = ctx->cs->env_ptr; \
++    RISCVException ret; \
++    target_ulong value; \
++    ret = riscv_csrrw(env, CSRNO, &value, 0, 0); \
++    if (ret != RISCV_EXCP_NONE) \
++        return false; \
++    if (!(value & CSRFIELD)) \
++        return false; \
++} while (0);
++
++#define REQUIRE_BF16CVT do { \
++    CPURISCVState *env = ctx->cs->env_ptr; \
++    if (env->misa_mxl == MXL_RV32) { \
++        REQUIRE_CFG(CSR_MMSC_CFG2, MASK_MMSC_CFG2_BF16CVT) \
++    } \
++    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_BF16CVT) \
++} while (0)
++
++#define MASK_MVEC_CFG_MFSEW (0x3 << 16)
++#define REQUIRE_MFSEW  \
++    REQUIRE_CFG(CSR_MVEC_CFG, MASK_MVEC_CFG_MFSEW)
++
++#define REQUIRE_VPFH do { \
++    CPURISCVState *env = ctx->cs->env_ptr; \
++    if (env->misa_mxl == MXL_RV32) { \
++        REQUIRE_CFG(CSR_MMSC_CFG2, MASK_MMSC_CFG2_VPFH) \
++    } \
++    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VPFH) \
++} while (0)
++
++#define REQUIRE_VL4 do { \
++    CPURISCVState *env = ctx->cs->env_ptr; \
++    if (env->misa_mxl == MXL_RV32) { \
++        REQUIRE_CFG(CSR_MMSC_CFG2, MASK_MMSC_CFG2_VL4) \
++    } \
++    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VL4) \
++} while (0)
++
++#define REQUIRE_VDOT do { \
++    CPURISCVState *env = ctx->cs->env_ptr; \
++    if (env->misa_mxl == MXL_RV32) { \
++        REQUIRE_CFG(CSR_MMSC_CFG2, MASK_MMSC_CFG2_VDOT) \
++    } \
++    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VDOT) \
++} while (0)
++
++#define REQUIRE_VSIH do { \
++    CPURISCVState *env = ctx->cs->env_ptr; \
++    if (env->misa_mxl == MXL_RV32) { \
++        REQUIRE_CFG(CSR_MMSC_CFG2, MASK_MMSC_CFG2_VSIH) \
++    } \
++    REQUIRE_CFG(CSR_MMSC_CFG, MASK_MMSC_CFG_VSIH) \
++} while (0)
++
+ enum andes_v5_inst_id {
+     /* Code Dense Extension */
+     EXEC_IT = (0x8000),
+@@ -383,3 +444,520 @@ static bool trans_sdgp(DisasContext *ctx, arg_sdgp *a)
+     return true;
+ }
+ 
++/* Andes INT4 Vector Load Extension */
++/*
++ *** INT4 unit stride load and store
++ */
++typedef void gen_helper_ldst_us_int4(TCGv_ptr, TCGv_ptr, TCGv,
++                                TCGv_i32, TCGv_env, TCGv_i32);
++
++static bool ldst_us_int4_trans(uint32_t vd, uint32_t rs1, uint32_t data,
++                          gen_helper_ldst_us_int4 *fn, DisasContext *s,
++                          bool is_store, bool is_sign)
++{
++    TCGv_ptr dest, mask;
++    TCGv base;
++    TCGv_i32 desc, sign;
++
++    TCGLabel *over = gen_new_label();
++    tcg_gen_brcondi_tl(TCG_COND_EQ, cpu_vl, 0, over);
++    tcg_gen_brcond_tl(TCG_COND_GEU, cpu_vstart, cpu_vl, over);
++
++    dest = tcg_temp_new_ptr();
++    mask = tcg_temp_new_ptr();
++    base = get_gpr(s, rs1, EXT_NONE);
++
++    /*
++     * As simd_desc supports at most 2048 bytes, and in this implementation,
++     * the max vector group length is 4096 bytes. So split it into two parts.
++     *
++     * The first part is vlen in bytes, encoded in maxsz of simd_desc.
++     * The second part is lmul, encoded in data of simd_desc.
++     */
++    desc = tcg_constant_i32(simd_desc(s->cfg_ptr->vlen / 8,
++                                      s->cfg_ptr->vlen / 8, data));
++    sign = tcg_constant_i32(is_sign);
++
++    tcg_gen_addi_ptr(dest, cpu_env, vreg_ofs(s, vd));
++    tcg_gen_addi_ptr(mask, cpu_env, vreg_ofs(s, 0));
++
++    fn(dest, mask, base, sign, cpu_env, desc);
++
++    if (!is_store) {
++        mark_vs_dirty(s);
++    }
++
++    gen_set_label(over);
++    return true;
++}
++
++static bool ld_us_int4_op(DisasContext *s, arg_rmr_andes *a,
++                          uint8_t eew, uint32_t is_sign)
++{
++    uint32_t data = 0;
++    gen_helper_ldst_us_int4 *fn;
++    static gen_helper_ldst_us_int4 * const fns[2][1] = {
++        /* masked unit stride load */
++        { gen_helper_vln8_v_mask},
++        /* unmasked unit stride load */
++        { gen_helper_vln8_v}
++    };
++
++    fn =  fns[a->vm][eew];
++    if (fn == NULL) {
++        return false;
++    }
++
++    /*
++     * Vector load/store instructions have the EEW encoded
++     * directly in the instructions. The maximum vector size is
++     * calculated with EMUL rather than LMUL.
++     */
++    uint8_t emul = vext_get_emul(s, eew);
++    data = FIELD_DP32(data, VDATA, VM, a->vm);
++    data = FIELD_DP32(data, VDATA, LMUL, emul);
++    /* assume nf field value = 1(000) */
++    data = FIELD_DP32(data, VDATA, NF, 1);
++    data = FIELD_DP32(data, VDATA, VTA, s->vta);
++    data = FIELD_DP32(data, VDATA, VMA, s->vma);
++    return ldst_us_int4_trans(a->rd, a->rs1, data, fn, s, false, is_sign);
++}
++
++static bool ld_us_int4_check(DisasContext *s, arg_rmr_andes* a, uint8_t eew)
++{
++    return require_rvv(s) &&
++           vext_check_isa_ill(s) &&
++           require_vm(a->vm, a->rd);
++}
++
++#define GEN_VEXT_SIGN_TRANS(NAME, EEW, ARGTYPE, OP, CHECK, SIGN)    \
++static bool trans_##NAME(DisasContext *ctx, arg_##ARGTYPE * a)      \
++{                                                                   \
++    REQUIRE_VL4;                                                    \
++    if (CHECK(ctx, a, EEW)) {                                       \
++        return OP(ctx, a, EEW, SIGN);                               \
++    }                                                               \
++    return false;                                                   \
++}
++
++GEN_VEXT_SIGN_TRANS(vln8_v,  MO_8,  rmr_andes, ld_us_int4_op,
++                    ld_us_int4_check, true)
++GEN_VEXT_SIGN_TRANS(vlnu8_v, MO_8,  rmr_andes, ld_us_int4_op,
++                    ld_us_int4_check, false)
++
++
++/* Andes Scalar BFLOAT16 Conversion Extension */
++/* Like Zfbfmin's fcvt_s_bf16 */
++static bool trans_nfcvt_s_bf16(DisasContext *ctx, arg_nfcvt_s_bf16 *a)
++{
++    REQUIRE_FPU;
++    REQUIRE_BF16CVT;
++
++    TCGv_i64 dest = dest_fpr(ctx, a->rd);
++    TCGv_i64 src2 = get_fpr_hs(ctx, a->rs2);
++
++    gen_set_rm(ctx, RISCV_FRM_DYN);
++    gen_helper_andes_nfcvt_s_bf16(dest, cpu_env, src2);
++    gen_set_fpr_hs(ctx, a->rd, dest);
++    mark_fs_dirty(ctx);
++    return true;
++}
++
++/* Like Zfbfmin's fcvt_bf16_s */
++static bool trans_nfcvt_bf16_s(DisasContext *ctx, arg_nfcvt_bf16_s *a)
++{
++    REQUIRE_FPU;
++    REQUIRE_BF16CVT;
++
++    TCGv_i64 dest = dest_fpr(ctx, a->rd);
++    TCGv_i64 src2 = get_fpr_hs(ctx, a->rs2);
++
++    gen_set_rm(ctx, RISCV_FRM_DYN);
++    gen_helper_andes_nfcvt_bf16_s(dest, cpu_env, src2);
++    gen_set_fpr_hs(ctx, a->rd, dest);
++    mark_fs_dirty(ctx);
++    return true;
++}
++
++/* Andes Vector BFLOAT16 Conversion Extension */
++/* Like ZVFBFMIN's vfwcvtbf16_f_f_v*/
++static bool trans_vfwcvt_s_bf16(DisasContext *ctx, arg_vfwcvt_s_bf16 *a)
++{
++    REQUIRE_FPU;
++    REQUIRE_MFSEW;
++    REQUIRE_BF16CVT;
++
++    /* Only support in SEW = 16 */
++    if (require_rvv(ctx) && vext_check_isa_ill(ctx) &&
++        vext_check_ds(ctx, a->rd, a->rs2, 1) && ctx->sew == MO_16) {
++        uint32_t data = 0;
++        TCGLabel *over = gen_new_label();
++
++        gen_set_rm_chkfrm(ctx, RISCV_FRM_DYN);
++        tcg_gen_brcondi_tl(TCG_COND_EQ, cpu_vl, 0, over);
++        tcg_gen_brcond_tl(TCG_COND_GEU, cpu_vstart, cpu_vl, over);
++
++        /* Set Vector Mask Encoding to 1 = unmasked */
++        data = FIELD_DP32(data, VDATA, VM, 1);
++        data = FIELD_DP32(data, VDATA, LMUL, ctx->lmul);
++        data = FIELD_DP32(data, VDATA, VTA, ctx->vta);
++        data = FIELD_DP32(data, VDATA, VMA, ctx->vma);
++        tcg_gen_gvec_3_ptr(vreg_ofs(ctx, a->rd), vreg_ofs(ctx, 0),
++                           vreg_ofs(ctx, a->rs2), cpu_env,
++                           ctx->cfg_ptr->vlen / 8,
++                           ctx->cfg_ptr->vlen / 8, data,
++                           gen_helper_andes_vfwcvt_s_bf16);
++        mark_vs_dirty(ctx);
++        gen_set_label(over);
++        return true;
++    }
++    return false;
++}
++
++/* Like ZVFBFMIN's vfncvtbf16_f_f_w */
++static bool trans_vfncvt_bf16_s(DisasContext *ctx, arg_vfncvt_bf16_s *a)
++{
++    REQUIRE_FPU;
++    REQUIRE_MFSEW;
++    REQUIRE_BF16CVT;
++
++    /* Only support in SEW = 16 */
++    if (require_rvv(ctx) && vext_check_isa_ill(ctx) &&
++        vext_check_sd(ctx, a->rd, a->rs2, 1) && ctx->sew == MO_16) {
++        uint32_t data = 0;
++        TCGLabel *over = gen_new_label();
++
++        gen_set_rm(ctx, RISCV_FRM_DYN);
++        tcg_gen_brcondi_tl(TCG_COND_EQ, cpu_vl, 0, over);
++        tcg_gen_brcond_tl(TCG_COND_GEU, cpu_vstart, cpu_vl, over);
++
++        /* Set Vector Mask Encoding to 1 = unmasked */
++        data = FIELD_DP32(data, VDATA, VM, 1);
++        data = FIELD_DP32(data, VDATA, LMUL, ctx->lmul);
++        data = FIELD_DP32(data, VDATA, VTA, ctx->vta);
++        data = FIELD_DP32(data, VDATA, VMA, ctx->vma);
++        tcg_gen_gvec_3_ptr(vreg_ofs(ctx, a->rd), vreg_ofs(ctx, 0),
++                           vreg_ofs(ctx, a->rs2), cpu_env,
++                           ctx->cfg_ptr->vlen / 8,
++                           ctx->cfg_ptr->vlen / 8, data,
++                           gen_helper_andes_vfncvt_bf16_s);
++        mark_vs_dirty(ctx);
++        gen_set_label(over);
++        return true;
++    }
++    return false;
++}
++
++/* Andes V5 Vector Packed FP16 extension */
++static bool andes_vfpmad_vf(DisasContext *ctx, arg_vfpmadt_vf *a, bool top)
++{
++    REQUIRE_FPU;
++    REQUIRE_EXT(ctx, RVV);
++    REQUIRE_VPFH;
++
++    /* Only support in SEW = 16 */
++    if (ctx->sew != MO_16) {
++        return false;
++    }
++    TCGv_ptr dest, src2, mask;
++    TCGv_i32 desc;
++    TCGv_i64 t1, t2;
++
++    TCGLabel *over = gen_new_label();
++    tcg_gen_brcondi_tl(TCG_COND_EQ, cpu_vl, 0, over);
++    tcg_gen_brcond_tl(TCG_COND_GEU, cpu_vstart, cpu_vl, over);
++
++    uint32_t data = 0;
++
++    gen_set_rm(ctx, RISCV_FRM_DYN);
++    data = FIELD_DP32(data, VDATA, VM, a->vm);
++    data = FIELD_DP32(data, VDATA, LMUL, ctx->lmul);
++    data = FIELD_DP32(data, VDATA, VTA, ctx->vta);
++    data = FIELD_DP32(data, VDATA, VMA, ctx->vma);
++    dest = tcg_temp_new_ptr();
++    mask = tcg_temp_new_ptr();
++    src2 = tcg_temp_new_ptr();
++    desc = tcg_constant_i32(simd_desc(ctx->cfg_ptr->vlen / 8,
++                                      ctx->cfg_ptr->vlen / 8, data));
++
++    tcg_gen_addi_ptr(dest, cpu_env, vreg_ofs(ctx, a->rd));
++    tcg_gen_addi_ptr(src2, cpu_env, vreg_ofs(ctx, a->rs2));
++    tcg_gen_addi_ptr(mask, cpu_env, vreg_ofs(ctx, 0));
++
++    t1 = get_fpr_hs(ctx, a->rs1);
++    t2 = tcg_constant_i64(top);
++
++    gen_helper_vfpmad_vf(dest, mask, t1, t2, src2, cpu_env, desc);
++
++    mark_vs_dirty(ctx);
++    gen_set_label(over);
++    return true;
++}
++
++static bool trans_vfpmadt_vf(DisasContext *ctx, arg_vfpmadt_vf *a)
++{
++    return andes_vfpmad_vf(ctx, a, true);
++}
++
++static bool trans_vfpmadb_vf(DisasContext *ctx, arg_vfpmadb_vf *a)
++{
++    return andes_vfpmad_vf(ctx, a, false);
++}
++
++/* Andes V5 Vector Dot Product extension */
++#define GEN_OPIVV_WIDEN_4_TRANS(NAME, CHECK) \
++static bool trans_##NAME(DisasContext *ctx, arg_rmrr_andes *a) \
++{                                                            \
++    REQUIRE_VDOT;                                            \
++    static gen_helper_gvec_4_ptr * const fns[2] = {          \
++        gen_helper_##NAME##_w,                               \
++        gen_helper_##NAME##_d                                \
++    };                                                       \
++    /* only support sew = 2(32), 3(64) */                    \
++    if (ctx->sew >= MO_32)                                   \
++        return do_opivv_widen(ctx,                           \
++            (arg_rmrr *)a, fns[ctx->sew - 2], CHECK);        \
++    return false;                                            \
++}
++
++GEN_OPIVV_WIDEN_4_TRANS(vd4dots_vv, opivv_widen_check)
++GEN_OPIVV_WIDEN_4_TRANS(vd4dotu_vv, opivv_widen_check)
++GEN_OPIVV_WIDEN_4_TRANS(vd4dotsu_vv, opivv_widen_check)
++
++/* Andes V5 Vector Small INT Handling extension */
++bool vsih_check(DisasContext *ctx)
++{
++    REQUIRE_VSIH;
++    return true;
++}
++
++static bool ld_small_int(DisasContext *s, arg_rr *a)
++{
++    TCGv_ptr dest;
++    TCGv base;
++    TCGv_i32 desc;
++    uint32_t data = 0;
++    /* Uses spec EMUL=(4/SEW)*LMUL */
++    uint8_t emul = (4 / (8 << s->sew)) * s->lmul;
++    /* non-mask, set vm to 1 */
++    data = FIELD_DP32(data, VDATA, VM, 1);
++    data = FIELD_DP32(data, VDATA, LMUL, emul);
++    /* assume nf field value = 1(000) */
++    data = FIELD_DP32(data, VDATA, NF, 1);
++    data = FIELD_DP32(data, VDATA, VTA, s->vta);
++    data = FIELD_DP32(data, VDATA, VMA, s->vma);
++
++    TCGLabel *over = gen_new_label();
++    tcg_gen_brcondi_tl(TCG_COND_EQ, cpu_vl, 0, over);
++    tcg_gen_brcond_tl(TCG_COND_GEU, cpu_vstart, cpu_vl, over);
++
++    dest = tcg_temp_new_ptr();
++    base = get_gpr(s, a->rs1, EXT_NONE);
++
++    /*
++     * As simd_desc supports at most 2048 bytes, and in this implementation,
++     * the max vector group length is 4096 bytes. So split it into two parts.
++     *
++     * The first part is vlen in bytes, encoded in maxsz of simd_desc.
++     * The second part is lmul, encoded in data of simd_desc.
++     */
++    desc = tcg_constant_i32(simd_desc(s->cfg_ptr->vlen / 8,
++                                      s->cfg_ptr->vlen / 8, data));
++
++    tcg_gen_addi_ptr(dest, cpu_env, vreg_ofs(s, a->rd));
++
++    gen_helper_vle4_v(dest, base, cpu_env, desc);
++
++    mark_vs_dirty(s);
++
++    gen_set_label(over);
++    return true;
++}
++
++static bool ld_small_int_check(DisasContext *s, arg_vle4_v *a)
++{
++    return require_rvv(s) &&
++           vext_check_isa_ill(s);
++}
++
++static bool trans_vle4_v(DisasContext *ctx, arg_vle4_v *a)
++{
++    REQUIRE_VSIH;
++    if (ld_small_int_check(ctx, a)) {
++        return ld_small_int(ctx, a);
++    }
++    return false;
++}
++
++static bool opfbv_check(DisasContext *ctx, arg_rmr2_andes *a)
++{
++    REQUIRE_VSIH;
++    return require_rvv(ctx) &&
++           require_scale_rvf(ctx) &&
++           vext_check_isa_ill(ctx) &&
++           /* OPFV widening instructions ignore vs1 check */
++           vext_check_ds(ctx, a->rd, a->rs2, a->vm);
++}
++
++/* Only SEW = 16 and 32 is valid, sew=1 or sew=2 */
++#define GEN_OPFBV_WIDEN_TRANS(NAME)                                \
++static bool trans_##NAME(DisasContext *s, arg_rmr2_andes *a)       \
++{                                                                  \
++    if (opfbv_check(s, a)) {                                       \
++        if (s->sew != MO_16 && s->sew != MO_32)                    \
++            return false;                                          \
++        uint32_t data = 0;                                         \
++        static gen_helper_gvec_3_ptr * const fns[2] = {            \
++            gen_helper_##NAME##16,                                 \
++            gen_helper_##NAME##32,                                 \
++        };                                                         \
++        TCGLabel *over = gen_new_label();                          \
++        gen_set_rm(s, RISCV_FRM_DYN);                              \
++        tcg_gen_brcondi_tl(TCG_COND_EQ, cpu_vl, 0, over);          \
++        tcg_gen_brcond_tl(TCG_COND_GEU, cpu_vstart, cpu_vl, over); \
++                                                                   \
++        data = FIELD_DP32(data, VDATA, VM, a->vm);                 \
++        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);             \
++        data = FIELD_DP32(data, VDATA, VTA, s->vta);               \
++        data = FIELD_DP32(data, VDATA, VMA, s->vma);               \
++        tcg_gen_gvec_3_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),     \
++                           vreg_ofs(s, a->rs2), cpu_env,           \
++                           s->cfg_ptr->vlen / 8,                   \
++                           s->cfg_ptr->vlen / 8, data,             \
++                           fns[s->sew - 1]);                       \
++        mark_vs_dirty(s);                                          \
++        gen_set_label(over);                                       \
++        return true;                                               \
++    }                                                              \
++    return false;                                                  \
++}
++
++GEN_OPFBV_WIDEN_TRANS(vfwcvt_f_n_v)
++GEN_OPFBV_WIDEN_TRANS(vfwcvt_f_nu_v)
++GEN_OPFBV_WIDEN_TRANS(vfwcvt_f_b_v)
++GEN_OPFBV_WIDEN_TRANS(vfwcvt_f_bu_v)
++
++/* Andes Vector Quad-Widening Integer Multiply-Add extension */
++/* OPIVV with WIDEN */
++/*
++ * Common check function for vector quad-widening instructions
++ * of quad-width result (4*SEW).
++ *
++ * Rules to be checked here:
++ *   1. The largest vector register group used by an instruction
++ *      can not be greater than 8 vector registers :
++ *      => LMUL < 4 (since dst EMUL must <= 8)
++ *      => SEW < 32.
++ *   2. Quad-width SEW cannot greater than ELEN.
++ *   3. Destination vector register number is multiples of 4 * LMUL.
++ *   4. Destination vector register group for a masked vector
++ *      instruction cannot overlap the source mask register (v0).
++ */
++
++static bool vext_quad_wide_check_common(DisasContext *s, int vd, int vm)
++{
++    return (s->lmul < 2) &&
++           (s->sew < MO_32) &&
++           ((s->sew + 2) <= (s->cfg_ptr->elen >> 4)) &&
++           require_align(vd, s->lmul + 2) &&
++           require_vm(vm, vd);
++}
++
++static bool vext_check_qs(DisasContext *s, int vd, int vs, int vm)
++{
++    return vext_quad_wide_check_common(s, vd, vm) &&
++        require_align(vs, s->lmul) &&
++        require_noover(vd, s->lmul + 2, vs, s->lmul);
++}
++
++static bool vext_check_qss(DisasContext *s, int vd, int vs1, int vs2, int vm)
++{
++    return vext_check_qs(s, vd, vs2, vm) &&
++        require_align(vs1, s->lmul) &&
++        require_noover(vd, s->lmul + 2, vs1, s->lmul);
++}
++
++static bool opivv_quad_widen_check(DisasContext *s, arg_rmrr_andes *a)
++{
++    return require_rvv(s) &&
++           vext_check_isa_ill(s) &&
++           vext_check_qss(s, a->rd, a->rs1, a->rs2, a->vm);
++}
++
++static bool do_opivv_quad_widen(DisasContext *s, arg_rmrr_andes *a,
++                           gen_helper_gvec_4_ptr *fn,
++                           bool (*checkfn)(DisasContext *, arg_rmrr_andes *))
++{
++    if (checkfn(s, a)) {
++        uint32_t data = 0;
++        TCGLabel *over = gen_new_label();
++        tcg_gen_brcondi_tl(TCG_COND_EQ, cpu_vl, 0, over);
++        tcg_gen_brcond_tl(TCG_COND_GEU, cpu_vstart, cpu_vl, over);
++
++        data = FIELD_DP32(data, VDATA, VM, a->vm);
++        data = FIELD_DP32(data, VDATA, LMUL, s->lmul);
++        data = FIELD_DP32(data, VDATA, VTA, s->vta);
++        data = FIELD_DP32(data, VDATA, VMA, s->vma);
++        tcg_gen_gvec_4_ptr(vreg_ofs(s, a->rd), vreg_ofs(s, 0),
++                           vreg_ofs(s, a->rs1),
++                           vreg_ofs(s, a->rs2),
++                           cpu_env, s->cfg_ptr->vlen / 8,
++                           s->cfg_ptr->vlen / 8,
++                           data, fn);
++        mark_vs_dirty(s);
++        gen_set_label(over);
++        return true;
++    }
++    return false;
++}
++
++#define GEN_OPIVV_QUAD_WIDEN_TRANS(NAME, CHECK) \
++static bool trans_##NAME(DisasContext *s, arg_rmrr_andes *a) \
++{                                                            \
++    if (s->sew >= MO_32)                                     \
++        return false;                                        \
++    static gen_helper_gvec_4_ptr * const fns[2] = {          \
++        gen_helper_##NAME##_b,                               \
++        gen_helper_##NAME##_h,                               \
++    };                                                       \
++    return do_opivv_quad_widen(s, a, fns[s->sew], CHECK);    \
++}
++
++/* OPIVX with QUAD-WIDEN */
++static bool opivx_quad_widen_check(DisasContext *s, arg_rmrr_andes *a)
++{
++    return require_rvv(s) &&
++           vext_check_isa_ill(s) &&
++           vext_check_qs(s, a->rd, a->rs2, a->vm);
++}
++
++static bool do_opivx_quad_widen(DisasContext *s, arg_rmrr_andes *a,
++                           gen_helper_opivx *fn)
++{
++    if (opivx_quad_widen_check(s, a)) {
++        return opivx_trans(a->rd, a->rs1, a->rs2, a->vm, fn, s);
++    }
++    return false;
++}
++
++#define GEN_OPIVX_QUAD_WIDEN_TRANS(NAME) \
++static bool trans_##NAME(DisasContext *s, arg_rmrr_andes *a) \
++{                                                            \
++    if (s->sew >= MO_32)                                     \
++        return false;                                        \
++    static gen_helper_opivx * const fns[2] = {               \
++        gen_helper_##NAME##_b,                               \
++        gen_helper_##NAME##_h,                               \
++    };                                                       \
++    return do_opivx_quad_widen(s, a, fns[s->sew]);           \
++}
++
++
++GEN_OPIVV_QUAD_WIDEN_TRANS(vqmaccu_vv, opivv_quad_widen_check)
++GEN_OPIVV_QUAD_WIDEN_TRANS(vqmacc_vv, opivv_quad_widen_check)
++GEN_OPIVV_QUAD_WIDEN_TRANS(vqmaccsu_vv, opivv_quad_widen_check)
++GEN_OPIVX_QUAD_WIDEN_TRANS(vqmaccu_vx)
++GEN_OPIVX_QUAD_WIDEN_TRANS(vqmacc_vx)
++GEN_OPIVX_QUAD_WIDEN_TRANS(vqmaccsu_vx)
++GEN_OPIVX_QUAD_WIDEN_TRANS(vqmaccus_vx)
++
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index 7034b7d43d..31023bebdd 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -5,12 +5,19 @@ gen = [
+   decodetree.process('xthead.decode', extra_args: '--static-decode=decode_xthead'),
+   decodetree.process('XVentanaCondOps.decode', extra_args: '--static-decode=decode_XVentanaCodeOps'),
+   decodetree.process('XAndesV5Ops.decode', extra_args: ['--static-decode=decode_XAndesV5Ops']),
++]
++genv1 = [
+   decodetree.process('XAndesCodenseOps.decode',extra_args: ['--static-decode=decode_XAndesCodenseOps',
+                                                              '--insnwidth=16']),
+ ]
++genv2 = [
++  decodetree.process('XAndesCodenseV2Ops.decode',extra_args: ['--static-decode=decode_XAndesCodenseOps',
++                                                             '--insnwidth=16']),
++]
+ 
+ riscv_ss = ss.source_set()
+ riscv_ss.add(gen)
++riscv_ss.add(when: 'CONFIG_CODENSE_NEXECIT', if_true: genv2, if_false: genv1)
+ riscv_ss.add(files(
+   'cpu.c',
+   'cpu_helper.c',
+@@ -48,3 +55,7 @@ subdir('kvm')
+ 
+ target_arch += {'riscv': riscv_ss}
+ target_system_arch += {'riscv': riscv_system_ss}
++
++if 'CONFIG_CODENSE_NEXECIT' == 'y'
++    add_project_arguments('-DCONFIG_CODENSE_NEXECIT=1', language : 'c')
++endif
+diff --git a/target/riscv/translate.c b/target/riscv/translate.c
+index 39b8497c91..42e56ee4bb 100644
+--- a/target/riscv/translate.c
++++ b/target/riscv/translate.c
+@@ -1111,7 +1111,11 @@ static uint32_t opcode_at(DisasContextBase *dcbase, target_ulong pc)
+ 
+ /* Include AndeStar V5 extensions */
+ #include "decode-XAndesV5Ops.c.inc"
++#ifndef CONFIG_CODENSE_NEXECIT
+ #include "decode-XAndesCodenseOps.c.inc"
++#else
++#include "decode-XAndesCodenseV2Ops.c.inc"
++#endif
+ #include "insn_trans/trans_xandesv5ops.c.inc"
+ #include "insn_trans/trans_xandescodenseops.c.inc"
+ 
+diff --git a/target/riscv/vector_helper.c b/target/riscv/vector_helper.c
+index c1c3a4d1ea..aab757de4f 100644
+--- a/target/riscv/vector_helper.c
++++ b/target/riscv/vector_helper.c
+@@ -5109,3 +5109,448 @@ GEN_VEXT_INT_EXT(vsext_vf2_d, int64_t, int32_t, H8, H4)
+ GEN_VEXT_INT_EXT(vsext_vf4_w, int32_t, int8_t,  H4, H1)
+ GEN_VEXT_INT_EXT(vsext_vf4_d, int64_t, int16_t, H8, H2)
+ GEN_VEXT_INT_EXT(vsext_vf8_d, int64_t, int8_t,  H8, H1)
++
++
++/* AndeStar V5 V1.5 */
++#define WOP_SSS_W4 int32_t, int8_t, int8_t, int32_t, int32_t
++#define WOP_SSS_D4 int64_t, int16_t, int16_t, int64_t, int64_t
++#define WOP_UUU_W4 uint32_t, uint8_t, uint8_t, uint32_t, uint32_t
++#define WOP_UUU_D4 uint64_t, uint16_t, uint16_t, uint64_t, uint64_t
++/* VS1 = signed, VS2 = unsigned */
++#define WOP_SSU_W4 int32_t, int8_t, uint8_t, int32_t, uint32_t
++#define WOP_SSU_D4 int64_t, int16_t, uint16_t, int64_t, uint64_t
++/* VS1/RS1 = unsigned, VS2 = signed */
++#define WOP_SUS_W4 int32_t, uint8_t, int8_t, uint32_t, int32_t
++#define WOP_SUS_D4 int64_t, uint16_t, int16_t, uint64_t, int64_t
++
++typedef uint8_t uint4_t;
++typedef int8_t int4_t;
++/* extract int4 data from int8, and extend it then return as uint8 */
++static uint8_t extract_int4_from_int8(uint32_t odd, uint8_t data)
++{
++    uint8_t val;
++    if (odd) {
++        val = (data >> 4);
++        val &= 0x0f; /* mask bits 7:4 to zero */
++    } else {
++        val = (data & 0x0f); /* mask bits 7:4 to zero */
++    }
++    return val;
++}
++
++static uint4_t uint8_to_uint4(uint8_t val)
++{
++    /* zero-extend */
++    val &= 0x0f;
++    return (uint4_t)val;
++}
++static int4_t int8_to_int4(uint8_t val)
++{
++    /* check bit 3 */
++    if (val & (1 << 3)) {
++        /* sign-extend for negative */
++        val |= 0xf0;
++    } else {
++        /* sign-extend for positive */
++        val &= 0x0f;
++    }
++    return (int4_t)val;
++}
++/* Vector Integer Extension for small int (int4) */
++#define GEN_VEXT_INT4_EXT(NAME, ETYPE, DTYPE, HD, HS1, OP)       \
++void HELPER(NAME)(void *vd, void *v0, void *vs2,                 \
++                  CPURISCVState *env, uint32_t desc)             \
++{                                                                \
++    uint32_t vl = env->vl;                                       \
++    uint32_t vm = vext_vm(desc);                                 \
++    uint32_t esz = sizeof(ETYPE);                                \
++    uint32_t total_elems = vext_get_total_elems(env, desc, esz); \
++    uint32_t vta = vext_vta(desc);                               \
++    uint32_t vma = vext_vma(desc);                               \
++    uint32_t i;                                                  \
++                                                                 \
++    for (i = env->vstart; i < vl; i++) {                         \
++        if (!vm && !vext_elem_mask(v0, i)) {                     \
++            /* set masked-off elements to 1s */                  \
++            vext_set_elems_1s(vd, vma, i * esz, (i + 1) * esz);  \
++            continue;                                            \
++        }                                                        \
++        uint8_t tmp = extract_int4_from_int8(i % 2,              \
++                      *((DTYPE *)vs2 + HS1(i / 2)));             \
++        *((ETYPE *)vd + HD(i)) = (DTYPE)OP(tmp);                 \
++    }                                                            \
++    env->vstart = 0;                                             \
++    /* set tail elements to 1s */                                \
++    vext_set_elems_1s(vd, vta, vl * esz, total_elems * esz);     \
++}
++
++/* last argument H1 should be host int4 */
++GEN_VEXT_INT4_EXT(vzext_vf2_b, uint8_t,  uint4_t, H1, H1, uint8_to_uint4)
++GEN_VEXT_INT4_EXT(vzext_vf4_h, uint16_t, uint4_t, H2, H1, uint8_to_uint4)
++GEN_VEXT_INT4_EXT(vzext_vf8_w, uint32_t, uint4_t, H4, H1, uint8_to_uint4)
++GEN_VEXT_INT4_EXT(vsext_vf2_b, int8_t,   int4_t,  H1, H1, int8_to_int4)
++GEN_VEXT_INT4_EXT(vsext_vf4_h, int16_t,  int4_t,  H2, H1, int8_to_int4)
++GEN_VEXT_INT4_EXT(vsext_vf8_w, int32_t,  int4_t,  H4, H1, int8_to_int4)
++
++
++
++RVVCALL(OPFVV1, andes_vfwcvt_s_bf16, WOP_UU_H, H4, H2, bfloat16_to_float32)
++GEN_VEXT_V_ENV(andes_vfwcvt_s_bf16, 4)
++
++RVVCALL(OPFVV1, andes_vfncvt_bf16_s, NOP_UU_H, H2, H4, float32_to_bfloat16)
++GEN_VEXT_V_ENV(andes_vfncvt_bf16_s, 2)
++
++
++#define OPFVF9(NAME, TD, T1, T2, TX1, TX2, HD, HS1, HS2, OP)                \
++static void do_##NAME(void *vd, uint64_t s1, uint64_t s2,                   \
++        void *vs2, int i, CPURISCVState *env)                               \
++{                                                                           \
++    TX2 s = *((T2 *)vs2 + HS2(i));                                          \
++    *((TD *)vd + HD(i)) = OP(s, (TX1)(T1)s1, (TX2)(T2)s2, &env->fp_status); \
++}
++
++#define GEN_VEXT_VF_TB(NAME, ESZ)                         \
++void HELPER(NAME)(void *vd, void *v0, uint64_t s1,        \
++                  uint64_t tb,                            \
++                  void *vs2, CPURISCVState *env,          \
++                  uint32_t desc)                          \
++{                                                         \
++    uint32_t vm = vext_vm(desc);                          \
++    uint32_t vl = env->vl;                                \
++    uint32_t total_elems =                                \
++        vext_get_total_elems(env, desc, ESZ);             \
++    uint32_t vta = vext_vta(desc);                        \
++    uint32_t vma = vext_vma(desc);                        \
++    uint32_t i;                                           \
++                                                          \
++    uint16_t top, bottom;                                 \
++    /* tb is true for top, false for bottom */            \
++    if (tb == true) {                                     \
++        top = ((s1 >> 16) & 0xffff);                      \
++        bottom = (s1 & 0xffff);                           \
++    } else {                                              \
++        top = (s1 & 0xffff);                              \
++        bottom = ((s1 >> 16) & 0xffff);                   \
++    }                                                     \
++    for (i = env->vstart; i < vl; i++) {                  \
++        if (!vm && !vext_elem_mask(v0, i)) {              \
++            /* set masked-off elements to 1s */           \
++            vext_set_elems_1s(vd, vma, i * ESZ,           \
++                              (i + 1) * ESZ);             \
++            continue;                                     \
++        }                                                 \
++        do_##NAME(vd, top, bottom, vs2, i, env);          \
++    }                                                     \
++    env->vstart = 0;                                      \
++    /* set tail elements to 1s */                         \
++    vext_set_elems_1s(vd, vta, vl * ESZ,                  \
++                      total_elems * ESZ);                 \
++}
++
++
++RVVCALL(OPFVF9, vfpmad_vf, OP_UUU_H, H2, H2, H2, fmacc16)
++GEN_VEXT_VF_TB(vfpmad_vf, 2)
++
++
++/*
++ *** stride: access vector element from (uni-)strided memory
++ */
++/* Modify vd data to byte half */
++static void lde_to_bh(uint32_t odd,
++                   uint32_t sign, uint32_t idx, void *vd)
++{
++    /* we directly use uint8_t and H1 for byte access */
++    uint8_t *cur = ((uint8_t *)vd + H1(idx));
++    uint8_t val;
++    if (odd) {
++        val = (*cur) >> 4;
++        val &= 0x0f; /* mask bits 7:4 to zero */
++    } else {
++        val = (*cur) & 0x0f; /* mask bits 7:4 to zero */
++    }
++    if (sign) {
++        /* check bit 3 */
++        if (val & 0x8) {
++            /* sign-extend for negative */
++            val |= 0xf0;
++        } else {
++            /* sign-extend for positive */
++            val &= 0x0f;
++        }
++    } else {
++        /* zero-extend */
++        val &= 0x0f;
++    }
++    /* write back to vd */
++    *cur = val;
++}
++
++static void
++vext_ldst_int4_stride(void *vd, void *v0, target_ulong base,
++                 target_ulong stride, CPURISCVState *env,
++                 uint32_t desc, uint32_t vm, uint32_t is_sign,
++                 vext_ldst_elem_fn *ldst_elem,
++                 uint32_t log2_esz, uintptr_t ra)
++{
++    uint32_t i, k;
++    uint32_t nf = vext_nf(desc);
++    uint32_t max_elems = vext_max_elems(desc, log2_esz);
++    uint32_t esz = 1 << log2_esz;
++    uint32_t vma = vext_vma(desc);
++
++    /* Element_size = 8;
++     *  i = 0..(VL-1)
++     *  addr = rs1 + floor(i/2);
++     *  part = i%2;
++     *  nibble[3:0] = MEM(addr)[4*part+3:4*part+0];
++     *  if (vm.E[i] == 1) {
++     *      vd.E[i] = [Sign|Zero]-Extend(nibble[3:0]);
++     *  }
++     */
++    for (i = 0; i < env->vl; i++) {
++        k = 0;
++        while (k < nf) {
++            if (!vm && !vext_elem_mask(v0, i)) {
++                /* set masked-off elements to 1s */
++                vext_set_elems_1s(vd, vma, (i + k * max_elems) * esz,
++                                  (i + k * max_elems + 1) * esz);
++                k++;
++                continue;
++            }
++            /* since int4 use the same address for a pair data,
++             * so we caculate address should divide by 2.
++             * Here we don't care about k(nf) > 1 case now
++             */
++            target_ulong addr = base + stride * (i / 2) + (k << log2_esz);
++            ldst_elem(env, adjust_addr(env, addr), i + k * max_elems, vd, ra);
++            lde_to_bh(i % 2, is_sign, i + k * max_elems, vd);
++            k++;
++        }
++    }
++    env->vstart = 0;
++
++    vext_set_tail_elems_1s(env->vl, vd, desc, nf, esz, max_elems);
++}
++
++/*
++ * masked unit-stride load and store operation will be a special case of stride,
++ * stride = NF * sizeof (MTYPE)
++ */
++
++#define GEN_VEXT_LD_US_INT4(NAME, ETYPE, LOAD_FN)                       \
++void HELPER(NAME##_mask)(void *vd, void *v0, target_ulong base,         \
++                         uint32_t is_sign, CPURISCVState *env,          \
++                         uint32_t desc)                                 \
++{                                                                       \
++    uint32_t stride = vext_nf(desc) << ctzl(sizeof(ETYPE));             \
++    vext_ldst_int4_stride(vd, v0, base, stride, env, desc,              \
++                          false, is_sign, LOAD_FN,                      \
++                          ctzl(sizeof(ETYPE)), GETPC());                \
++}                                                                       \
++                                                                        \
++void HELPER(NAME)(void *vd, void *v0, target_ulong base,                \
++                    uint32_t is_sign, CPURISCVState *env,               \
++                    uint32_t desc)                                      \
++{                                                                       \
++    uint32_t stride = vext_nf(desc) << ctzl(sizeof(ETYPE));             \
++    vext_ldst_int4_stride(vd, v0, base, stride, env, desc,              \
++                          true, is_sign, LOAD_FN,                       \
++                          ctzl(sizeof(ETYPE)), GETPC());                \
++}
++
++GEN_VEXT_LD_US_INT4(vln8_v, int8_t, lde_b)
++
++/* Vector Signed Dot Product on 1/4 of SEW */
++#define OPIVV9(NAME, TD, T1, T2, TX1, TX2, HD, HS1, HS2, OP, OP2)       \
++static void do_##NAME(void *vd, void *vs1, void *vs2, int i)            \
++{                                                                       \
++    int j;                                                              \
++    TD sum = 0;                                                         \
++    for (j = 0; j < 4; j++) {                                           \
++        TX1 s1 = *((T1 *)vs1 + HS1(i + j));                             \
++        TX2 s2 = *((T2 *)vs2 + HS2(i + j));                             \
++        sum = OP2(s2, s1, sum);                                         \
++    }                                                                   \
++    TD d = *((TD *)vd + HD(i));                                         \
++    *((TD *)vd + HD(i)) = OP(d, sum);                                   \
++}
++
++RVVCALL(OPIVV9, vd4dots_vv_w, WOP_SSS_W4, H4, H1, H1, DO_ADD, DO_MACC)
++RVVCALL(OPIVV9, vd4dots_vv_d, WOP_SSS_D4, H8, H2, H2, DO_ADD, DO_MACC)
++RVVCALL(OPIVV9, vd4dotu_vv_w, WOP_UUU_W4, H4, H1, H1, DO_ADD, DO_MACC)
++RVVCALL(OPIVV9, vd4dotu_vv_d, WOP_UUU_D4, H8, H2, H2, DO_ADD, DO_MACC)
++RVVCALL(OPIVV9, vd4dotsu_vv_w, WOP_SSU_W4, H4, H1, H1, DO_ADD, DO_MACC)
++RVVCALL(OPIVV9, vd4dotsu_vv_d, WOP_SSU_D4, H8, H2, H2, DO_ADD, DO_MACC)
++GEN_VEXT_VV(vd4dots_vv_w, 4)
++GEN_VEXT_VV(vd4dots_vv_d, 8)
++GEN_VEXT_VV(vd4dotu_vv_w, 4)
++GEN_VEXT_VV(vd4dotu_vv_d, 8)
++GEN_VEXT_VV(vd4dotsu_vv_w, 4)
++GEN_VEXT_VV(vd4dotsu_vv_d, 8)
++
++/* Vector Small INT Handling extension */
++void HELPER(vle4_v)(void *vd, target_ulong base,
++                    CPURISCVState *env, uint32_t desc)
++{
++    target_ulong i;
++    target_ulong vl;
++    uint8_t vl_is_odd = env->vl % 2;
++    uint8_t tmp;
++    void *ptr = &tmp;
++    /* Element_size = 4;
++     * i = 0..(VL-1)
++     * addr = rs1 + floor(i/2);
++     * part = i%2;
++     * nibble[3:0] = MEM(addr)[4*part+3:4*part+0];
++     * vd.E[i] = nibble[3:0];
++     */
++    /* int4 uses the same address for a pair data
++     * loads memory data by byte, once for 2 elements
++     */
++    vl = env->vl / 2;
++    for (i = 0; i < vl; i++) {
++        target_ulong addr = base + i;
++        lde_b(env, adjust_addr(env, addr), i, vd, GETPC());
++    }
++    /* process last element if vl is an odd number */
++    if (vl_is_odd) {
++        target_ulong addr = base + vl;
++        /* Loads byte memory data into tmp variable */
++        lde_b(env, adjust_addr(env, addr), 0, ptr, GETPC());
++        uint8_t *cur = ((uint8_t *)vd + H1(vl));
++        uint8_t val = (*cur) & 0xf; /* keep bit[0:3] */
++        tmp &= 0xf0; /* keep bit[4:7] */
++        *cur = (tmp | val);
++    }
++}
++
++/* From softfloat.c */
++static float32 int4_to_float16(int8_t a, float_status *status)
++{
++    /* check bit 3 */
++    if (a & 0x8) {
++        /* sign-extend for negative */
++        a |= 0xf0;
++    } else {
++        /* sign-extend for positive */
++        a &= 0x0f;
++    }
++    return int64_to_float16_scalbn(a, 0, status);
++}
++
++static float32 uint4_to_float16(uint8_t a, float_status *status)
++{
++    /* zero-extend */
++    a &= 0x0f;
++    return uint64_to_float16_scalbn(a, 0, status);
++}
++
++static float32 int4_to_float32(int8_t a, float_status *status)
++{
++    /* check bit 3 */
++    if (a & 0x8) {
++        /* sign-extend for negative */
++        a |= 0xf0;
++    } else {
++        /* sign-extend for positive */
++        a &= 0x0f;
++    }
++    return int64_to_float32_scalbn(a, 0, status);
++}
++
++static float32 uint4_to_float32(uint8_t a, float_status *status)
++{
++    /* zero-extend */
++    a &= 0x0f;
++    return uint64_to_float32_scalbn(a, 0, status);
++}
++
++static float32 int8_to_float32(int8_t a, float_status *status)
++{
++    return int64_to_float32_scalbn(a, 0, status);
++}
++
++static float32 uint8_to_float32(uint8_t a, float_status *status)
++{
++    return uint64_to_float32_scalbn(a, 0, status);
++}
++
++
++/*
++ * Assume
++ * part = i%2;
++ * nibble[3:0] = vs[i/2][4*part+3:4*part+0];
++ * vd.E[i] = float(nibble[3:0]);
++ */
++
++#define OPFVV9(NAME, TD, T2, TX2, HD, HS2, OP)         \
++static void do_##NAME(void *vd, void *vs2, int i,      \
++        CPURISCVState *env)                            \
++{                                                      \
++    TX2 s2 = *((T2 *)vs2 + HS2(i / 2));                \
++    TX2 val;                                           \
++    if (i % 2) {                                       \
++        val = s2 & 0x0f;                               \
++    } else {                                           \
++        val = s2 >> 4;                                 \
++        val &= 0x0f;                                   \
++    }                                                  \
++    *((TD *)vd + HD(i)) = OP(val, &env->fp_status);    \
++}
++
++#define SOP_UU_HB4 uint16_t, uint4_t,  uint4_t
++#define SOP_UU_WB4 uint32_t, uint4_t,  uint4_t
++#define SOP_UU_HB uint16_t, uint8_t,  uint8_t
++#define SOP_UU_WB uint32_t, uint8_t,  uint8_t
++RVVCALL(OPFVV9, vfwcvt_f_n_v16, SOP_UU_HB4, H2, H1, int4_to_float16)
++GEN_VEXT_V_ENV(vfwcvt_f_n_v16, 4)
++RVVCALL(OPFVV9, vfwcvt_f_n_v32, SOP_UU_WB4, H4, H1, int4_to_float32)
++GEN_VEXT_V_ENV(vfwcvt_f_n_v32, 8)
++
++RVVCALL(OPFVV9, vfwcvt_f_nu_v16, SOP_UU_HB4, H2, H1, uint4_to_float16)
++GEN_VEXT_V_ENV(vfwcvt_f_nu_v16, 4)
++RVVCALL(OPFVV9, vfwcvt_f_nu_v32, SOP_UU_WB4, H4, H1, uint4_to_float32)
++GEN_VEXT_V_ENV(vfwcvt_f_nu_v32, 8)
++
++RVVCALL(OPFVV1, vfwcvt_f_b_v16, SOP_UU_HB, H2, H1, int8_to_float16)
++GEN_VEXT_V_ENV(vfwcvt_f_b_v16, 4)
++RVVCALL(OPFVV1, vfwcvt_f_b_v32, SOP_UU_WB, H4, H1, int8_to_float32)
++GEN_VEXT_V_ENV(vfwcvt_f_b_v32, 8)
++
++RVVCALL(OPFVV1, vfwcvt_f_bu_v16, SOP_UU_HB, H2, H1, uint8_to_float16)
++GEN_VEXT_V_ENV(vfwcvt_f_bu_v16, 4)
++RVVCALL(OPFVV1, vfwcvt_f_bu_v32, SOP_UU_WB, H4, H1, uint8_to_float32)
++GEN_VEXT_V_ENV(vfwcvt_f_bu_v32, 8)
++
++
++/* Vector Quad-Widening Integer Multiply-Add Instructions */
++RVVCALL(OPIVV3, vqmaccu_vv_b, WOP_UUU_W4, H4, H1, H1, DO_MACC)
++RVVCALL(OPIVV3, vqmaccu_vv_h, WOP_UUU_D4, H8, H2, H2, DO_MACC)
++RVVCALL(OPIVV3, vqmacc_vv_b, WOP_SSS_W4, H4, H1, H1, DO_MACC)
++RVVCALL(OPIVV3, vqmacc_vv_h, WOP_SSS_D4, H8, H2, H2, DO_MACC)
++RVVCALL(OPIVV3, vqmaccsu_vv_b, WOP_SSU_W4, H4, H1, H1, DO_MACC)
++RVVCALL(OPIVV3, vqmaccsu_vv_h, WOP_SSU_D4, H8, H2, H2, DO_MACC)
++GEN_VEXT_VV(vqmaccu_vv_b, 4)
++GEN_VEXT_VV(vqmaccu_vv_h, 8)
++GEN_VEXT_VV(vqmacc_vv_b, 4)
++GEN_VEXT_VV(vqmacc_vv_h, 8)
++GEN_VEXT_VV(vqmaccsu_vv_b, 4)
++GEN_VEXT_VV(vqmaccsu_vv_h, 8)
++
++RVVCALL(OPIVX3, vqmaccu_vx_b, WOP_UUU_W4, H4, H1, DO_MACC)
++RVVCALL(OPIVX3, vqmaccu_vx_h, WOP_UUU_D4, H8, H2, DO_MACC)
++RVVCALL(OPIVX3, vqmacc_vx_b, WOP_SSS_W4, H4, H1, DO_MACC)
++RVVCALL(OPIVX3, vqmacc_vx_h, WOP_SSS_D4, H8, H2, DO_MACC)
++RVVCALL(OPIVX3, vqmaccsu_vx_b, WOP_SSU_W4, H4, H1, DO_MACC)
++RVVCALL(OPIVX3, vqmaccsu_vx_h, WOP_SSU_D4, H8, H2, DO_MACC)
++RVVCALL(OPIVX3, vqmaccus_vx_b, WOP_SUS_W4, H4, H1, DO_MACC)
++RVVCALL(OPIVX3, vqmaccus_vx_h, WOP_SUS_D4, H8, H2, DO_MACC)
++GEN_VEXT_VX(vqmaccu_vx_b, 4)
++GEN_VEXT_VX(vqmaccu_vx_h, 8)
++GEN_VEXT_VX(vqmacc_vx_b, 4)
++GEN_VEXT_VX(vqmacc_vx_h, 8)
++GEN_VEXT_VX(vqmaccsu_vx_b, 4)
++GEN_VEXT_VX(vqmaccsu_vx_h, 8)
++GEN_VEXT_VX(vqmaccus_vx_b, 4)
++GEN_VEXT_VX(vqmaccus_vx_h, 8)
++
+-- 
+2.34.1
+

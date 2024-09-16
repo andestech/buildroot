@@ -1,0 +1,394 @@
+From b29039819af273ce451044c03e4ececb1efd8242 Mon Sep 17 00:00:00 2001
+From: Dylan Jhong <dylan@andestech.com>
+Date: Tue, 18 Apr 2023 11:46:45 +0800
+Subject: [PATCH 015/241] target/riscv: Introduce new Andes CSR read/write
+ operations with "write any, read any" approach
+
+The current operation of Andes CSRs is "write any, read zero". However,
+in our software, there are cases where we write values to these CSRs
+and then read the written values to confirm if the settings are successful,
+for example, $mcache_ctl, $pmaaddr, etc. Therefore, we need to change the
+previous "write any, read zero" strategy.
+
+The new strategy is "write any, read any". The software will be able to
+set values for all Andes CSRs and expect to read back the same values.
+This approach should resolve most software issues. However, if the software
+checks the default values of certain Andes CSRs, it may read back values
+of 0, which could potentially result in incorrect judgments. However,
+this can be corrected when encountering actual issues in the future.
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+---
+ hw/intc/andes_plic.c         |   4 +-
+ target/riscv/csr_andes.inc.c | 256 +++++++++++++++--------------------
+ target/riscv/csr_andes.inc.h |   8 +-
+ 3 files changed, 114 insertions(+), 154 deletions(-)
+
+diff --git a/hw/intc/andes_plic.c b/hw/intc/andes_plic.c
+index 77d0ba83c8..5dd4dcdc6d 100644
+--- a/hw/intc/andes_plic.c
++++ b/hw/intc/andes_plic.c
+@@ -69,7 +69,7 @@ void andes_plichw_update(void *plic)
+         switch (mode) {
+         case PlicMode_M:
+             if (!vec->vectored_irq_m &&
+-                (csr->mmisc_ctl & (1UL << V5_MMISC_CTL_VEC_PLIC)) &&
++                (csr->csrno[CSR_MMISC_CTL] & (1UL << V5_MMISC_CTL_VEC_PLIC)) &&
+                 (andes_plic->feature_enable & FER_VECTORED) && level) {
+                     vec->vectored_irq_m =
+                         riscv_plic->riscv_plic_claim(riscv_plic, target_id);
+@@ -79,7 +79,7 @@ void andes_plichw_update(void *plic)
+             break;
+         case PlicMode_S:
+             if (!vec->vectored_irq_s &&
+-                (csr->mmisc_ctl & (1UL << V5_MMISC_CTL_VEC_PLIC)) &&
++                (csr->csrno[CSR_MMISC_CTL] & (1UL << V5_MMISC_CTL_VEC_PLIC)) &&
+                 (andes_plic->feature_enable & FER_VECTORED) && level) {
+                     vec->vectored_irq_s =
+                         riscv_plic->riscv_plic_claim(riscv_plic, target_id);
+diff --git a/target/riscv/csr_andes.inc.c b/target/riscv/csr_andes.inc.c
+index bce715ac5e..9ffa544c4d 100644
+--- a/target/riscv/csr_andes.inc.c
++++ b/target/riscv/csr_andes.inc.c
+@@ -12,64 +12,25 @@
+ #include "andes_cpu_bits.h"
+ #include "csr_andes.inc.h"
+ 
+-static RISCVException read_mmsc_cfg(CPURISCVState *env,
+-                                    int csrno,
+-                                    target_ulong *val)
+-{
+-    *val = env->andes_csr.mmsc_cfg;
+-    return RISCV_EXCP_NONE;
+-}
+-
+-static RISCVException write_uitb(CPURISCVState *env,
+-                                 int csrno,
+-                                 target_ulong val)
+-{
+-    env->andes_csr.uitb = val;
+-    return RISCV_EXCP_NONE;
+-}
+-
+-static RISCVException read_uitb(CPURISCVState *env,
+-                                int csrno,
+-                                target_ulong *val)
+-{
+-    *val = env->andes_csr.uitb;
+-    return RISCV_EXCP_NONE;
+-}
+-
+-static RISCVException write_mmisc_ctl(CPURISCVState *env,
+-                                     int csrno,
+-                                     target_ulong val)
+-{
+-    env->andes_csr.mmisc_ctl = val;
+-    return RISCV_EXCP_NONE;
+-}
+-
+-static RISCVException read_mmisc_ctl(CPURISCVState *env,
+-                                     int csrno,
+-                                     target_ulong *val)
+-{
+-    *val = env->andes_csr.mmisc_ctl;
+-    return RISCV_EXCP_NONE;
+-}
+-
+ static RISCVException any(CPURISCVState *env,
+                           int csrno)
+ {
+     return RISCV_EXCP_NONE;
+ }
+ 
+-static RISCVException read_zero(CPURISCVState *env,
+-                                int csrno,
+-                                target_ulong *val)
++static RISCVException read_csr(CPURISCVState *env,
++                               int csrno,
++                               target_ulong *val)
+ {
+-    *val = 0;
++    *val = env->andes_csr.csrno[csrno];
+     return RISCV_EXCP_NONE;
+ }
+ 
+-static RISCVException write_stub(CPURISCVState *env,
+-                                 int csrno,
+-                                 target_ulong val)
++static RISCVException write_csr(CPURISCVState *env,
++                                int csrno,
++                                target_ulong val)
+ {
++    env->andes_csr.csrno[csrno] = val;
+     return RISCV_EXCP_NONE;
+ }
+ 
+@@ -84,12 +45,12 @@ void andes_csr_init(AndesCsr *andes_csr)
+         }
+     }
+ 
+-    /* Initilaize CSR default value */
+-    andes_csr->uitb = 0;
+-    andes_csr->mmsc_cfg =   (1UL << V5_MMSC_CFG_ECD) |
+-                            (1UL << V5_MMSC_CFG_PPMA);
+-    andes_csr->mmisc_ctl =  (1UL << V5_MMISC_CTL_BRPE) |
+-                            (1UL << V5_MMISC_CTL_MSA_OR_UNA);
++    /* Initilaize Andes CSRs default value */
++    andes_csr->csrno[CSR_UITB] = 0;
++    andes_csr->csrno[CSR_MMSC_CFG] =    (1UL << V5_MMSC_CFG_ECD) |
++                                        (1UL << V5_MMSC_CFG_PPMA);
++    andes_csr->csrno[CSR_MMISC_CTL] =   (1UL << V5_MMISC_CTL_BRPE) |
++                                        (1UL << V5_MMISC_CTL_MSA_OR_UNA);
+ }
+ 
+ void andes_vec_init(AndesVec *andes_vec)
+@@ -106,7 +67,7 @@ void andes_cpu_do_interrupt_post(CPUState *cs)
+     AndesCsr *csr = &env->andes_csr;
+     AndesVec *vec = &env->andes_vec;
+ 
+-    if (csr->mmisc_ctl & (1UL << V5_MMISC_CTL_VEC_PLIC)) {
++    if (csr->csrno[CSR_MMISC_CTL] & (1UL << V5_MMISC_CTL_VEC_PLIC)) {
+         if (env->priv == PRV_M) {
+             int irq_id = vec->vectored_irq_m;
+             vec->vectored_irq_m = 0;
+@@ -131,125 +92,122 @@ void andes_cpu_do_interrupt_post(CPUState *cs)
+ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     /* ================== AndeStar V5 machine mode CSRs ================== */
+     /* Configuration Registers */
+-    [CSR_MICM_CFG]  = { "micm_cfg",          any, read_zero,      write_stub},
+-    [CSR_MDCM_CFG]  = { "mdcm_cfg",          any, read_zero,      write_stub},
+-    [CSR_MMSC_CFG]  = { "mmsc_cfg",          any, read_mmsc_cfg,  write_stub},
+-    [CSR_MMSC_CFG2] = { "mmsc_cfg2",         any, read_zero,      write_stub},
+-    [CSR_MVEC_CFG]  = { "mvec_cfg",          any, read_zero,      write_stub},
++    [CSR_MICM_CFG]  = { "micm_cfg",          any, read_csr,      write_csr},
++    [CSR_MDCM_CFG]  = { "mdcm_cfg",          any, read_csr,      write_csr},
++    [CSR_MMSC_CFG]  = { "mmsc_cfg",          any, read_csr,      write_csr},
++    [CSR_MMSC_CFG2] = { "mmsc_cfg2",         any, read_csr,      write_csr},
++    [CSR_MVEC_CFG]  = { "mvec_cfg",          any, read_csr,      write_csr},
+ 
+     /* Crash Debug CSRs */
+-    [CSR_MCRASH_STATESAVE]  = { "mcrash_statesave",  any, read_zero,
+-                                write_stub                                  },
+-    [CSR_MSTATUS_CRASHSAVE] = { "mstatus_crashsave", any, read_zero,
+-                                write_stub                                  },
++    [CSR_MCRASH_STATESAVE]  = { "mcrash_statesave",  any, read_csr, write_csr},
++    [CSR_MSTATUS_CRASHSAVE] = { "mstatus_crashsave", any, read_csr, write_csr},
+ 
+     /* Memory CSRs */
+-    [CSR_MILMB]          = { "milmb",             any, read_zero, write_stub},
+-    [CSR_MDLMB]          = { "mdlmb",             any, read_zero, write_stub},
+-    [CSR_MECC_CODE]      = { "mecc_code",         any, read_zero, write_stub},
+-    [CSR_MNVEC]          = { "mnvec",             any, read_zero, write_stub},
+-    [CSR_MCACHE_CTL]     = { "mcache_ctl",        any, read_zero, write_stub},
+-    [CSR_MCCTLBEGINADDR] = { "mcctlbeginaddr",    any, read_zero, write_stub},
+-    [CSR_MCCTLCOMMAND]   = { "mcctlcommand",      any, read_zero, write_stub},
+-    [CSR_MCCTLDATA]      = { "mcctldata",         any, read_zero, write_stub},
+-    [CSR_MPPIB]          = { "mppib",             any, read_zero, write_stub},
+-    [CSR_MFIOB]          = { "mfiob",             any, read_zero, write_stub},
++    [CSR_MILMB]          = { "milmb",             any, read_csr, write_csr},
++    [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_csr},
++    [CSR_MECC_CODE]      = { "mecc_code",         any, read_csr, write_csr},
++    [CSR_MNVEC]          = { "mnvec",             any, read_csr, write_csr},
++    [CSR_MCACHE_CTL]     = { "mcache_ctl",        any, read_csr, write_csr},
++    [CSR_MCCTLBEGINADDR] = { "mcctlbeginaddr",    any, read_csr, write_csr},
++    [CSR_MCCTLCOMMAND]   = { "mcctlcommand",      any, read_csr, write_csr},
++    [CSR_MCCTLDATA]      = { "mcctldata",         any, read_csr, write_csr},
++    [CSR_MPPIB]          = { "mppib",             any, read_csr, write_csr},
++    [CSR_MFIOB]          = { "mfiob",             any, read_csr, write_csr},
+ 
+     /* Hardware Stack Protection & Recording */
+-    [CSR_MHSP_CTL]     = { "mhsp_ctl",          any, read_zero, write_stub},
+-    [CSR_MSP_BOUND]    = { "msp_bound",         any, read_zero, write_stub},
+-    [CSR_MSP_BASE]     = { "msp_base",          any, read_zero, write_stub},
+-    [CSR_MXSTATUS]     = { "mxstatus",          any, read_zero, write_stub},
+-    [CSR_MDCAUSE]      = { "mdcause",           any, read_zero, write_stub},
+-    [CSR_MSLIDELEG]    = { "mslideleg",         any, read_zero, write_stub},
+-    [CSR_MSAVESTATUS]  = { "msavestatus",       any, read_zero, write_stub},
+-    [CSR_MSAVEEPC1]    = { "msaveepc1",         any, read_zero, write_stub},
+-    [CSR_MSAVECAUSE1]  = { "msavecause1",       any, read_zero, write_stub},
+-    [CSR_MSAVEEPC2]    = { "msaveepc2",         any, read_zero, write_stub},
+-    [CSR_MSAVECAUSE2]  = { "msavecause2",       any, read_zero, write_stub},
+-    [CSR_MSAVEDCAUSE1] = { "msavedcause1",      any, read_zero, write_stub},
+-    [CSR_MSAVEDCAUSE2] = { "msavedcause2",      any, read_zero, write_stub},
++    [CSR_MHSP_CTL]     = { "mhsp_ctl",            any, read_csr, write_csr},
++    [CSR_MSP_BOUND]    = { "msp_bound",           any, read_csr, write_csr},
++    [CSR_MSP_BASE]     = { "msp_base",            any, read_csr, write_csr},
++    [CSR_MXSTATUS]     = { "mxstatus",            any, read_csr, write_csr},
++    [CSR_MDCAUSE]      = { "mdcause",             any, read_csr, write_csr},
++    [CSR_MSLIDELEG]    = { "mslideleg",           any, read_csr, write_csr},
++    [CSR_MSAVESTATUS]  = { "msavestatus",         any, read_csr, write_csr},
++    [CSR_MSAVEEPC1]    = { "msaveepc1",           any, read_csr, write_csr},
++    [CSR_MSAVECAUSE1]  = { "msavecause1",         any, read_csr, write_csr},
++    [CSR_MSAVEEPC2]    = { "msaveepc2",           any, read_csr, write_csr},
++    [CSR_MSAVECAUSE2]  = { "msavecause2",         any, read_csr, write_csr},
++    [CSR_MSAVEDCAUSE1] = { "msavedcause1",        any, read_csr, write_csr},
++    [CSR_MSAVEDCAUSE2] = { "msavedcause2",        any, read_csr, write_csr},
+ 
+     /* Control CSRs */
+-    [CSR_MPFT_CTL]  = { "mpft_ctl",          any, read_zero,       write_stub},
+-    [CSR_MMISC_CTL] = { "mmisc_ctl",         any, read_mmisc_ctl,
+-                        write_mmisc_ctl                                      },
+-    [CSR_MCLK_CTL]  = { "mclk_ctl",          any, read_zero,       write_stub},
++    [CSR_MPFT_CTL]  = { "mpft_ctl",               any, read_csr, write_csr},
++    [CSR_MMISC_CTL] = { "mmisc_ctl",              any, read_csr, write_csr},
++    [CSR_MCLK_CTL]  = { "mclk_ctl",               any, read_csr, write_csr},
+ 
+     /* Counter related CSRs */
+-    [CSR_MCOUNTERWEN]    = { "mcounterwen",       any, read_zero, write_stub},
+-    [CSR_MCOUNTERINTEN]  = { "mcounterinten",     any, read_zero, write_stub},
+-    [CSR_MCOUNTERMASK_M] = { "mcountermask_m",    any, read_zero, write_stub},
+-    [CSR_MCOUNTERMASK_S] = { "mcountermask_s",    any, read_zero, write_stub},
+-    [CSR_MCOUNTERMASK_U] = { "mcountermask_u",    any, read_zero, write_stub},
+-    [CSR_MCOUNTEROVF]    = { "mcounterovf",       any, read_zero, write_stub},
++    [CSR_MCOUNTERWEN]    = { "mcounterwen",       any, read_csr, write_csr},
++    [CSR_MCOUNTERINTEN]  = { "mcounterinten",     any, read_csr, write_csr},
++    [CSR_MCOUNTERMASK_M] = { "mcountermask_m",    any, read_csr, write_csr},
++    [CSR_MCOUNTERMASK_S] = { "mcountermask_s",    any, read_csr, write_csr},
++    [CSR_MCOUNTERMASK_U] = { "mcountermask_u",    any, read_csr, write_csr},
++    [CSR_MCOUNTEROVF]    = { "mcounterovf",       any, read_csr, write_csr},
+ 
+     /* Enhanced CLIC CSRs */
+-    [CSR_MIRQ_ENTRY]   = { "mirq_entry",        any, read_zero, write_stub},
+-    [CSR_MINTSEL_JAL]  = { "mintsel_jal",       any, read_zero, write_stub},
+-    [CSR_PUSHMCAUSE]   = { "pushmcause",        any, read_zero, write_stub},
+-    [CSR_PUSHMEPC]     = { "pushmepc",          any, read_zero, write_stub},
+-    [CSR_PUSHMXSTATUS] = { "pushmxstatus",      any, read_zero, write_stub},
++    [CSR_MIRQ_ENTRY]   = { "mirq_entry",          any, read_csr, write_csr},
++    [CSR_MINTSEL_JAL]  = { "mintsel_jal",         any, read_csr, write_csr},
++    [CSR_PUSHMCAUSE]   = { "pushmcause",          any, read_csr, write_csr},
++    [CSR_PUSHMEPC]     = { "pushmepc",            any, read_csr, write_csr},
++    [CSR_PUSHMXSTATUS] = { "pushmxstatus",        any, read_csr, write_csr},
+ 
+     /* Andes Physical Memory Attribute(PMA) CSRs */
+-    [CSR_PMACFG0]   = { "pmacfg0",           any, read_zero, write_stub},
+-    [CSR_PMACFG1]   = { "pmacfg1",           any, read_zero, write_stub},
+-    [CSR_PMACFG2]   = { "pmacfg2",           any, read_zero, write_stub},
+-    [CSR_PMACFG3]   = { "pmacfg3",           any, read_zero, write_stub},
+-    [CSR_PMAADDR0]  = { "pmaaddr0",          any, read_zero, write_stub},
+-    [CSR_PMAADDR1]  = { "pmaaddr1",          any, read_zero, write_stub},
+-    [CSR_PMAADDR2]  = { "pmaaddr2",          any, read_zero, write_stub},
+-    [CSR_PMAADDR3]  = { "pmaaddr3",          any, read_zero, write_stub},
+-    [CSR_PMAADDR4]  = { "pmaaddr4",          any, read_zero, write_stub},
+-    [CSR_PMAADDR5]  = { "pmaaddr5",          any, read_zero, write_stub},
+-    [CSR_PMAADDR6]  = { "pmaaddr6",          any, read_zero, write_stub},
+-    [CSR_PMAADDR7]  = { "pmaaddr7",          any, read_zero, write_stub},
+-    [CSR_PMAADDR8]  = { "pmaaddr8",          any, read_zero, write_stub},
+-    [CSR_PMAADDR9]  = { "pmaaddr9",          any, read_zero, write_stub},
+-    [CSR_PMAADDR10] = { "pmaaddr10",         any, read_zero, write_stub},
+-    [CSR_PMAADDR11] = { "pmaaddr11",         any, read_zero, write_stub},
+-    [CSR_PMAADDR12] = { "pmaaddr12",         any, read_zero, write_stub},
+-    [CSR_PMAADDR13] = { "pmaaddr13",         any, read_zero, write_stub},
+-    [CSR_PMAADDR14] = { "pmaaddr14",         any, read_zero, write_stub},
+-    [CSR_PMAADDR15] = { "pmaaddr15",         any, read_zero, write_stub},
++    [CSR_PMACFG0]   = { "pmacfg0",                any, read_csr, write_csr},
++    [CSR_PMACFG1]   = { "pmacfg1",                any, read_csr, write_csr},
++    [CSR_PMACFG2]   = { "pmacfg2",                any, read_csr, write_csr},
++    [CSR_PMACFG3]   = { "pmacfg3",                any, read_csr, write_csr},
++    [CSR_PMAADDR0]  = { "pmaaddr0",               any, read_csr, write_csr},
++    [CSR_PMAADDR1]  = { "pmaaddr1",               any, read_csr, write_csr},
++    [CSR_PMAADDR2]  = { "pmaaddr2",               any, read_csr, write_csr},
++    [CSR_PMAADDR3]  = { "pmaaddr3",               any, read_csr, write_csr},
++    [CSR_PMAADDR4]  = { "pmaaddr4",               any, read_csr, write_csr},
++    [CSR_PMAADDR5]  = { "pmaaddr5",               any, read_csr, write_csr},
++    [CSR_PMAADDR6]  = { "pmaaddr6",               any, read_csr, write_csr},
++    [CSR_PMAADDR7]  = { "pmaaddr7",               any, read_csr, write_csr},
++    [CSR_PMAADDR8]  = { "pmaaddr8",               any, read_csr, write_csr},
++    [CSR_PMAADDR9]  = { "pmaaddr9",               any, read_csr, write_csr},
++    [CSR_PMAADDR10] = { "pmaaddr10",              any, read_csr, write_csr},
++    [CSR_PMAADDR11] = { "pmaaddr11",              any, read_csr, write_csr},
++    [CSR_PMAADDR12] = { "pmaaddr12",              any, read_csr, write_csr},
++    [CSR_PMAADDR13] = { "pmaaddr13",              any, read_csr, write_csr},
++    [CSR_PMAADDR14] = { "pmaaddr14",              any, read_csr, write_csr},
++    [CSR_PMAADDR15] = { "pmaaddr15",              any, read_csr, write_csr},
+ 
+     /* Debug/Trace Registers (shared with Debug Mode) */
+-    [CSR_TSELECT] = { "tselect",           any, read_zero, write_stub},
+-    [CSR_TDATA1]  = { "tdata1",            any, read_zero, write_stub},
+-    [CSR_TDATA2]  = { "tdata2",            any, read_zero, write_stub},
+-    [CSR_TDATA3]  = { "tdata3",            any, read_zero, write_stub},
+-    [CSR_TINFO]   = { "tinfo",             any, read_zero, write_stub},
++    [CSR_TSELECT] = { "tselect",                  any, read_csr, write_csr},
++    [CSR_TDATA1]  = { "tdata1",                   any, read_csr, write_csr},
++    [CSR_TDATA2]  = { "tdata2",                   any, read_csr, write_csr},
++    [CSR_TDATA3]  = { "tdata3",                   any, read_csr, write_csr},
++    [CSR_TINFO]   = { "tinfo",                    any, read_csr, write_csr},
+ 
+     /* ================ AndeStar V5 supervisor mode CSRs ================ */
+     /* Supervisor trap registers */
+-    [CSR_SLIE]    = { "slie",              any, read_zero, write_stub},
+-    [CSR_SLIP]    = { "slip",              any, read_zero, write_stub},
+-    [CSR_SDCAUSE] = { "sdcause",           any, read_zero, write_stub},
++    [CSR_SLIE]    = { "slie",                     any, read_csr, write_csr},
++    [CSR_SLIP]    = { "slip",                     any, read_csr, write_csr},
++    [CSR_SDCAUSE] = { "sdcause",                  any, read_csr, write_csr},
+ 
+     /* Supervisor counter registers */
+-    [CSR_SCOUNTERINTEN]  = { "scounterinten",     any, read_zero, write_stub},
+-    [CSR_SCOUNTERMASK_M] = { "scountermask_m",    any, read_zero, write_stub},
+-    [CSR_SCOUNTERMASK_S] = { "scountermask_s",    any, read_zero, write_stub},
+-    [CSR_SCOUNTERMASK_U] = { "scountermask_u",    any, read_zero, write_stub},
+-    [CSR_SCOUNTEROVF]    = { "scounterovf",       any, read_zero, write_stub},
+-    [CSR_SCOUNTINHIBIT]  = { "scountinhibit",     any, read_zero, write_stub},
+-    [CSR_SHPMEVENT3]     = { "shpmevent3",        any, read_zero, write_stub},
+-    [CSR_SHPMEVENT4]     = { "shpmevent4",        any, read_zero, write_stub},
+-    [CSR_SHPMEVENT5]     = { "shpmevent5",        any, read_zero, write_stub},
+-    [CSR_SHPMEVENT6]     = { "shpmevent6",        any, read_zero, write_stub},
++    [CSR_SCOUNTERINTEN]  = { "scounterinten",     any, read_csr, write_csr},
++    [CSR_SCOUNTERMASK_M] = { "scountermask_m",    any, read_csr, write_csr},
++    [CSR_SCOUNTERMASK_S] = { "scountermask_s",    any, read_csr, write_csr},
++    [CSR_SCOUNTERMASK_U] = { "scountermask_u",    any, read_csr, write_csr},
++    [CSR_SCOUNTEROVF]    = { "scounterovf",       any, read_csr, write_csr},
++    [CSR_SCOUNTINHIBIT]  = { "scountinhibit",     any, read_csr, write_csr},
++    [CSR_SHPMEVENT3]     = { "shpmevent3",        any, read_csr, write_csr},
++    [CSR_SHPMEVENT4]     = { "shpmevent4",        any, read_csr, write_csr},
++    [CSR_SHPMEVENT5]     = { "shpmevent5",        any, read_csr, write_csr},
++    [CSR_SHPMEVENT6]     = { "shpmevent6",        any, read_csr, write_csr},
+ 
+     /* Supervisor control registers */
+-    [CSR_SCCTLDATA] = { "scctldata",         any, read_zero, write_stub},
+-    [CSR_SMISC_CTL] = { "smisc_ctl",         any, read_zero, write_stub},
++    [CSR_SCCTLDATA] = { "scctldata",              any, read_csr, write_csr},
++    [CSR_SMISC_CTL] = { "smisc_ctl",              any, read_csr, write_csr},
+ 
+     /* =================== AndeStar V5 user mode CSRs =================== */
+     /* User mode control registers */
+-    [CSR_UITB]           = { "uitb",              any, read_uitb, write_uitb},
+-    [CSR_UCODE]          = { "ucode",             any, read_zero, write_stub},
+-    [CSR_UDCAUSE]        = { "udcause",           any, read_zero, write_stub},
+-    [CSR_UCCTLBEGINADDR] = { "ucctlbeginaddr",    any, read_zero, write_stub},
+-    [CSR_UCCTLCOMMAND]   = { "ucctlcommand",      any, read_zero, write_stub},
+-    [CSR_WFE]            = { "wfe",               any, read_zero, write_stub},
+-    [CSR_SLEEPVALUE]     = { "sleepvalue",        any, read_zero, write_stub},
+-    [CSR_TXEVT]          = { "csr_txevt",         any, read_zero, write_stub},
++    [CSR_UITB]           = { "uitb",              any, read_csr, write_csr},
++    [CSR_UCODE]          = { "ucode",             any, read_csr, write_csr},
++    [CSR_UDCAUSE]        = { "udcause",           any, read_csr, write_csr},
++    [CSR_UCCTLBEGINADDR] = { "ucctlbeginaddr",    any, read_csr, write_csr},
++    [CSR_UCCTLCOMMAND]   = { "ucctlcommand",      any, read_csr, write_csr},
++    [CSR_WFE]            = { "wfe",               any, read_csr, write_csr},
++    [CSR_SLEEPVALUE]     = { "sleepvalue",        any, read_csr, write_csr},
++    [CSR_TXEVT]          = { "csr_txevt",         any, read_csr, write_csr},
+ };
+diff --git a/target/riscv/csr_andes.inc.h b/target/riscv/csr_andes.inc.h
+index b1859b7d2d..1e33902ef6 100644
+--- a/target/riscv/csr_andes.inc.h
++++ b/target/riscv/csr_andes.inc.h
+@@ -1,10 +1,12 @@
+ #ifndef RISCV_CSR_ANDES_INC_H
+ #define RISCV_CSR_ANDES_INC_H
+ 
++#include "andes_cpu_bits.h"
++
++#define ANDES_CSR_TABLE_SIZE 0x1000
++
+ typedef struct andes_csr {
+-    target_long uitb;
+-    target_long mmsc_cfg;
+-    target_long mmisc_ctl;
++    target_long csrno[ANDES_CSR_TABLE_SIZE];
+ } AndesCsr;
+ 
+ typedef struct AndesVec {
+-- 
+2.34.1
+

@@ -1,0 +1,271 @@
+From b0adbe5954a049e11c325b0f64093c87f277125c Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Thu, 10 Aug 2023 09:18:10 +0800
+Subject: [PATCH 033/241] target/riscv: Add support of following CSRs:
+ scounterinten, scountermask_m,               scountermask_s, scountermask_u,
+ scounterovf, scountinhibit.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c            | 137 +++++++++++++++++++++++++---
+ target/riscv/csr_andes.h            |   2 +-
+ target/riscv/csr_andes_nx45v_meta.c |  17 ----
+ target/riscv/meson.build            |   8 +-
+ 4 files changed, 128 insertions(+), 36 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index d36445ad5d..de46d317e3 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -167,13 +167,116 @@ static RISCVException write_mhsp_ctl(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
+-static RISCVException write_counter_common(CPURISCVState *env, int csrno,
+-                                           target_ulong val)
++static RISCVException write_mcounter(CPURISCVState *env, int csrno,
++                                     target_ulong val)
+ {
+     env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_COUNTER_COMMON;
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException read_scounter(CPURISCVState *env, int csrno,
++                                    target_ulong *val)
++{
++    int real_csrno;
++
++    switch(csrno)
++    {
++        case CSR_SCOUNTERINTEN:
++            real_csrno = CSR_MCOUNTERINTEN;
++            break;
++        case CSR_SCOUNTERMASK_M:
++            real_csrno = CSR_MCOUNTERMASK_M;
++            break;
++        case CSR_SCOUNTERMASK_S:
++            real_csrno = CSR_MCOUNTERMASK_S;
++            break;
++        case CSR_SCOUNTERMASK_U:
++            real_csrno = CSR_MCOUNTERMASK_U;
++            break;
++        case CSR_SCOUNTEROVF:
++            real_csrno = CSR_MCOUNTEROVF;
++            break;
++        default:
++            return RISCV_EXCP_ILLEGAL_INST;
++    }
++
++    *val = env->andes_csr.csrno[real_csrno];
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_scounter(CPURISCVState *env, int csrno,
++                                     target_ulong val)
++{
++    int real_csrno;
++
++    switch(csrno)
++    {
++        case CSR_SCOUNTERINTEN:
++            real_csrno = CSR_MCOUNTERINTEN;
++            break;
++        case CSR_SCOUNTERMASK_M:
++            real_csrno = CSR_MCOUNTERMASK_M;
++            break;
++        case CSR_SCOUNTERMASK_S:
++            real_csrno = CSR_MCOUNTERMASK_S;
++            break;
++        case CSR_SCOUNTERMASK_U:
++            real_csrno = CSR_MCOUNTERMASK_U;
++            break;
++        case CSR_SCOUNTEROVF:
++            real_csrno = CSR_MCOUNTEROVF;
++            break;
++        default:
++            return RISCV_EXCP_ILLEGAL_INST;
++    }
++
++    target_ulong wen = env->andes_csr.csrno[CSR_MCOUNTERWEN];
++    if (wen == 0) {
++        env->andes_csr.csrno[real_csrno] = val & WRITE_MASK_CSR_COUNTER_COMMON;
++    }
++    else {
++        for (int i=0; i<RV_MAX_MHPMCOUNTERS; i++) {
++            target_ulong mask = 1 << i;
++            if (get_field(wen, mask) == 1) {
++                target_long mval = get_field(val, mask);
++                env->andes_csr.csrno[real_csrno] =
++                    set_field(env->andes_csr.csrno[real_csrno], mask, mval);
++            }
++        }
++    }
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException read_scountinhibit(CPURISCVState *env, int csrno,
++                                         target_ulong *val)
++{
++    return csr_ops[CSR_MCOUNTINHIBIT].read(env, csrno, val);
++}
++
++static RISCVException write_scountinhibit(CPURISCVState *env, int csrno,
++                                          target_ulong val)
++{
++    target_ulong wen = env->andes_csr.csrno[CSR_MCOUNTERWEN];
++    target_ulong new_val = val & WRITE_MASK_CSR_COUNTER_COMMON;
++    target_ulong read_val;
++
++    if (wen == 0) {
++            csr_ops[CSR_MCOUNTINHIBIT].write(env, CSR_MCOUNTINHIBIT, new_val);
++    }
++    else {
++        csr_ops[CSR_MCOUNTINHIBIT].read(env, CSR_MCOUNTINHIBIT, &read_val);
++        for (int i=0; i<RV_MAX_MHPMCOUNTERS; i++) {
++            target_ulong mask = 1 << i;
++            if (get_field(wen, mask) == 1) {
++                target_long mval = get_field(val, mask);
++                read_val = set_field(read_val, mask, mval);
++            }
++        }
++        csr_ops[CSR_MCOUNTINHIBIT].write(env, CSR_MCOUNTINHIBIT, read_val);
++    }
++    return RISCV_EXCP_NONE;
++}
++
+ static RISCVException write_all_ignore(CPURISCVState *env, int csrno,
+                                        target_ulong val)
+ {
+@@ -291,17 +394,17 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+ 
+     /* Counter related CSRs */
+     [CSR_MCOUNTERWEN]    = { "mcounterwen",       pmnds, read_csr,
+-                                                         write_counter_common},
++                                                         write_mcounter   },
+     [CSR_MCOUNTERINTEN]  = { "mcounterinten",     pmnds, read_csr,
+-                                                         write_counter_common},
++                                                         write_mcounter   },
+     [CSR_MCOUNTERMASK_M] = { "mcountermask_m",    pmnds, read_csr,
+-                                                         write_counter_common},
++                                                         write_mcounter   },
+     [CSR_MCOUNTERMASK_S] = { "mcountermask_s",    pmnds, read_csr,
+-                                                         write_counter_common},
++                                                         write_mcounter   },
+     [CSR_MCOUNTERMASK_U] = { "mcountermask_u",    pmnds, read_csr,
+-                                                         write_counter_common},
++                                                         write_mcounter   },
+     [CSR_MCOUNTEROVF]    = { "mcounterovf",       pmnds, read_csr,
+-                                                         write_counter_common},
++                                                         write_mcounter   },
+ 
+     /* Enhanced CLIC CSRs */
+     [CSR_MIRQ_ENTRY]   = { "mirq_entry",          any, read_csr, write_csr},
+@@ -346,12 +449,18 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_SDCAUSE] = { "sdcause",                  any, read_csr, write_csr},
+ 
+     /* Supervisor counter registers */
+-    [CSR_SCOUNTERINTEN]  = { "scounterinten",     pmnds, read_csr, write_csr},
+-    [CSR_SCOUNTERMASK_M] = { "scountermask_m",    pmnds, read_csr, write_csr},
+-    [CSR_SCOUNTERMASK_S] = { "scountermask_s",    pmnds, read_csr, write_csr},
+-    [CSR_SCOUNTERMASK_U] = { "scountermask_u",    pmnds, read_csr, write_csr},
+-    [CSR_SCOUNTEROVF]    = { "scounterovf",       pmnds, read_csr, write_csr},
+-    [CSR_SCOUNTINHIBIT]  = { "scountinhibit",     pmnds, read_csr, write_csr},
++    [CSR_SCOUNTERINTEN]  = { "scounterinten",     pmnds, read_scounter,
++                                                         write_scounter     },
++    [CSR_SCOUNTERMASK_M] = { "scountermask_m",    pmnds, read_scounter,
++                                                         write_scounter     },
++    [CSR_SCOUNTERMASK_S] = { "scountermask_s",    pmnds, read_scounter,
++                                                         write_scounter     },
++    [CSR_SCOUNTERMASK_U] = { "scountermask_u",    pmnds, read_scounter,
++                                                         write_scounter     },
++    [CSR_SCOUNTEROVF]    = { "scounterovf",       pmnds, read_scounter,
++                                                         write_scounter     },
++    [CSR_SCOUNTINHIBIT]  = { "scountinhibit",     pmnds, read_scountinhibit,
++                                                         write_scountinhibit},
+     [CSR_SHPMEVENT3]     = { "shpmevent3",        pmnds, read_csr, write_csr},
+     [CSR_SHPMEVENT4]     = { "shpmevent4",        pmnds, read_csr, write_csr},
+     [CSR_SHPMEVENT5]     = { "shpmevent5",        pmnds, read_csr, write_csr},
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 604ebcc326..de25baf0e8 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -100,7 +100,7 @@ typedef struct AndesVec {
+ #define WRITE_MASK_CSR_UITB_64              0xFFFFFFFC
+ #define WRITE_MASK_CSR_MPFT_CTL             0x1F0
+ #define WRITE_MASK_CSR_MHSP_CTL             0x3F
+-#define WRITE_MASK_CSR_COUNTER_COMMON       0xFFFD
++#define WRITE_MASK_CSR_COUNTER_COMMON       0x7D
+ 
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+diff --git a/target/riscv/csr_andes_nx45v_meta.c b/target/riscv/csr_andes_nx45v_meta.c
+index 016379221e..3b6e7ed772 100644
+--- a/target/riscv/csr_andes_nx45v_meta.c
++++ b/target/riscv/csr_andes_nx45v_meta.c
+@@ -7,8 +7,6 @@
+ #define MASK_MMSC_CFG_L2C          ((uint64_t)0x1 << 46)
+ #define MASK_MMSC_CFG_IOCP         ((uint64_t)0x1 << 46)
+ 
+-#define WRITE_MASK_CSR_COUNTER_COMMON_NX45V_META    0xFD
+-
+ static RISCVException read_mmsc_cfg_nx45v_meta(CPURISCVState *env, int csrno,
+                                                target_ulong *val)
+ {
+@@ -31,15 +29,6 @@ static RISCVException read_mmsc_cfg_nx45v_meta(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
+-static RISCVException write_counter_common_nx45v_meta(CPURISCVState *env,
+-                                                      int csrno,
+-                                                      target_ulong val)
+-{
+-    env->andes_csr.csrno[csrno] =
+-        val & WRITE_MASK_CSR_COUNTER_COMMON_NX45V_META;
+-    return RISCV_EXCP_NONE;
+-}
+-
+ void andes_spec_csr_init_nx45v_meta(AndesCsr *andes_csr)
+ {
+     andes_csr->csrno[CSR_MMSC_CFG] = MASK_MMSC_CFG_ECD   | MASK_MMSC_CFG_PFT
+@@ -52,10 +41,4 @@ void andes_spec_csr_init_nx45v_meta(AndesCsr *andes_csr)
+                                    | MASK_MMSC_CFG_VECCFG;
+ 
+     andes_csr_ops[CSR_MMSC_CFG].read = read_mmsc_cfg_nx45v_meta;
+-    andes_csr_ops[CSR_MCOUNTERWEN].write = write_counter_common_nx45v_meta;
+-    andes_csr_ops[CSR_MCOUNTERINTEN].write = write_counter_common_nx45v_meta;
+-    andes_csr_ops[CSR_MCOUNTERMASK_M].write = write_counter_common_nx45v_meta;
+-    andes_csr_ops[CSR_MCOUNTERMASK_S].write = write_counter_common_nx45v_meta;
+-    andes_csr_ops[CSR_MCOUNTERMASK_U].write = write_counter_common_nx45v_meta;
+-    andes_csr_ops[CSR_MCOUNTEROVF].write = write_counter_common_nx45v_meta;
+ }
+\ No newline at end of file
+diff --git a/target/riscv/meson.build b/target/riscv/meson.build
+index 99c9f5294f..dd0ec25fae 100644
+--- a/target/riscv/meson.build
++++ b/target/riscv/meson.build
+@@ -12,9 +12,6 @@ gen = [
+ riscv_ss = ss.source_set()
+ riscv_ss.add(gen)
+ riscv_ss.add(files(
+-  'andes_helper.c',
+-  'csr_andes.c',
+-  'csr_andes_nx45v_meta.c',
+   'cpu.c',
+   'cpu_helper.c',
+   'csr.c',
+@@ -27,8 +24,11 @@ riscv_ss.add(files(
+   'translate.c',
+   'm128_helper.c',
+   'crypto_helper.c',
+-  'zce_helper.c',
+   'vcrypto_helper.c'
++  'zce_helper.c'
++  'andes_helper.c',
++  'csr_andes.c',
++  'csr_andes_nx45v_meta.c'
+ ))
+ 
+ riscv_system_ss = ss.source_set()
+-- 
+2.34.1
+

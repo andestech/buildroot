@@ -1,0 +1,269 @@
+From 02e32ce4447da25a7c60325f16b00e6ca063f1a4 Mon Sep 17 00:00:00 2001
+From: Locus Wei-Han Chen <locus84@andestech.com>
+Date: Wed, 23 Mar 2022 14:17:11 +0800
+Subject: [PATCH 012/241] hw/intc: Implement vectored-plic mode(#4)
+
+Implementing vectored-plic mode. Now the Andes PLIC can directly jump to the
+address of the corresponding ISR without plic claim operation. Note that the
+plic complete operation is still required.
+
+Signed-off-by: Locus Wei-Han Chen <locus84@andestech.com>
+Reviewed-on: http://gitea.andestech.com:3000/RD-SW/qemu/pulls/4
+Co-authored-by: Locus Wei-Han Chen <locus84@andestech.com>
+Co-committed-by: Locus Wei-Han Chen <locus84@andestech.com>
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+---
+ hw/intc/andes_plic.c         | 32 ++++++++++++++++++++++++++++++++
+ hw/intc/riscv_plic.c         |  6 +++++-
+ include/hw/intc/andes_plic.h |  3 +++
+ include/hw/intc/riscv_plic.h |  2 ++
+ target/riscv/cpu.c           |  6 ++++++
+ target/riscv/cpu.h           |  4 ++++
+ target/riscv/cpu_helper.c    |  5 +++++
+ target/riscv/csr_andes.inc.c | 36 ++++++++++++++++++++++++++++++++++++
+ target/riscv/csr_andes.inc.h |  7 +++++++
+ 9 files changed, 100 insertions(+), 1 deletion(-)
+
+diff --git a/hw/intc/andes_plic.c b/hw/intc/andes_plic.c
+index 92ac64bef1..77d0ba83c8 100644
+--- a/hw/intc/andes_plic.c
++++ b/hw/intc/andes_plic.c
+@@ -64,11 +64,27 @@ void andes_plichw_update(void *plic)
+         }
+         int level = riscv_plic_irqs_pending(riscv_plic, target_id);
+ 
++        AndesCsr *csr = &env->andes_csr;
++        AndesVec *vec = &env->andes_vec;
+         switch (mode) {
+         case PlicMode_M:
++            if (!vec->vectored_irq_m &&
++                (csr->mmisc_ctl & (1UL << V5_MMISC_CTL_VEC_PLIC)) &&
++                (andes_plic->feature_enable & FER_VECTORED) && level) {
++                    vec->vectored_irq_m =
++                        riscv_plic->riscv_plic_claim(riscv_plic, target_id);
++                    assert(vec->vectored_irq_m);
++            }
+             riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_MEIP, BOOL_TO_MASK(level));
+             break;
+         case PlicMode_S:
++            if (!vec->vectored_irq_s &&
++                (csr->mmisc_ctl & (1UL << V5_MMISC_CTL_VEC_PLIC)) &&
++                (andes_plic->feature_enable & FER_VECTORED) && level) {
++                    vec->vectored_irq_s =
++                        riscv_plic->riscv_plic_claim(riscv_plic, target_id);
++                    assert(vec->vectored_irq_s);
++            }
+             riscv_cpu_update_mip(RISCV_CPU(cpu), MIP_SEIP, BOOL_TO_MASK(level));
+             break;
+         default:
+@@ -129,6 +145,14 @@ andes_plic_read(void *opaque, hwaddr addr, unsigned size)
+     AndesPLICState *andes_plic = ANDES_PLIC(opaque);
+     uint64_t value;
+ 
++    switch (addr) {
++    case REG_FEATURE_ENABLE:
++        value = andes_plic->feature_enable;
++        break;
++    default:
++        break;
++    }
++
+     memory_region_dispatch_read(&andes_plic->parent_mmio, addr, &value,
+                 size_memop(size) | MO_LE, MEMTXATTRS_UNSPECIFIED);
+ 
+@@ -140,6 +164,14 @@ andes_plic_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+ {
+     AndesPLICState *andes_plic = ANDES_PLIC(opaque);
+ 
++    switch (addr) {
++    case REG_FEATURE_ENABLE:
++        andes_plic->feature_enable = value & (FER_PREEMPT | FER_VECTORED);
++        break;
++    default:
++        break;
++    }
++
+     memory_region_dispatch_write(&andes_plic->parent_mmio, addr, value,
+             size_memop(size) | MO_LE, MEMTXATTRS_UNSPECIFIED);
+ 
+diff --git a/hw/intc/riscv_plic.c b/hw/intc/riscv_plic.c
+index 7d9279a1b6..5a06980b35 100644
+--- a/hw/intc/riscv_plic.c
++++ b/hw/intc/riscv_plic.c
+@@ -258,8 +258,11 @@ static uint64_t riscv_plic_read_claim(void *opaque,
+         hwaddr addr, unsigned size)
+ {
+     RISCVPLICState *plic = opaque;
++    uint32_t value = 0;
+     uint32_t addrid = (addr - plic->context_base) / plic->context_stride;
+-    uint32_t value = riscv_plic_claim(plic, addrid);
++    if (plic->riscv_plic_claim) {
++        value = plic->riscv_plic_claim(plic, addrid);
++    }
+     if (RISCV_DEBUG_PLIC) {
+         qemu_log("plic: read claim: hart%d-%c irq=%x\n",
+             plic->addr_config[addrid].hartid,
+@@ -559,6 +562,7 @@ static void riscv_plic_realize(DeviceState *dev, Error **errp)
+     plic->riscv_plic_read_enable = riscv_plic_read_enable;
+     plic->riscv_plic_read_threshold = riscv_plic_read_threshold;
+     plic->riscv_plic_read_claim = riscv_plic_read_claim;
++    plic->riscv_plic_claim = riscv_plic_claim;
+ 
+     /* set default write function */
+     plic->riscv_plic_write_priority = riscv_plic_write_priority;
+diff --git a/include/hw/intc/andes_plic.h b/include/hw/intc/andes_plic.h
+index 377bf54487..bfbcfa01d8 100644
+--- a/include/hw/intc/andes_plic.h
++++ b/include/hw/intc/andes_plic.h
+@@ -88,6 +88,9 @@ typedef struct AndesPLICState {
+     MemoryRegion parent_mmio;
+     char *plic_name;
+ 
++    /* registers */
++    uint32_t feature_enable;
++
+     /* interface */
+     void (*andes_plic_update)(void *plic);
+ } AndesPLICState;
+diff --git a/include/hw/intc/riscv_plic.h b/include/hw/intc/riscv_plic.h
+index d85f311f73..0f5ed17d1c 100644
+--- a/include/hw/intc/riscv_plic.h
++++ b/include/hw/intc/riscv_plic.h
+@@ -103,6 +103,8 @@ struct RISCVPLICState {
+         hwaddr addr, uint64_t value, unsigned size);
+ 
+     void (*riscv_plic_update)(void *opaque);
++    uint32_t (*riscv_plic_claim)(RISCVPLICState *plic,
++        uint32_t addrid);
+ };
+ 
+ DeviceState *riscv_plic_create(hwaddr addr, char *hart_config,
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index a2377d16e2..1c8a95d3ee 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -567,6 +567,9 @@ static void rv64_andes_ax25_cpu_init(Object *obj)
+ 
+     /* Setup Andes Custom CSR */
+     andes_csr_init(&env->andes_csr);
++    andes_vec_init(&env->andes_vec);
++
++    env->do_interrupt_post = andes_cpu_do_interrupt_post;
+ 
+     /* Enable Andes Custom extension */
+     cfg->ext_XAndesV5Ops = true;
+@@ -736,6 +739,9 @@ static void rv32_andes_a25_cpu_init(Object *obj)
+ 
+     /* Setup Andes Custom CSR */
+     andes_csr_init(&env->andes_csr);
++    andes_vec_init(&env->andes_vec);
++
++    env->do_interrupt_post = andes_cpu_do_interrupt_post;
+ 
+     /* Enable Andes Custom extension */
+     cfg->ext_XAndesV5Ops = true;
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index 3b7354abb6..e4515c1006 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -418,6 +418,10 @@ struct CPUArchState {
+ 
+     /* Add Vender CSR */
+     AndesCsr andes_csr;
++
++    /* Andes vectored-plic */
++    AndesVec andes_vec;
++    void (*do_interrupt_post)(CPUState *cpu);
+ };
+ 
+ /*
+diff --git a/target/riscv/cpu_helper.c b/target/riscv/cpu_helper.c
+index e7e23b34f4..e427876914 100644
+--- a/target/riscv/cpu_helper.c
++++ b/target/riscv/cpu_helper.c
+@@ -1827,6 +1827,11 @@ void riscv_cpu_do_interrupt(CPUState *cs)
+ 
+     env->two_stage_lookup = false;
+     env->two_stage_indirect_lookup = false;
++
++    /* Do extra interrupt action */
++    if (env->do_interrupt_post) {
++        env->do_interrupt_post(cs);
++    }
+ #endif
+     cs->exception_index = RISCV_EXCP_NONE; /* mark handled to qemu */
+ }
+diff --git a/target/riscv/csr_andes.inc.c b/target/riscv/csr_andes.inc.c
+index 7d33821a59..bce715ac5e 100644
+--- a/target/riscv/csr_andes.inc.c
++++ b/target/riscv/csr_andes.inc.c
+@@ -92,6 +92,42 @@ void andes_csr_init(AndesCsr *andes_csr)
+                             (1UL << V5_MMISC_CTL_MSA_OR_UNA);
+ }
+ 
++void andes_vec_init(AndesVec *andes_vec)
++{
++    andes_vec->vectored_irq_m = 0;
++    andes_vec->vectored_irq_s = 0;
++}
++
++void andes_cpu_do_interrupt_post(CPUState *cs)
++{
++#if !defined(CONFIG_USER_ONLY)
++    RISCVCPU *cpu = RISCV_CPU(cs);
++    CPURISCVState *env = &cpu->env;
++    AndesCsr *csr = &env->andes_csr;
++    AndesVec *vec = &env->andes_vec;
++
++    if (csr->mmisc_ctl & (1UL << V5_MMISC_CTL_VEC_PLIC)) {
++        if (env->priv == PRV_M) {
++            int irq_id = vec->vectored_irq_m;
++            vec->vectored_irq_m = 0;
++            target_ulong base = env->mtvec;
++            env->pc = ((uint64_t)env->pc >> 32) << 32;
++            env->pc |= cpu_ldl_data(env, base + (irq_id << 2));
++            return;
++        }
++
++        if (env->priv == PRV_S) {
++            int irq_id = vec->vectored_irq_s;
++            vec->vectored_irq_s = 0;
++            target_ulong base = env->stvec;
++            env->pc = ((uint64_t)env->pc >> 32) << 32;
++            env->pc |= cpu_ldl_data(env, base + (irq_id << 2));
++            return;
++        }
++    }
++#endif
++}
++
+ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     /* ================== AndeStar V5 machine mode CSRs ================== */
+     /* Configuration Registers */
+diff --git a/target/riscv/csr_andes.inc.h b/target/riscv/csr_andes.inc.h
+index cdd3d260fc..b1859b7d2d 100644
+--- a/target/riscv/csr_andes.inc.h
++++ b/target/riscv/csr_andes.inc.h
+@@ -7,6 +7,11 @@ typedef struct andes_csr {
+     target_long mmisc_ctl;
+ } AndesCsr;
+ 
++typedef struct AndesVec {
++    int vectored_irq_m;
++    int vectored_irq_s;
++} AndesVec;
++
+ /* mmsc_cfg */
+ #define V5_MMSC_CFG_ECD                     3
+ #define V5_MMSC_CFG_PPMA                    30
+@@ -19,5 +24,7 @@ typedef struct andes_csr {
+ #define V5_MMISC_CTL_NON_BLOCKING           8
+ 
+ void andes_csr_init(AndesCsr *);
++void andes_vec_init(AndesVec *);
++void andes_cpu_do_interrupt_post(CPUState *cpu);
+ 
+ #endif /* RISCV_CSR_ANDES_INC_H */
+-- 
+2.34.1
+

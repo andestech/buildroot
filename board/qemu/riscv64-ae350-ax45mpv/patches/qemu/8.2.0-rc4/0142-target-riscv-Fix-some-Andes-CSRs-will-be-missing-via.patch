@@ -1,0 +1,50 @@
+From 229d19b715f869109850f2dff3091bdd9add11d2 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 15 Dec 2023 10:11:18 +0800
+Subject: [PATCH 142/241] target/riscv: Fix some Andes CSRs will be missing via
+ gdb access
+
+Move riscv_cpu_register_gdb_regs_for_features to after cpu_reset. because some Andes CSRs
+will check another relative CSR bit for confirming it whether should exist,
+like mmsc_cfg.MSC_EXT indicates mmsc_cfg2 is present or not.
+If we reset CPU first, andes CPU reset relative code will set some CSRs to default value
+or readconfig from file to set CSR value, and then gdb can generate correct dynamic CSRs xml for debugger
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/cpu.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 07224409c1..c7eaac22c5 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1757,8 +1757,6 @@ static void riscv_cpu_realize(DeviceState *dev, Error **errp)
+     }
+ #endif
+ 
+-    riscv_cpu_register_gdb_regs_for_features(cs);
+-
+ #ifndef CONFIG_USER_ONLY
+     if (cpu->cfg.debug) {
+         riscv_trigger_realize(&cpu->env);
+@@ -1768,6 +1766,16 @@ static void riscv_cpu_realize(DeviceState *dev, Error **errp)
+     qemu_init_vcpu(cs);
+     cpu_reset(cs);
+ 
++    /*
++     * Move below function from above to here, because some Andes CSRs
++     * will check another relative CSR bit for confirm it whether should
++     * exist, like mmsc_cfg.MSC_EXT indicates mmsc_cfg2 is present or not.
++     * If we reset CPU first, andes CPU reset relative code will set some
++     * CSRs to default value or readconfig from file to set CSR value,
++     * and then gdb can generate dynamic CSRs xml for debugger
++     */
++    riscv_cpu_register_gdb_regs_for_features(cs);
++
+     mcc->parent_realize(dev, errp);
+ }
+ 
+-- 
+2.34.1
+

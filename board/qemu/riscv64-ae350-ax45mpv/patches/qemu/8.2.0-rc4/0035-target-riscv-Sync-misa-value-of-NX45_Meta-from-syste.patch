@@ -1,0 +1,67 @@
+From c59f9bdead775ab9e7f842f8d2839980f0cc19dd Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 14 Aug 2023 10:58:47 +0800
+Subject: [PATCH 035/241] target/riscv: Sync misa value of NX45_Meta from
+ systemC model.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 8 +++++---
+ target/riscv/cpu.h | 1 +
+ 2 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index ac650d7f83..6906479d2c 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -563,7 +563,7 @@ static void rv64_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+     if (!env->misa_ext) {
+         set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     }
+-    register_cpu_props(obj);
++    riscv_cpu_add_user_properties(obj);
+     set_priv_version(env, PRIV_VERSION_1_12_0);
+ 
+ #ifndef CONFIG_USER_ONLY
+@@ -728,7 +728,7 @@ static void rv64_andes_nx45v_meta_cpu_init(Object *obj)
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+     CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+-    set_misa(env, MXL_RV64, RVI | RVM | RVA | RVF | RVD | RVC | RVU | RVV | RVX);
++    set_misa(env, MXL_RV64, RVA | RVC | RVD | RVF | RVI | RVM | RVN | RVU | RVV | RVX);
+     rv64_andes_common_cpu_init(obj, andes_spec_csr_init_nx45v_meta);
+     cfg->mmu = false;
+ #ifndef CONFIG_USER_ONLY
+@@ -830,7 +830,7 @@ static void rv32_andes_common_cpu_init(Object *obj)
+     if (!env->misa_ext) {
+         set_misa(env, MXL_RV32, RVI | RVM | RVA | RVF | RVD | RVC | RVS | RVU);
+     }
+-    register_cpu_props(obj);
++    riscv_cpu_add_user_properties(obj);
+     set_priv_version(env, PRIV_VERSION_1_12_0);
+ 
+ #ifndef CONFIG_USER_ONLY
+@@ -1538,6 +1538,8 @@ static const MISAExtInfo misa_ext_info_arr[] = {
+     MISA_EXT_INFO(RVJ, "x-j", "Dynamic translated languages"),
+     MISA_EXT_INFO(RVV, "v", "Vector operations"),
+     MISA_EXT_INFO(RVG, "g", "General purpose (IMAFD_Zicsr_Zifencei)"),
++    MISA_EXT_INFO(RVN, "n", "Andes User Level Interrupt Extension"),
++    MISA_EXT_INFO(RVX, "x", "Andes Extension"),
+ };
+ 
+ static int riscv_validate_misa_info_idx(uint32_t bit)
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index 252df08e64..277bef4a71 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -73,6 +73,7 @@ typedef struct CPUArchState CPURISCVState;
+ #define RVJ RV('J')
+ #define RVG RV('G')
+ #define RVX RV('X')
++#define RVN RV('N')
+ 
+ extern const uint32_t misa_bits[];
+ const char *riscv_get_misa_ext_name(uint32_t bit);
+-- 
+2.34.1
+

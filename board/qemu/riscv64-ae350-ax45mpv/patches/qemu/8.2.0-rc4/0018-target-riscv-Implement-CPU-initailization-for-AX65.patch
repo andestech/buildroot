@@ -1,0 +1,108 @@
+From 0dfaed86933a12751787014e1de6677485bdfba9 Mon Sep 17 00:00:00 2001
+From: Yu Chien Peter Lin <peterlin@andestech.com>
+Date: Thu, 1 Jun 2023 15:18:17 +0800
+Subject: [PATCH 018/241] target/riscv: Implement CPU initailization for AX65
+
+The new extension added on AX65 CPU includes:
+* Base ISA
+  * The RISC-V Instruction Set Manual Volume I: Unprivileged ISA Document Version 20191213
+  * The RISC-V Instruction Set Manual Volume II: Privileged Architecture 20211105
+    * Sm1p12, Ss1p12, Sv48, Svinval, Svnapot, Svpbmt
+* PMP Enhancements for memory access and execution prevention on Machine mode (Smepmp) v1.0
+* RISC-V Base Cache Management Operation ISA Extensions (CMO: Zicbom, Zicbop, Zicboz) v1.0.1
+* RISC-V Bit-Manipulation ISA-extensions (Zba, Zbb, Zbc, Zbs) Version 1.0.0-38-g865e7a7
+* RISC-V Count Overflow and Mode-Based Filtering Extension (Sscofpmf) v0.5.2-01d1df0 Frozen
+* Scalar Cryptography v1.0.1 (Zbkb, Zbkc, Zbkx, Zknd, Zkne, Zknh, Zksed, Zksh, Zkn, Zks, Zkt, Zk, Zkr)
+* Half-Precision Floating-Point, Version 1.0 (Zfh)
+
+While the current version of QEMU has not supported Smepmp v1.0, we will
+upgrade Smepmp when the QEMU bumps to newer verion.
+
+Signed-off-by: Yu Chien Peter Lin <peterlin@andestech.com>
+---
+ target/riscv/cpu-qom.h |  1 +
+ target/riscv/cpu.c     | 49 ++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 50 insertions(+)
+
+diff --git a/target/riscv/cpu-qom.h b/target/riscv/cpu-qom.h
+index 3f08efea53..83f8000ad2 100644
+--- a/target/riscv/cpu-qom.h
++++ b/target/riscv/cpu-qom.h
+@@ -38,6 +38,7 @@
+ #define TYPE_RISCV_CPU_ANDES_NX25       RISCV_CPU_TYPE_NAME("andes-nx25")
+ #define TYPE_RISCV_CPU_ANDES_NX27V      RISCV_CPU_TYPE_NAME("andes-nx27v")
+ #define TYPE_RISCV_CPU_ANDES_NX45       RISCV_CPU_TYPE_NAME("andes-nx45")
++#define TYPE_RISCV_CPU_ANDES_AX65       RISCV_CPU_TYPE_NAME("andes-ax65")
+ #define TYPE_RISCV_CPU_ANY              RISCV_CPU_TYPE_NAME("any")
+ #define TYPE_RISCV_CPU_MAX              RISCV_CPU_TYPE_NAME("max")
+ #define TYPE_RISCV_CPU_BASE32           RISCV_CPU_TYPE_NAME("rv32")
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 9871ef9160..561956a065 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -608,6 +608,54 @@ static void rv64_andes_ax45_cpu_init(Object *obj)
+     andes_csr->csrno[CSR_MMSC_CFG] |= (1UL << V5_MMSC_CFG_L2C);
+ }
+ 
++static void rv64_andes_ax65_cpu_init(Object *obj)
++{
++    RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    AndesCsr *andes_csr = &RISCV_CPU(obj)->env.andes_csr;
++
++    rv64_andes_ax25_cpu_init(obj);
++
++    /* Set CPU ID */
++    cfg->marchid = 0x8a65;
++    /* Set $mmsc_cfg.L2C */
++    andes_csr->csrno[CSR_MMSC_CFG] |= (1UL << V5_MMSC_CFG_L2C);
++
++    /* Bitmanip */
++    cfg->ext_zba = true;
++    cfg->ext_zbb = true;
++    cfg->ext_zbc = true;
++    cfg->ext_zbs = true;
++
++    /* Scalar crypto */
++    cfg->ext_zk  = true;
++    cfg->ext_zks = true;
++
++    /* Half Width FP */
++    cfg->ext_zfh = true;
++
++    /* Base Cache Management Operation */
++    cfg->ext_icbom      = true;
++    cfg->cbom_blocksize = 64;
++    cfg->ext_icboz      = true;
++    cfg->cboz_blocksize = 64;
++
++    /*
++     * Count Overflow and Mode-Based Filtering
++     * (only 4 HPM counter available)
++     */
++    cfg->ext_sscofpmf = true;
++    cfg->pmu_num      = 4;
++    /* NAPOT Translation Contiguity */
++    cfg->ext_svnapot  = true;
++    /* Page-Based Memory Types */
++    cfg->ext_svpbmt   = true;
++    /* Fine-Grained Address-Translation Cache Invalidation */
++    cfg->ext_svinval  = true;
++
++    /* ePMP 0.9.3 (experimental) */
++    cfg->epmp = true;
++}
++
+ static void rv64_andes_nx25_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
+@@ -2014,6 +2062,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_AX25,       rv64_andes_ax25_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_AX27,       rv64_andes_ax27_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_AX45,       rv64_andes_ax45_cpu_init),
++    DEFINE_CPU(TYPE_RISCV_CPU_ANDES_AX65,       rv64_andes_ax65_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX25,       rv64_andes_nx25_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX27V,      rv64_andes_nx27v_cpu_init),
+     DEFINE_CPU(TYPE_RISCV_CPU_ANDES_NX45,       rv64_andes_nx45_cpu_init),
+-- 
+2.34.1
+

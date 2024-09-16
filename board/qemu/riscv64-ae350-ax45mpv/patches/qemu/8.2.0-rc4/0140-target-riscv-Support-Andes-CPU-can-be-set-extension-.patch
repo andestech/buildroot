@@ -1,0 +1,138 @@
+From 5474086736b5041a52262b390a12b5aee137bfc7 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 14 Dec 2023 17:04:04 +0800
+Subject: [PATCH 140/241] target/riscv: Support Andes CPU can be set extension
+ by cpu option and also provide linux-user mode to support Andes CSR settings
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/cpu.c         | 14 ++++++--------
+ target/riscv/cpu.h         |  2 ++
+ target/riscv/tcg/tcg-cpu.c |  6 ++++--
+ 3 files changed, 12 insertions(+), 10 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index ea0d45c892..07224409c1 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1315,7 +1315,6 @@ static bool riscv_cpu_has_work(CPUState *cs)
+ #endif
+ }
+ 
+-#ifndef CONFIG_USER_ONLY
+ static void andes_csr_reset_common(CPURISCVState *env)
+ {
+     env->andes_csr.csrno[CSR_MXSTATUS] = 0;
+@@ -1328,7 +1327,9 @@ static void andes_csr_reset_common(CPURISCVState *env)
+     env->andes_csr.csrno[CSR_FCSR] = 0;
+     env->andes_csr.csrno[CSR_SCAUSE] = 0;
+     env->andes_csr.csrno[CSR_UCAUSE] = 0;
++#ifndef CONFIG_USER_ONLY
+     env->andes_csr.csrno[CSR_MNVEC] = env->resetvec;
++#endif
+ 
+     env->andes_csr.csrno[CSR_UITB] = 0;
+     env->andes_csr.csrno[CSR_MMSC_CFG] = (1UL << V5_MMSC_CFG_ECD) |
+@@ -1348,6 +1349,7 @@ static void andes_csr_reset_common(CPURISCVState *env)
+     env->andes_csr.csrno[CSR_MICM_CFG] = (3 << V5_MICM_CFG_ISZ);
+     env->andes_csr.csrno[CSR_MDCM_CFG] = (3 << V5_MDCM_CFG_DSZ);
+ 
++#ifndef CONFIG_USER_ONLY
+     /* initial local memory csr */
+     int ilmsz = 31 - __builtin_clz(env->ilm_size) - 9;
+     int dlmsz = 31 - __builtin_clz(env->dlm_size) - 9;
+@@ -1361,6 +1363,7 @@ static void andes_csr_reset_common(CPURISCVState *env)
+ 
+     env->andes_csr.csrno[CSR_MILMB] = env->ilm_base | env->ilm_default_enable;
+     env->andes_csr.csrno[CSR_MDLMB] = env->dlm_base | env->dlm_default_enable;
++#endif
+ 
+     /* all-one reset value */
+     env->andes_csr.csrno[CSR_MSP_BOUND] = ~((target_ulong)0);
+@@ -1456,9 +1459,6 @@ static void andes_csr_sync_cpu_ext(CPURISCVState *env, RISCVCPU *cpu)
+     }
+ }
+ 
+-static bool is_andes_riscv_cpu_type(Object *obj);
+-#endif
+-
+ static void riscv_cpu_reset_hold(Object *obj)
+ {
+ #ifndef CONFIG_USER_ONLY
+@@ -1473,11 +1473,11 @@ static void riscv_cpu_reset_hold(Object *obj)
+     if (mcc->parent_phases.hold) {
+         mcc->parent_phases.hold(obj);
+     }
+-#ifndef CONFIG_USER_ONLY
+     if (is_andes_riscv_cpu_type(obj)) {
+         andes_csr_reset_common(env);
+         andes_csr_sync_cpu_ext(env, cpu);
+     }
++#ifndef CONFIG_USER_ONLY
+     env->misa_mxl = env->misa_mxl_max;
+     env->priv = PRV_M;
+     env->mstatus &= ~(MSTATUS_MIE | MSTATUS_MPRV);
+@@ -2558,8 +2558,7 @@ static const TypeInfo riscv_cpu_type_infos[] = {
+ #endif
+ };
+ 
+-#ifndef CONFIG_USER_ONLY
+-static bool is_andes_riscv_cpu_type(Object *obj)
++bool is_andes_riscv_cpu_type(Object *obj)
+ {
+     size_t size = ARRAY_SIZE(riscv_cpu_type_infos);
+     for (int i = 0; i < size; i++) {
+@@ -2571,6 +2570,5 @@ static bool is_andes_riscv_cpu_type(Object *obj)
+     }
+     return false;
+ }
+-#endif
+ 
+ DEFINE_TYPES(riscv_cpu_type_infos)
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index a9a90b2118..c6063567be 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -817,6 +817,8 @@ bool riscv_cpu_accelerator_compatible(RISCVCPU *cpu);
+ extern riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE];
+ extern riscv_csr_operations csr_ops[CSR_TABLE_SIZE];
+ 
++bool is_andes_riscv_cpu_type(Object *obj);
++
+ extern const bool valid_vm_1_10_32[], valid_vm_1_10_64[];
+ 
+ void riscv_get_csr_ops(int csrno, riscv_csr_operations *ops);
+diff --git a/target/riscv/tcg/tcg-cpu.c b/target/riscv/tcg/tcg-cpu.c
+index d7a7269ce7..2c8bdedced 100644
+--- a/target/riscv/tcg/tcg-cpu.c
++++ b/target/riscv/tcg/tcg-cpu.c
+@@ -786,7 +786,7 @@ static void cpu_set_misa_ext_cfg(Object *obj, Visitor *v, const char *name,
+     }
+ 
+     if (value) {
+-        if (!generic_cpu) {
++        if (!generic_cpu && !is_andes_riscv_cpu_type(obj)) {
+             g_autofree char *cpuname = riscv_cpu_get_name(cpu);
+             error_setg(errp, "'%s' CPU does not allow enabling extensions",
+                        cpuname);
+@@ -832,6 +832,8 @@ static const RISCVCPUMisaExtConfig misa_ext_cfgs[] = {
+     MISA_CFG(RVJ, false),
+     MISA_CFG(RVV, false),
+     MISA_CFG(RVG, false),
++    MISA_CFG(RVX, false),
++    MISA_CFG(RVN, false),
+ };
+ 
+ /*
+@@ -915,7 +917,7 @@ static void cpu_set_multi_ext_cfg(Object *obj, Visitor *v, const char *name,
+         return;
+     }
+ 
+-    if (value && !generic_cpu) {
++    if (value && !generic_cpu && !is_andes_riscv_cpu_type(obj)) {
+         g_autofree char *cpuname = riscv_cpu_get_name(cpu);
+         error_setg(errp, "'%s' CPU does not allow enabling extensions",
+                    cpuname);
+-- 
+2.34.1
+

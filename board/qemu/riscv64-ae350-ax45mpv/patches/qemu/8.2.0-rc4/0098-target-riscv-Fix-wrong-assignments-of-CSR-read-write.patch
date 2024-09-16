@@ -1,0 +1,37 @@
+From 8389d290826da0149a6e64f8ef64c81dace3401b Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 15 Sep 2023 13:16:12 +0800
+Subject: [PATCH 098/241] target/riscv: Fix wrong assignments of CSR read/write
+ functions. Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+
+---
+ target/riscv/csr_andes_nx45v.c | 14 +++++++-------
+ 1 file changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/target/riscv/csr_andes_nx45v.c b/target/riscv/csr_andes_nx45v.c
+index b85788b292..73be7a26a3 100644
+--- a/target/riscv/csr_andes_nx45v.c
++++ b/target/riscv/csr_andes_nx45v.c
+@@ -115,11 +115,11 @@ void andes_spec_csr_init_nx45v(AndesCsr *andes_csr)
+     andes_csr->csrno[CSR_MXSTATUS] = 0;
+     andes_csr->csrno[CSR_MMISC_CTL] = 0x48;
+ 
+-    andes_csr_ops[CSR_MMSC_CFG].read = read_mmsc_cfg_nx45v;
+-    andes_csr_ops[CSR_MRVARCH_CFG].read = read_mrvarch_cfg_nx45v;
+-    andes_csr_ops[CSR_MCLK_CTL].write = write_mclk_ctl_nx45v;
+-    andes_csr_ops[CSR_MXSTATUS].write = write_mxstatus_nx45v;
+-    andes_csr_ops[CSR_MDCAUSE].write = write_smdcause_nx45v;
+-    andes_csr_ops[CSR_SDCAUSE].write = write_smdcause_nx45v;
+-    andes_csr_ops[CSR_MMISC_CTL].write = write_mmisc_ctl_nx45v;
++    csr_ops[CSR_MMSC_CFG].read = read_mmsc_cfg_nx45v;
++    csr_ops[CSR_MRVARCH_CFG].read = read_mrvarch_cfg_nx45v;
++    csr_ops[CSR_MCLK_CTL].write = write_mclk_ctl_nx45v;
++    csr_ops[CSR_MXSTATUS].write = write_mxstatus_nx45v;
++    csr_ops[CSR_MDCAUSE].write = write_smdcause_nx45v;
++    csr_ops[CSR_SDCAUSE].write = write_smdcause_nx45v;
++    csr_ops[CSR_MMISC_CTL].write = write_mmisc_ctl_nx45v;
+ }
+\ No newline at end of file
+-- 
+2.34.1
+

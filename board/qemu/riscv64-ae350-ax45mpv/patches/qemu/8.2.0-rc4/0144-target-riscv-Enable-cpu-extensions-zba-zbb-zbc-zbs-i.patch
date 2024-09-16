@@ -1,0 +1,68 @@
+From e2c7d4cc6887a4f66a0dd0631dcf4b1eab17edc4 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 15 Dec 2023 11:14:56 +0800
+Subject: [PATCH 144/241] target/riscv: Enable cpu extensions zba/zbb/zbc/zbs
+ in Andes cpus.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 24 ++++++++++++++++--------
+ 1 file changed, 16 insertions(+), 8 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index a7bdb595a0..c3f5bf0e43 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -717,16 +717,20 @@ static void rv64_andes_common_cpu_init(Object *obj,
+ 
+     env->do_interrupt_post = andes_cpu_do_interrupt_post;
+ 
++    /* Enable ISA extensions */
++    cfg->ext_zifencei = true;
++    cfg->ext_zicsr = true;
++    cfg->ext_zba = true;
++    cfg->ext_zbb = true;
++    cfg->ext_zbc = true;
++    cfg->ext_zbs = true;
++
+     /* Enable Andes Custom extension */
+     cfg->ext_XAndesV5Ops = true;
+     cfg->ext_XAndesCodenseOps = true;
+ 
+     /* Set vendor ID */
+     cfg->mvendorid = 0x0000031e;
+-
+-    /* inherited from parent obj via riscv_cpu_init() */
+-    cfg->ext_zifencei = true;
+-    cfg->ext_zicsr = true;
+ }
+ 
+ static void rv64_andes_ax25_cpu_init(Object *obj)
+@@ -1025,16 +1029,20 @@ static void rv32_andes_common_cpu_init(Object *obj,
+ 
+     env->do_interrupt_post = andes_cpu_do_interrupt_post;
+ 
++    /* Enable ISA extensions */
++    cfg->ext_zifencei = true;
++    cfg->ext_zicsr = true;
++    cfg->ext_zba = true;
++    cfg->ext_zbb = true;
++    cfg->ext_zbc = true;
++    cfg->ext_zbs = true;
++
+     /* Enable Andes Custom extension */
+     cfg->ext_XAndesV5Ops = true;
+     cfg->ext_XAndesCodenseOps = true;
+ 
+     /* Set vendor ID */
+     cfg->mvendorid = 0x0000031e;
+-
+-    /* inherited from parent obj via riscv_cpu_init() */
+-    cfg->ext_zifencei = true;
+-    cfg->ext_zicsr = true;
+ }
+ 
+ static void rv32_andes_a25_cpu_init(Object *obj)
+-- 
+2.34.1
+

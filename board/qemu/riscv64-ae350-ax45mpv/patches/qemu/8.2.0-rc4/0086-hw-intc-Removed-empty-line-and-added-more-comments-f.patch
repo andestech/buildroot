@@ -1,0 +1,32 @@
+From 75edf7f5e71f04e72fe1a0cf3a3d42ebb016806c Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Tue, 19 Sep 2023 09:20:46 +0800
+Subject: [PATCH 086/241] hw/intc: Removed empty line and added more comments
+ for disabling IO re-entrant check
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ hw/intc/andes_plic.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hw/intc/andes_plic.c b/hw/intc/andes_plic.c
+index becd725d00..42dde9b8a3 100644
+--- a/hw/intc/andes_plic.c
++++ b/hw/intc/andes_plic.c
+@@ -205,11 +205,11 @@ andes_plic_realize(DeviceState *dev, Error **errp)
+ 
+     if (strstr(andes_plic->plic_name , "SW") != NULL) {
+         riscv_plic->riscv_plic_update = andes_plicsw_update;
+-
+     } else {
+         riscv_plic->riscv_plic_update = andes_plichw_update;
+     }
+-    /* Let Andes PLIC and SWPLIC disable IO re-entrant check, 
++    /* Let Andes PLIC and SWPLIC to disable IO re-entrant checking,
++     * since both PLIC and SWPLIC are using riscv.plic type
+      * see softmmu/memory.c:access_with_adjusted_size() 
+      */
+     riscv_plic->mmio.disable_reentrancy_guard = true;
+-- 
+2.34.1
+

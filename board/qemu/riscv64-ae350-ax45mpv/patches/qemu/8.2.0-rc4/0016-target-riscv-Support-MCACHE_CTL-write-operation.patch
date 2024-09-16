@@ -1,0 +1,81 @@
+From eeb8d93fb9420992fdff550e6a677938df05e3da Mon Sep 17 00:00:00 2001
+From: Dylan Jhong <dylan@andestech.com>
+Date: Tue, 18 Apr 2023 11:48:18 +0800
+Subject: [PATCH 016/241] target/riscv: Support $MCACHE_CTL write operation
+
+During boot-up, u-boot-spl checks if the CM feature of $mcache_ctl
+is enabled. If it is not enabled, u-boot-spl will attempt to enable
+the feature and wait in a loop. Therefore, QEMU must implement
+$mcache_ctl to prevent u-boot-spl from getting stuck in that loop.
+
+Signed-off-by: Dylan Jhong <dylan@andestech.com>
+---
+ target/riscv/csr_andes.inc.c | 19 ++++++++++++++++++-
+ target/riscv/csr_andes.inc.h |  7 +++++++
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/csr_andes.inc.c b/target/riscv/csr_andes.inc.c
+index 9ffa544c4d..5aa1a55fe8 100644
+--- a/target/riscv/csr_andes.inc.c
++++ b/target/riscv/csr_andes.inc.c
+@@ -18,6 +18,20 @@ static RISCVException any(CPURISCVState *env,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException write_mcache_ctl(CPURISCVState *env,
++                                       int csrno,
++                                       target_ulong val)
++{
++    /* Change DC_COHSTA to 1 if DC_COHEN is set. Vice versa */
++    if (val & (1UL << V5_MCACHE_CTL_DC_COHEN)) {
++        val |= (1UL << V5_MCACHE_CTL_DC_COHSTA);
++    } else {
++        val &= ~(1UL << V5_MCACHE_CTL_DC_COHSTA);
++    }
++    env->andes_csr.csrno[csrno] = val;
++    return RISCV_EXCP_NONE;
++}
++
+ static RISCVException read_csr(CPURISCVState *env,
+                                int csrno,
+                                target_ulong *val)
+@@ -51,6 +65,8 @@ void andes_csr_init(AndesCsr *andes_csr)
+                                         (1UL << V5_MMSC_CFG_PPMA);
+     andes_csr->csrno[CSR_MMISC_CTL] =   (1UL << V5_MMISC_CTL_BRPE) |
+                                         (1UL << V5_MMISC_CTL_MSA_OR_UNA);
++    andes_csr->csrno[CSR_MCACHE_CTL] =  (1UL << V5_MCACHE_CTL_IC_FIRST_WORD) |
++                                        (1UL << V5_MCACHE_CTL_DC_FIRST_WORD);
+ }
+ 
+ void andes_vec_init(AndesVec *andes_vec)
+@@ -107,7 +123,8 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_MDLMB]          = { "mdlmb",             any, read_csr, write_csr},
+     [CSR_MECC_CODE]      = { "mecc_code",         any, read_csr, write_csr},
+     [CSR_MNVEC]          = { "mnvec",             any, read_csr, write_csr},
+-    [CSR_MCACHE_CTL]     = { "mcache_ctl",        any, read_csr, write_csr},
++    [CSR_MCACHE_CTL]     = { "mcache_ctl",        any, read_csr,
++                                                  write_mcache_ctl        },
+     [CSR_MCCTLBEGINADDR] = { "mcctlbeginaddr",    any, read_csr, write_csr},
+     [CSR_MCCTLCOMMAND]   = { "mcctlcommand",      any, read_csr, write_csr},
+     [CSR_MCCTLDATA]      = { "mcctldata",         any, read_csr, write_csr},
+diff --git a/target/riscv/csr_andes.inc.h b/target/riscv/csr_andes.inc.h
+index 1e33902ef6..f321318b22 100644
+--- a/target/riscv/csr_andes.inc.h
++++ b/target/riscv/csr_andes.inc.h
+@@ -25,6 +25,13 @@ typedef struct AndesVec {
+ #define V5_MMISC_CTL_MSA_OR_UNA             6
+ #define V5_MMISC_CTL_NON_BLOCKING           8
+ 
++/* mcache_ctl */
++#define V5_MCACHE_CTL_IC_FIRST_WORD         11
++#define V5_MCACHE_CTL_DC_FIRST_WORD         12
++#define V5_MCACHE_CTL_DC_COHEN              19
++#define V5_MCACHE_CTL_DC_COHSTA             20
++
++
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+ void andes_cpu_do_interrupt_post(CPUState *cpu);
+-- 
+2.34.1
+

@@ -1,0 +1,53 @@
+From 40582c2aeaac216b0cb56c4580fd0f70d3d7b984 Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Tue, 5 Sep 2023 17:55:33 +0800
+Subject: [PATCH 074/241] target/riscv: local memory: Fix write 0x1 to
+ milmb.IEC twice will cause an error
+
+Do not add subregion when local memory is already mapped.
+Fix issue #57.
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ target/riscv/csr_andes.c | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 45291d5e16..85a15d4843 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -556,24 +556,27 @@ static RISCVException write_lmb(CPURISCVState *env,
+                                 target_ulong val)
+ {
+     uint64_t enable = val & 0x1;
++    bool ilm_mapped, dlm_mapped;
+     bool locked = false;
+     if (!qemu_mutex_iothread_locked()) {
+         locked = true;
+         qemu_mutex_lock_iothread();
+     }
+     if (csrno == CSR_MILMB) {
+-        if (enable) {
++        ilm_mapped = memory_region_is_mapped(env->mask_ilm);
++        if(enable && !ilm_mapped) {
+             memory_region_add_subregion_overlap(env->cpu_as_root,
+                                 env->ilm_base, env->mask_ilm, 1);
+-        } else if (memory_region_is_mapped(env->mask_ilm)) {
++        } else if (!enable && ilm_mapped) {
+             memory_region_del_subregion(env->cpu_as_root, env->mask_ilm);
+         }
+     }
+     if (csrno == CSR_MDLMB) {
+-        if (enable) {
++        dlm_mapped = memory_region_is_mapped(env->mask_dlm);
++        if (enable && !dlm_mapped) {
+             memory_region_add_subregion_overlap(env->cpu_as_root,
+                                 env->dlm_base, env->mask_dlm, 1);
+-        } else if (memory_region_is_mapped(env->mask_dlm)) {
++        } else if (!enable && dlm_mapped) {
+             memory_region_del_subregion(env->cpu_as_root, env->mask_dlm);
+         }
+     }
+-- 
+2.34.1
+

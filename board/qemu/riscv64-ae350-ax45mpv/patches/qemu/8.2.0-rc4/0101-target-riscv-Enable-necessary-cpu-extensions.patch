@@ -1,0 +1,49 @@
+From a592e09b6b0b55bc1978d60504540e5b32bd0768 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 27 Oct 2023 10:12:16 +0800
+Subject: [PATCH 101/241] target/riscv: Enable necessary cpu extensions.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index c7d9286855..3cee59b255 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -721,6 +721,10 @@ static void rv64_andes_common_cpu_init(Object *obj, fp_spec_csr_init_fn spec_csr
+ 
+     /* Set vendor ID */
+     cfg->mvendorid = 0x0000031e;
++
++    /* inherited from parent obj via riscv_cpu_init() */
++    cfg->ext_ifencei = true;
++    cfg->ext_icsr = true;
+ }
+ 
+ static void rv64_andes_ax25_cpu_init(Object *obj)
+@@ -1015,6 +1019,10 @@ static void rv32_andes_common_cpu_init(Object *obj, fp_csr_init_fn spec_csr_init
+ 
+     /* Set vendor ID */
+     cfg->mvendorid = 0x0000031e;
++
++    /* inherited from parent obj via riscv_cpu_init() */
++    cfg->ext_ifencei = true;
++    cfg->ext_icsr = true;
+ }
+ 
+ static void rv32_andes_a25_cpu_init(Object *obj) {
+@@ -1061,6 +1069,9 @@ static void rv32_andes_n25_cpu_init(Object *obj)
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0025;
++
++    /* inherited from parent obj via riscv_cpu_init() */
++    cfg->pmp = true;
+ }
+ 
+ static void rv32_andes_n45_cpu_init(Object *obj)
+-- 
+2.34.1
+

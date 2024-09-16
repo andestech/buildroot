@@ -1,0 +1,236 @@
+From 8ea820abb2427da1ec3bd6367dc6383e8d24b3f5 Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Mon, 20 Nov 2023 15:24:08 +0800
+Subject: [PATCH 116/241] target/riscv: Add optional CSR {s/h/m}context defined
+ in Sdtrig extension
+
+Add CSR predicate/read/write operations for scontext/hcontext/mcontext.
+Use new CPU configurations "ext_sdtrig_scontext", "ext_sdtrig_hcontext",
+and "ext_sdtrig_mcontext" to decide whether they are implemented into
+CPU or not.
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/cpu.c      |   3 +
+ target/riscv/cpu.h      |   2 +
+ target/riscv/cpu_bits.h |   9 +++
+ target/riscv/cpu_cfg.h  |   3 +
+ target/riscv/csr.c      | 122 ++++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 139 insertions(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 2cff2c245c..80ed3eb182 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -2046,6 +2046,9 @@ const RISCVCPUMultiExtConfig riscv_cpu_extensions[] = {
+ 
+     /* Optional CSR of sdtrig extension */
+     MULTI_EXT_CFG_BOOL("sdtrig_tcontrol", ext_sdtrig_tcontrol, false),
++	MULTI_EXT_CFG_BOOL("sdtrig_scontext", ext_sdtrig_scontext, false),
++    MULTI_EXT_CFG_BOOL("sdtrig_hcontext", ext_sdtrig_hcontext, false),
++    MULTI_EXT_CFG_BOOL("sdtrig_mcontext", ext_sdtrig_mcontext, false),
+ 
+     DEFINE_PROP_END_OF_LIST(),
+ };
+diff --git a/target/riscv/cpu.h b/target/riscv/cpu.h
+index 775093df54..0727f5be50 100644
+--- a/target/riscv/cpu.h
++++ b/target/riscv/cpu.h
+@@ -356,6 +356,8 @@ struct CPUArchState {
+     int64_t last_icount;
+     bool itrigger_enabled;
+     target_ulong tcontrol;
++    target_ulong scontext;
++    target_ulong mcontext;
+ 
+     /* machine specific rdtime callback */
+     uint64_t (*rdtime_fn)(void *);
+diff --git a/target/riscv/cpu_bits.h b/target/riscv/cpu_bits.h
+index 1dcba1625c..c1b6dcef6d 100644
+--- a/target/riscv/cpu_bits.h
++++ b/target/riscv/cpu_bits.h
+@@ -362,6 +362,9 @@
+ #define CSR_TDATA3          0x7a3
+ #define CSR_TINFO           0x7a4
+ #define CSR_TCONTROL        0x7a5
++#define CSR_SCONTEXT        0x5a8
++#define CSR_HCONTEXT        0x6a8
++#define CSR_MCONTEXT        0x7a8
+ 
+ /* Debug Mode Registers */
+ #define CSR_DCSR            0x7b0
+@@ -910,4 +913,10 @@ typedef enum RISCVException {
+ /* Sdtrig CSR masks */
+ #define TCONTROL_MTE                       BIT(3)
+ #define TCONTROL_MPTE                      BIT(7)
++#define SCONTEXT32                         0x0000FFFF
++#define SCONTEXT64                         0x00000003FFFFFFFFULL
++#define MCONTEXT32                         0x0000003F
++#define MCONTEXT64                         0x0000000000001FFFULL
++#define MCONTEXT32_HCONTEXT                0x0000007F
++#define MCONTEXT64_HCONTEXT                0x0000000000003FFFULL
+ #endif
+diff --git a/target/riscv/cpu_cfg.h b/target/riscv/cpu_cfg.h
+index 1f862e95fb..2c033484d6 100644
+--- a/target/riscv/cpu_cfg.h
++++ b/target/riscv/cpu_cfg.h
+@@ -154,6 +154,9 @@ struct RISCVCPUConfig {
+     bool debug;
+     bool misa_w;
+     bool ext_sdtrig_tcontrol;
++    bool ext_sdtrig_scontext;
++    bool ext_sdtrig_hcontext;
++    bool ext_sdtrig_mcontext;
+ 
+     bool short_isa_string;
+ 
+diff --git a/target/riscv/csr.c b/target/riscv/csr.c
+index 51f4d7228e..d2803299d0 100644
+--- a/target/riscv/csr.c
++++ b/target/riscv/csr.c
+@@ -558,6 +558,46 @@ static RISCVException sdtrig_tcontrol(CPURISCVState *env, int csrno)
+ 
+     return RISCV_EXCP_ILLEGAL_INST;
+ }
++
++static RISCVException sdtrig_scontext(CPURISCVState *env, int csrno)
++{
++    if (riscv_cpu_cfg(env)->debug && riscv_cpu_cfg(env)->ext_sdtrig_scontext) {
++        return RISCV_EXCP_NONE;
++    }
++
++    RISCVException ret = smstateen_acc_ok(env, 0, SMSTATEEN0_HSCONTXT);
++    if (ret != RISCV_EXCP_NONE) {
++        return ret;
++    }
++
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException sdtrig_hcontext(CPURISCVState *env, int csrno)
++{
++    if (riscv_cpu_cfg(env)->debug && riscv_cpu_cfg(env)->ext_sdtrig_hcontext) {
++        return RISCV_EXCP_NONE;
++    }
++
++    RISCVException ret = smstateen_acc_ok(env, 0, SMSTATEEN0_HSCONTXT);
++    if (ret != RISCV_EXCP_NONE) {
++        return ret;
++    }
++
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException sdtrig_mcontext(CPURISCVState *env, int csrno)
++{
++    /* Sdtrig says mcontext must be implemented if hcontext is implemented. */
++    if (riscv_cpu_cfg(env)->debug &&
++        (riscv_cpu_cfg(env)->ext_sdtrig_hcontext ||
++         riscv_cpu_cfg(env)->ext_sdtrig_mcontext)) {
++        return RISCV_EXCP_NONE;
++    }
++
++    return RISCV_EXCP_ILLEGAL_INST;
++}
+ #endif
+ 
+ static RISCVException seed(CPURISCVState *env, int csrno)
+@@ -3932,6 +3972,82 @@ static RISCVException write_tcontrol(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException read_scontext(CPURISCVState *env, int csrno,
++                                    target_ulong *val)
++{
++    RISCVException ret;
++
++    ret = smstateen_acc_ok(env, 0, SMSTATEEN0_HSCONTXT);
++    if (ret != RISCV_EXCP_NONE) {
++        return ret;
++    }
++
++    *val = env->scontext;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_scontext(CPURISCVState *env, int csrno,
++                                     target_ulong val)
++{
++    RISCVException ret;
++    bool rv32 = riscv_cpu_mxl(env) == MXL_RV32 ? true : false;
++
++    ret = smstateen_acc_ok(env, 0, SMSTATEEN0_HSCONTXT);
++    if (ret != RISCV_EXCP_NONE) {
++        return ret;
++    }
++
++    env->scontext = val & (rv32 ? SCONTEXT32 : SCONTEXT64);
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException read_hcontext(CPURISCVState *env, int csrno,
++                                    target_ulong *val)
++{
++    RISCVException ret;
++
++    ret = smstateen_acc_ok(env, 0, SMSTATEEN0_HSCONTXT);
++    if (ret != RISCV_EXCP_NONE) {
++        return ret;
++    }
++
++    *val = env->mcontext;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_hcontext(CPURISCVState *env, int csrno,
++                                     target_ulong val)
++{
++    RISCVException ret;
++    bool rv32 = riscv_cpu_mxl(env) == MXL_RV32 ? true : false;
++
++    ret = smstateen_acc_ok(env, 0, SMSTATEEN0_HSCONTXT);
++    if (ret != RISCV_EXCP_NONE) {
++        return ret;
++    }
++
++    env->mcontext = val & (rv32 ? MCONTEXT32_HCONTEXT : MCONTEXT64_HCONTEXT);
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException read_mcontext(CPURISCVState *env, int csrno,
++                                    target_ulong *val)
++{
++    bool rv32 = riscv_cpu_mxl(env) == MXL_RV32 ? true : false;
++
++    *val = env->mcontext & (rv32 ? MCONTEXT32 : MCONTEXT64);
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_mcontext(CPURISCVState *env, int csrno,
++                                     target_ulong val)
++{
++    bool rv32 = riscv_cpu_mxl(env) == MXL_RV32 ? true : false;
++
++    env->mcontext = val & (rv32 ? MCONTEXT32 : MCONTEXT64);
++    return RISCV_EXCP_NONE;
++}
++
+ /*
+  * Functions to access Pointer Masking feature registers
+  * We have to check if current priv lvl could modify
+@@ -4833,6 +4949,12 @@ riscv_csr_operations csr_ops[CSR_TABLE_SIZE] = {
+     [CSR_TINFO]     =  { "tinfo",    debug, read_tinfo,    write_ignore  },
+     [CSR_TCONTROL]  =  { "tcontrol", sdtrig_tcontrol,      read_tcontrol,
+                          write_tcontrol                                  },
++	[CSR_SCONTEXT]  =  { "scontext", sdtrig_scontext,      read_scontext,
++                         write_scontext                                  },
++    [CSR_HCONTEXT]  =  { "hcontext", sdtrig_hcontext,      read_hcontext,
++                         write_hcontext                                  },
++    [CSR_MCONTEXT]  =  { "mcontext", sdtrig_mcontext,      read_mcontext,
++                         write_mcontext                                  },
+ 
+     /* User Pointer Masking */
+     [CSR_UMTE]    =    { "umte",    pointer_masking, read_umte,  write_umte },
+-- 
+2.34.1
+

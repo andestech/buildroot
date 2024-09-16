@@ -1,0 +1,490 @@
+From 09739c1b8c25e77ebab9fa8497834f0e1adae322 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 29 Feb 2024 08:45:35 +0800
+Subject: [PATCH 209/241] hw/intc: Support trigger type of PLIC (#124)
+
+1. Support Trigger Type of Andes PLIC
+2. Support Interrupt Gateway of Andes PLIC
+3. Edge Trigger only supports raising edge
+4. Change the set of qdev gpio by mode of hart config(ex: PLICSW only has M mode, therefore, the new method will not set additional S mode gpio)
+5. Support hartid_base of additional argument when create plic instance
+
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/124
+Reviewed-by: Alvin Che-Chia Chang <alvinga@andestech.com>
+Reviewed-by: Ethan Zhan-Yang Chen <ethan84@andestech.com>
+Reviewed-by: Yuming Yu-Ming Chang <yumin686@andestech.com>
+Co-authored-by: Foxes Hung <foxes687@andestech.com>
+Co-committed-by: Foxes Hung <foxes687@andestech.com>
+---
+ hw/intc/andes_plic.c         | 241 ++++++++++++++++++++++++++++++-----
+ hw/intc/riscv_plic.c         |  11 +-
+ hw/riscv/andes_ae350.c       |   2 +
+ include/hw/intc/andes_plic.h |  24 +++-
+ include/hw/intc/riscv_plic.h |   1 +
+ 5 files changed, 242 insertions(+), 37 deletions(-)
+
+diff --git a/hw/intc/andes_plic.c b/hw/intc/andes_plic.c
+index 1587eb136a..e753052ef9 100644
+--- a/hw/intc/andes_plic.c
++++ b/hw/intc/andes_plic.c
+@@ -35,18 +35,39 @@
+ #else
+   #define LOG(x...) xLOG(x)
+ #endif
++#define ANDES_PLIC_TRIGGER_TYPE_READONLY 0
+ 
+-enum register_names {
+-    REG_FEATURE_ENABLE = 0x0000,
+-    REG_TRIGGER_TYPE_BASE = 0x1080,
+-    REG_NUM_IRQ_TARGET = 0x1100,
+-    REG_VER_MAX_PRIORITY = 0x1104,
+-};
++static uint32_t atomic_set_masked(uint32_t *a, uint32_t mask, uint32_t value)
++{
++    uint32_t old, new, cmp = qatomic_read(a);
+ 
+-enum feature_enable_register {
+-    FER_PREEMPT = (1u << 0),
+-    FER_VECTORED = (1u << 1),
+-};
++    do {
++        old = cmp;
++        new = (old & ~mask) | (value & mask);
++        cmp = qatomic_cmpxchg(a, old, new);
++    } while (old != cmp);
++
++    return old;
++}
++
++static void andes_plic_set_pending(AndesPLICState *plic, int irq, bool level)
++{
++    RISCVPLICState *riscv_plic = RISCV_PLIC(plic);
++    atomic_set_masked(&riscv_plic->pending[irq >> 5],
++                      1 << (irq & 31), -!!level);
++}
++
++static void andes_plic_set_claimed(AndesPLICState *plic, int irq, bool level)
++{
++    RISCVPLICState *riscv_plic = RISCV_PLIC(plic);
++    atomic_set_masked(&riscv_plic->claimed[irq >> 5],
++                      1 << (irq & 31), -!!level);
++}
++
++static void andes_plic_set_gw_state(AndesPLICState *plic, int irq, bool level)
++{
++    atomic_set_masked(&plic->gw_state[irq >> 5], 1 << (irq & 31), -!!level);
++}
+ 
+ void andes_plichw_update(void *plic)
+ {
+@@ -140,22 +161,98 @@ static void andes_plic_write_pending(void *plic,
+         riscv_plic->pending[word] |= value;
+         riscv_plic->riscv_plic_update(riscv_plic);
+     }
++}
++
++static bool andes_plic_check_enabled_by_addrid(AndesPLICState *plic,
++                                              uint32_t addrid)
++{
++    RISCVPLICState *riscv_plic = RISCV_PLIC(plic);
++    /*
++     * If target M (via addrid) has one of source N enabled,
++     * then we assume it is enabled
++     */
++    for (int i = 0; i < riscv_plic->bitfield_words; i++) {
++        if (riscv_plic->enable[addrid * riscv_plic->bitfield_words + i]) {
++            return true;
++        }
++    }
++    return false;
++}
++
++static void andes_plic_write_complete(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size)
++{
++    AndesPLICState *andes_plic = ANDES_PLIC(opaque);
++    RISCVPLICState *riscv_plic = RISCV_PLIC(andes_plic);
++    uint32_t addrid =
++        (addr - riscv_plic->context_base) / riscv_plic->context_stride;
++    LOG("andes_plic: write complete: hart%d-%d irq=%x\n",
++        riscv_plic->addr_config[addrid].hartid,
++        riscv_plic->addr_config[addrid].mode, (uint32_t)value);
++    if (value < riscv_plic->num_sources) {
++        /*
++         * Mark level triggered interrupts as pending if they are still raised
++         */
++        if ((!!(andes_plic->trigger_type[value >> 5] & (1 << (value & 31)))) ==
++            ANDES_PLIC_TRIGGER_TYPE_LEVEL && andes_plic->level[value] &&
++            andes_plic_check_enabled_by_addrid(andes_plic, addrid)) {
++            andes_plic_set_pending(andes_plic, value, true);
++        }
++        andes_plic_set_claimed(andes_plic, value, false);
++        /* Reset Interrupt Gateway State to non in-process */
++        andes_plic_set_gw_state(andes_plic, value, false);
++        riscv_plic->riscv_plic_update(riscv_plic);
++    }
++}
++
++static uint64_t andes_plic_read_trigger_type(void *opaque,
++        hwaddr addr, unsigned size)
++{
++    AndesPLICState *andes_plic = ANDES_PLIC(opaque);
++    uint32_t word = (addr - REG_TRIGGER_TYPE_BASE) >> 2;
++    LOG("andes_plic: read trigger_type: word=%d value=%d\n",
++        word, andes_plic->trigger_type[word]);
++    return andes_plic->trigger_type[word];
++}
++
++static void andes_plic_write_trigger_type(void *opaque,
++        hwaddr addr, uint64_t value, unsigned size)
++{
++#if !ANDES_PLIC_TRIGGER_TYPE_READONLY
++    AndesPLICState *andes_plic = ANDES_PLIC(opaque);
++    uint32_t word = (addr - REG_TRIGGER_TYPE_BASE) >> 2;
++    andes_plic->trigger_type[word] = value;
++    LOG("andes_plic: write trigger_type: word=%d value=%d\n",
++        word, andes_plic->trigger_type[word]);
++#else
++    qemu_log_mask(LOG_GUEST_ERROR,
++        "%s: invalid trigger type write: 0x%" HWADDR_PRIx "",
++        __func__, addr);
++#endif
+ 
+-    return;
+ }
+ 
+ static uint64_t
+ andes_plic_read(void *opaque, hwaddr addr, unsigned size)
+ {
+     AndesPLICState *andes_plic = ANDES_PLIC(opaque);
++    RISCVPLICState *riscv_plic = RISCV_PLIC(andes_plic);
+     uint64_t value;
+ 
+-    switch (addr) {
+-    case REG_FEATURE_ENABLE:
++    /* read must be 4 byte words */
++    if ((addr & 0x3) != 0) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: Invalid register read 0x%" HWADDR_PRIx "\n",
++                      __func__, addr);
++        return 0;
++    }
++
++    if (addr == REG_FEATURE_ENABLE) {
+         value = andes_plic->feature_enable;
+-        break;
+-    default:
+-        break;
++        return value;
++    } else if (addr_between(addr, REG_TRIGGER_TYPE_BASE,
++                riscv_plic->num_sources >> 3)) { /* 1 bit per source */
++        return andes_plic_read_trigger_type(andes_plic, addr, size);
+     }
+ 
+     memory_region_dispatch_read(&andes_plic->parent_mmio, addr, &value,
+@@ -168,19 +265,64 @@ static void
+ andes_plic_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+ {
+     AndesPLICState *andes_plic = ANDES_PLIC(opaque);
++    RISCVPLICState *riscv_plic = RISCV_PLIC(andes_plic);
+ 
+-    switch (addr) {
+-    case REG_FEATURE_ENABLE:
++    /* write must be 4 byte words */
++    if ((addr & 0x3) != 0) {
++        qemu_log_mask(LOG_GUEST_ERROR,
++                      "%s: Invalid register read 0x%" HWADDR_PRIx "\n",
++                      __func__, addr);
++        return;
++    }
++
++    if (addr == REG_FEATURE_ENABLE) {
+         andes_plic->feature_enable = value & (FER_PREEMPT | FER_VECTORED);
+-        break;
+-    default:
+-        break;
++        return;
++    } else if (addr_between(addr, REG_TRIGGER_TYPE_BASE,
++                riscv_plic->num_sources >> 3)) { /* 1 bit per source */
++        andes_plic_write_trigger_type(andes_plic, addr, value, size);
++        return;
+     }
+ 
+     memory_region_dispatch_write(&andes_plic->parent_mmio, addr, value,
+             size_memop(size) | MO_LE, MEMTXATTRS_UNSPECIFIED);
++}
+ 
+-    return;
++static void andes_plic_irq_request(void *opaque, int irq, int level)
++{
++    AndesPLICState *andes_plic = ANDES_PLIC(opaque);
++    RISCVPLICState *riscv_plic = RISCV_PLIC(andes_plic);
++
++    uint32_t gw_state =
++        qatomic_read(&andes_plic->gw_state[irq >> 5]) & 1 << (irq & 31);
++    /*
++     * Keep level data for level triggered to re-generate IRQ
++     * while receives complete message
++     * Regardless of whether gw_state is in processing, we should update
++     * level value because we are receiving new request
++     */
++    andes_plic->level[irq] = level;
++
++    /* Interrupt Gateway State in-processing */
++    if (gw_state) {
++        /*
++         * Interrupt Gateway State in-processing,
++         * If we receive upper level again, re-scan pending/claim
++         * to avoid interrupt missing for handling
++         */
++        if (level) {
++            riscv_plic->riscv_plic_update(riscv_plic);
++        }
++        return;
++    }
++
++    /* If level is not in low state, set gateway state to in-processing */
++    if (level) {
++        andes_plic_set_gw_state(andes_plic, irq, true);
++    }
++
++    andes_plic_set_pending(andes_plic, irq, level > 0);
++    riscv_plic->riscv_plic_update(riscv_plic);
+ }
+ 
+ static const MemoryRegionOps andes_plic_ops = {
+@@ -207,6 +349,13 @@ andes_plic_realize(DeviceState *dev, Error **errp)
+         error_propagate(errp, local_err);
+         return;
+     }
++    /* Use uint32 to record level for each source irq */
++    andes_plic->level = g_new0(uint32_t, riscv_plic->num_sources);
++    /* Use uint32 to record gw_state for each source irq */
++    andes_plic->gw_state = g_new0(uint32_t, riscv_plic->num_sources);
++
++    /* Allocate trigger type register space */
++    andes_plic->trigger_type = g_new0(uint32_t, riscv_plic->bitfield_words);
+ 
+     if (strstr(andes_plic->plic_name , "SW") != NULL) {
+         riscv_plic->riscv_plic_update = andes_plicsw_update;
+@@ -220,6 +369,9 @@ andes_plic_realize(DeviceState *dev, Error **errp)
+      */
+     riscv_plic->mmio.disable_reentrancy_guard = true;
+     riscv_plic->riscv_plic_write_pending = andes_plic_write_pending;
++    riscv_plic->riscv_plic_write_complete = andes_plic_write_complete;
++    /* register andes irq request function to process irq request */
++    riscv_plic->riscv_plic_irq_request = andes_plic_irq_request;
+ 
+     andes_plic->parent_mmio = riscv_plic->mmio;
+     memory_region_init_io(&riscv_plic->mmio, OBJECT(dev),
+@@ -234,6 +386,20 @@ static Property andes_plic_properties[] = {
+     DEFINE_PROP_END_OF_LIST(),
+ };
+ 
++static void andes_plic_reset(DeviceState *dev)
++{
++    AndesPLICState *andes_plic = ANDES_PLIC(dev);
++    RISCVPLICState *riscv_plic = RISCV_PLIC(andes_plic);
++    AndesPLICClass *andes_plic_class = ANDES_PLIC_GET_CLASS(andes_plic);
++
++    andes_plic_class->parent_reset(dev);
++    memset(andes_plic->level, 0, sizeof(uint32_t) *
++           riscv_plic->bitfield_words);
++    memset(andes_plic->gw_state, 0, sizeof(uint32_t) *
++           riscv_plic->bitfield_words);
++    /* No reset trigger type */
++}
++
+ static void andes_plic_class_init(ObjectClass *klass, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(klass);
+@@ -242,6 +408,8 @@ static void andes_plic_class_init(ObjectClass *klass, void *data)
+     device_class_set_props(dc, andes_plic_properties);
+     device_class_set_parent_realize(dc, andes_plic_realize,
+                                     &apc->parent_realize);
++    device_class_set_parent_reset(dc, andes_plic_reset,
++                                    &apc->parent_reset);
+ }
+ 
+ static const TypeInfo andes_plic_info = {
+@@ -263,7 +431,8 @@ type_init(andes_plic_register_types)
+  * Create PLIC device.
+  */
+ DeviceState *andes_plic_create(hwaddr plic_base,
+-    const char *plic_name, char *hart_config, uint32_t num_harts,
++    const char *plic_name, char *hart_config,
++    uint32_t num_harts, uint32_t hartid_base,
+     uint32_t num_sources, uint32_t num_priorities,
+     uint32_t priority_base, uint32_t pending_base,
+     uint32_t enable_base, uint32_t enable_stride,
+@@ -271,8 +440,6 @@ DeviceState *andes_plic_create(hwaddr plic_base,
+     uint32_t aperture_size)
+ {
+     DeviceState *dev = qdev_new(TYPE_ANDES_PLIC);
+-    /* Directly set hartid_base to 0 if we are only one cluster */
+-    uint32_t hartid_base = 0;
+     uint32_t sw = 0;
+ 
+     assert(enable_stride == (enable_stride & -enable_stride));
+@@ -297,15 +464,23 @@ DeviceState *andes_plic_create(hwaddr plic_base,
+         sw = 1;
+     }
+ 
+-    for (int i = 0; i < num_harts; i++) {
+-        CPUState *cpu = qemu_get_cpu(hartid_base + i);
++    AndesPLICState *andes_plic = ANDES_PLIC(dev);
++    RISCVPLICState *riscv_plic = RISCV_PLIC(andes_plic);
++
++    for (int i = 0; i < riscv_plic->num_addrs; i++) {
++        int cpu_num = riscv_plic->addr_config[i].hartid;
++        CPUState *cpu = qemu_get_cpu(cpu_num);
+ 
+-        qdev_connect_gpio_out(dev, i,
+-                              qdev_get_gpio_in(DEVICE(cpu),
+-                              sw ? IRQ_S_SOFT : IRQ_S_EXT));
+-        qdev_connect_gpio_out(dev, num_harts + i,
+-                              qdev_get_gpio_in(DEVICE(cpu),
+-                              sw ? IRQ_M_SOFT : IRQ_M_EXT));
++        if (riscv_plic->addr_config[i].mode == PLICMode_M) {
++            qdev_connect_gpio_out(dev, cpu_num - hartid_base + num_harts,
++                                  qdev_get_gpio_in(DEVICE(cpu),
++                                  sw ? IRQ_M_SOFT : IRQ_M_EXT));
++        }
++        if (riscv_plic->addr_config[i].mode == PLICMode_S) {
++            qdev_connect_gpio_out(dev, cpu_num - hartid_base,
++                                  qdev_get_gpio_in(DEVICE(cpu),
++                                  sw ? IRQ_S_SOFT : IRQ_S_EXT));
++        }
+     }
+ 
+     return dev;
+diff --git a/hw/intc/riscv_plic.c b/hw/intc/riscv_plic.c
+index 37d44d6891..c345ed6091 100644
+--- a/hw/intc/riscv_plic.c
++++ b/hw/intc/riscv_plic.c
+@@ -71,7 +71,7 @@ static void riscv_plic_print_state(RISCVPLICState *plic)
+     }
+     qemu_log("\n");
+ 
+-    /* pending */
++    /* claim */
+     qemu_log("claimed       : ");
+     for (i = plic->bitfield_words - 1; i >= 0; i--) {
+         qemu_log("%08x", plic->claimed[i]);
+@@ -359,7 +359,7 @@ static uint64_t riscv_plic_read(void *opaque, hwaddr addr, unsigned size)
+ {
+     RISCVPLICState *plic = opaque;
+ 
+-    /* writes must be 4 byte words */
++    /* read must be 4 byte words */
+     if ((addr & 0x3) != 0) {
+         goto err;
+     }
+@@ -438,7 +438,8 @@ static void riscv_plic_write(void *opaque, hwaddr addr, uint64_t value,
+         uint32_t contextid = (addr & (plic->context_stride - 1));
+         if (contextid == 0) {
+             if (plic->riscv_plic_write_threshold) {
+-                return plic->riscv_plic_write_threshold(plic, addr, value, size);
++                return plic->riscv_plic_write_threshold(plic,
++                                                        addr, value, size);
+             }
+         } else if (contextid == 4) {
+             if (plic->riscv_plic_write_complete) {
+@@ -537,6 +538,10 @@ static void riscv_plic_irq_request(void *opaque, int irq, int level)
+ {
+     RISCVPLICState *plic = opaque;
+ 
++    if (plic->riscv_plic_irq_request) {
++        plic->riscv_plic_irq_request(plic, irq, level);
++        return;
++    }
+     riscv_plic_set_pending(plic, irq, level > 0);
+     plic->riscv_plic_update(plic);
+ }
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 1581fdc665..53f8217775 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -374,6 +374,7 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+         memmap[ANDES_AE350_PLICSW].base,
+         ANDES_PLICSW_NAME,
+         plicsw_hart_config, machine->smp.cpus,
++        0, /* hartid_base */
+         ANDES_PLICSW_NUM_SOURCES,
+         ANDES_PLICSW_NUM_PRIORITIES,
+         ANDES_PLICSW_PRIORITY_BASE,
+@@ -401,6 +402,7 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+         memmap[ANDES_AE350_PLIC].base,
+         ANDES_PLIC_NAME,
+         plic_hart_config, machine->smp.cpus,
++        0, /* hartid_base */
+         ANDES_PLIC_NUM_SOURCES,
+         ANDES_PLIC_NUM_PRIORITIES,
+         ANDES_PLIC_PRIORITY_BASE,
+diff --git a/include/hw/intc/andes_plic.h b/include/hw/intc/andes_plic.h
+index dad4e63f7e..b6c5e2b141 100644
+--- a/include/hw/intc/andes_plic.h
++++ b/include/hw/intc/andes_plic.h
+@@ -74,6 +74,24 @@ typedef enum AndesPLICMode {
+     PlicMode_M
+ } AndesPLICMode;
+ 
++typedef enum AndesPLICTriggerType {
++  ANDES_PLIC_TRIGGER_TYPE_LEVEL = 0,
++  ANDES_PLIC_TRIGGER_TYPE_EDGE
++} AndesPLICTriggerType;
++
++enum register_names {
++    REG_FEATURE_ENABLE = 0x0000,
++    REG_TRIGGER_TYPE_BASE = 0x1080,
++    REG_NUM_IRQ_TARGET = 0x1100,
++    REG_VER_MAX_PRIORITY = 0x1104,
++};
++
++enum feature_enable_register {
++    FER_PREEMPT = (1u << 0),
++    FER_VECTORED = (1u << 1),
++};
++
++
+ typedef struct AndesPLICAddr {
+     uint32_t target_id;
+     uint32_t hart_id;
+@@ -87,9 +105,12 @@ typedef struct AndesPLICState {
+     /*< public >*/
+     MemoryRegion parent_mmio;
+     char *plic_name;
++    uint32_t *level;
++    uint32_t *gw_state;
+ 
+     /* registers */
+     uint32_t feature_enable;
++    uint32_t *trigger_type;
+ 
+     /* interface */
+     void (*andes_plic_update)(void *plic);
+@@ -105,7 +126,8 @@ static inline bool addr_between(uint32_t addr, uint32_t base, uint32_t offset)
+ 
+ DeviceState *
+ andes_plic_create(hwaddr addr,
+-    const char *plic_name, char *hart_config, uint32_t num_harts,
++    const char *plic_name, char *hart_config,
++    uint32_t num_harts, uint32_t hartid_base,
+     uint32_t num_sources, uint32_t num_priorities,
+     uint32_t priority_base, uint32_t pending_base,
+     uint32_t enable_base, uint32_t enable_stride,
+diff --git a/include/hw/intc/riscv_plic.h b/include/hw/intc/riscv_plic.h
+index d168181fec..834eb0c103 100644
+--- a/include/hw/intc/riscv_plic.h
++++ b/include/hw/intc/riscv_plic.h
+@@ -108,6 +108,7 @@ struct RISCVPLICState {
+     void (*riscv_plic_update)(void *opaque);
+     uint32_t (*riscv_plic_claim)(RISCVPLICState *plic,
+         uint32_t addrid);
++    void (*riscv_plic_irq_request)(void *opaque, int irq, int level);
+ };
+ 
+ DeviceState *riscv_plic_create(hwaddr addr, char *hart_config,
+-- 
+2.34.1
+

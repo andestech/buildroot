@@ -1,0 +1,41 @@
+From 0b5b680d30576c8584a9875ce285d58c12ecf171 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Wed, 3 Jan 2024 14:09:45 +0800
+Subject: [PATCH 162/241] target/riscv: Change checking CSR UMISC_CTL.fp_mode
+ for BF16)
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/andes_fpu_helper.c | 2 +-
+ target/riscv/csr_andes.h        | 2 ++
+ 2 files changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/target/riscv/andes_fpu_helper.c b/target/riscv/andes_fpu_helper.c
+index 2079c58560..723e8f4dd9 100644
+--- a/target/riscv/andes_fpu_helper.c
++++ b/target/riscv/andes_fpu_helper.c
+@@ -22,7 +22,7 @@ bool check_fp_mode(CPURISCVState *env)
+     if (ret != RISCV_EXCP_NONE) {
+         return false;
+     }
+-    return (umisc_ctl_val & MASK_UMISC_CTL_FP_MODE);
++    return ((umisc_ctl_val & MASK_UMISC_CTL_FP_MODE) == MASK_UMISC_CTL_FP_MODE_BF16);
+ }
+ 
+ float16 nds_check_nanbox_h(CPURISCVState *env, uint64_t f)
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 9a0b5a0e73..95e8652f24 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -233,6 +233,8 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ /* umisc_ctl */
+ #define MASK_UMISC_CTL_FP_MODE              (0x3)
+ #define MASK_UMISC_CTL_CMR_CTL              (0x3 << 2)
++#define MASK_UMISC_CTL_FP_MODE_FP16         0
++#define MASK_UMISC_CTL_FP_MODE_BF16         1
+ 
+ /* mvec_cfg */
+ #define MASK_MVEC_CFG_MISEW                 (0x3 << 14)
+-- 
+2.34.1
+

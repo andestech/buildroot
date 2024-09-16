@@ -1,0 +1,78 @@
+From 2131b70d6f58d31116cb232311d36bd870d58a85 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Mon, 23 Oct 2023 14:30:59 +0800
+Subject: [PATCH 099/241] target/riscv: Sync CSRs to cpu ext configs.
+
+Now we sync mrvarch/mmsc_cfg values to corresponding cpu extension
+configs in function andes_csr_sync_cpu_ext().
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 44 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 44 insertions(+)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 6b125219f9..5354a40476 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -1333,6 +1333,49 @@ static void andes_csr_reset_common(CPURISCVState *env)
+         env->andes_spec_csr_init(&env->andes_csr);
+     }
+ }
++
++static void andes_csr_sync_cpu_ext(CPURISCVState *env, RISCVCPU *cpu)
++{
++    target_ulong mrvarch_cfg;
++    csr_ops[CSR_MRVARCH_CFG].read(env, CSR_MRVARCH_CFG, &mrvarch_cfg);
++    cpu->cfg.ext_zba = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBA);
++    cpu->cfg.ext_zbb = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBB);
++    cpu->cfg.ext_zbc = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBC);
++    cpu->cfg.ext_zbs = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBS);
++    cpu->cfg.ext_svinval = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SVINVAL);
++    cpu->cfg.ext_smstateen = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SMSTATEEN);
++    cpu->cfg.ext_sscofpmf = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SSCOFPMF);
++    cpu->cfg.ext_sstc = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SSTC);
++    cpu->cfg.ext_zkn = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKN);
++    cpu->cfg.ext_zks = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKS);
++    cpu->cfg.ext_zkt = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKT);
++    cpu->cfg.ext_zkr = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKR);
++    cpu->cfg.ext_svpbmt = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SVPBMT);
++    cpu->cfg.ext_svnapot = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SVNAPOT);
++    cpu->cfg.ext_zihintpause = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZIHINTPAUSE);
++    cpu->cfg.ext_zca = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCA);
++    cpu->cfg.ext_zcb = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCB);
++    cpu->cfg.ext_zcd = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCD);
++    cpu->cfg.ext_zcf = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCF);
++    cpu->cfg.ext_zcmt = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCMT);
++
++    if (riscv_cpu_mxl(env) == MXL_RV32) {
++        target_ulong mmsc_cfg2;
++        if (csr_ops[CSR_MMSC_CFG2].predicate(env, CSR_MMSC_CFG2) ==
++                RISCV_EXCP_NONE) {
++            csr_ops[CSR_MMSC_CFG2].read(env, CSR_MMSC_CFG2, &mmsc_cfg2);
++            cpu->cfg.ext_zfh = get_field(mmsc_cfg2, MASK_MMSC_CFG2_ZFH);
++        }
++    }
++    else {
++        target_ulong mmsc_cfg;
++        csr_ops[CSR_MMSC_CFG].read(env, CSR_MMSC_CFG, &mmsc_cfg);
++        cpu->cfg.ext_zfh = get_field(mmsc_cfg, MASK_MMSC_CFG_ZFH);
++        cpu->cfg.ext_zfbfmin = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZFBFMIN);
++        cpu->cfg.ext_zvfbfmin = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZVFBFMIN);
++        cpu->cfg.ext_zvfbfwma = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZVFBFWMA);
++    }
++}
+ #endif
+ 
+ static void riscv_cpu_reset_hold(Object *obj)
+@@ -1351,6 +1394,7 @@ static void riscv_cpu_reset_hold(Object *obj)
+     }
+ #ifndef CONFIG_USER_ONLY
+     andes_csr_reset_common(env);
++    andes_csr_sync_cpu_ext(env, cpu);
+     env->misa_mxl = env->misa_mxl_max;
+     env->priv = PRV_M;
+     env->mstatus &= ~(MSTATUS_MIE | MSTATUS_MPRV);
+-- 
+2.34.1
+

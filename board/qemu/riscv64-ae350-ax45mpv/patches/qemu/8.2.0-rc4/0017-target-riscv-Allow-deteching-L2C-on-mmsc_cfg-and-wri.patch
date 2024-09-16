@@ -1,0 +1,84 @@
+From 847550b5cb113cabc9830ab03cab737b27c88f53 Mon Sep 17 00:00:00 2001
+From: Yu Chien Peter Lin <peterlin@andestech.com>
+Date: Thu, 25 May 2023 14:05:34 +0800
+Subject: [PATCH 017/241] target/riscv: Allow deteching L2C on mmsc_cfg and
+ writable L2C region
+
+AST530 OpenSBI prints warning when the following checks failed
+1) $mmsc_cfg.L2C when initializing cache.
+2) Enable bit on L2C Control Register (0x8) when doing cache flush.
+
+We set $mmsc_cfg.L2C on 45 and 65-series, and let the L2C region writable
+so the U-Boot SPL can set the enable bit to make OpenSBI happy.
+
+Signed-off-by: Yu Chien Peter Lin <peterlin@andestech.com>
+---
+ hw/riscv/andes_ae350.c       | 2 +-
+ target/riscv/cpu.c           | 7 +++++++
+ target/riscv/csr_andes.inc.h | 2 ++
+ 3 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 3512e91c26..47d1e7e3fe 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -511,7 +511,7 @@ static void andes_ae350_machine_init(MachineState *machine)
+     /* L2C */
+     memory_region_init_ram(mask_l2c, NULL, "riscv.andes.ae350.l2c",
+                            memmap[ANDES_AE350_L2C].size, &error_fatal);
+-    memory_region_set_readonly(mask_l2c, true);
++    memory_region_set_readonly(mask_l2c, false);
+     memory_region_add_subregion(system_memory, memmap[ANDES_AE350_L2C].base,
+                                 mask_l2c);
+ 
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index 3e57285a33..9871ef9160 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -598,11 +598,14 @@ static void rv64_andes_ax27_cpu_init(Object *obj)
+ static void rv64_andes_ax45_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    AndesCsr *andes_csr = &RISCV_CPU(obj)->env.andes_csr;
+ 
+     rv64_andes_ax25_cpu_init(obj);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x8a45;
++    /* Set $mmsc_cfg.L2C */
++    andes_csr->csrno[CSR_MMSC_CFG] |= (1UL << V5_MMSC_CFG_L2C);
+ }
+ 
+ static void rv64_andes_nx25_cpu_init(Object *obj)
+@@ -786,11 +789,15 @@ static void rv32_andes_a27_cpu_init(Object *obj)
+ static void rv32_andes_a45_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    AndesCsr *andes_csr = &RISCV_CPU(obj)->env.andes_csr;
+ 
+     rv32_andes_a25_cpu_init(obj);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0a45;
++
++    /* Set $mmsc_cfg2.L2C */
++    andes_csr->csrno[CSR_MMSC_CFG2] |= (1UL << V5_MMSC_CFG2_L2C);
+ }
+ 
+ static void rv32_andes_n25_cpu_init(Object *obj)
+diff --git a/target/riscv/csr_andes.inc.h b/target/riscv/csr_andes.inc.h
+index f321318b22..57dbd8126c 100644
+--- a/target/riscv/csr_andes.inc.h
++++ b/target/riscv/csr_andes.inc.h
+@@ -17,6 +17,8 @@ typedef struct AndesVec {
+ /* mmsc_cfg */
+ #define V5_MMSC_CFG_ECD                     3
+ #define V5_MMSC_CFG_PPMA                    30
++#define V5_MMSC_CFG_L2C                     46
++#define V5_MMSC_CFG2_L2C                    14
+ 
+ /* mmisc_ctl */
+ #define V5_MMISC_CTL_VEC_PLIC               1
+-- 
+2.34.1
+

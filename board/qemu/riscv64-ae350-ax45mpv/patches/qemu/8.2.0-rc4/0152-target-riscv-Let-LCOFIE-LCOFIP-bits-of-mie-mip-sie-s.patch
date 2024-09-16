@@ -1,0 +1,79 @@
+From 9fed7e71745cbaab22c29608c495fdc1b5df1b2e Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Thu, 21 Dec 2023 11:14:08 +0800
+Subject: [PATCH 152/241] target/riscv: Let LCOFIE/LCOFIP bits of
+ mie/mip/sie/sip be WPRI if the Sscofpmf extension is not implemented. (#101)
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/101
+Reviewed-by: Rick Jian-Zhi Chen <rick@andestech.com>
+Co-authored-by: Yu-Ming Chang <yumin686@andestech.com>
+Co-committed-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu_bits.h |  1 +
+ target/riscv/csr.c      | 16 ++++++++++++++++
+ 2 files changed, 17 insertions(+)
+
+diff --git a/target/riscv/cpu_bits.h b/target/riscv/cpu_bits.h
+index a1f7efcf86..1f1f9ed262 100644
+--- a/target/riscv/cpu_bits.h
++++ b/target/riscv/cpu_bits.h
+@@ -908,6 +908,7 @@ typedef enum RISCVException {
+ #define SEED_OPST_DEAD                   (0b11 << 30)
+ /* PMU related bits */
+ #define MIE_LCOFIE                         (1 << IRQ_PMU_OVF)
++#define SIE_LCOFIE                         (1 << IRQ_PMU_OVF)
+ 
+ #define MHPMEVENT_BIT_OF                   BIT_ULL(63)
+ #define MHPMEVENTH_BIT_OF                  BIT(31)
+diff --git a/target/riscv/csr.c b/target/riscv/csr.c
+index d2803299d0..caa50fb704 100644
+--- a/target/riscv/csr.c
++++ b/target/riscv/csr.c
+@@ -1604,6 +1604,10 @@ static RISCVException rmw_mie64(CPURISCVState *env, int csrno,
+         *ret_val = env->mie;
+     }
+ 
++    if (!env_archcpu(env)->cfg.ext_sscofpmf) {
++        *ret_val &= ~((uint64_t)MIE_LCOFIE);
++    }
++
+     env->mie = (env->mie & ~mask) | (new_val & mask);
+ 
+     if (!riscv_has_ext(env, RVH)) {
+@@ -2462,6 +2466,10 @@ static RISCVException rmw_mip64(CPURISCVState *env, int csrno,
+         *ret_val = old_mip;
+     }
+ 
++    if (!env_archcpu(env)->cfg.ext_sscofpmf) {
++        *ret_val &= ~((uint64_t)MIP_LCOFIP);
++    }
++
+     return RISCV_EXCP_NONE;
+ }
+ 
+@@ -2780,6 +2788,10 @@ static RISCVException rmw_sie64(CPURISCVState *env, int csrno,
+         env->sie = (env->sie & ~sie_mask) | (new_val & sie_mask);
+     }
+ 
++    if (!env_archcpu(env)->cfg.ext_sscofpmf) {
++        *ret_val &= ~((uint64_t)SIE_LCOFIE);
++    }
++
+     return ret;
+ }
+ 
+@@ -3006,6 +3018,10 @@ static RISCVException rmw_sip64(CPURISCVState *env, int csrno,
+             (S_MODE_INTERRUPTS | LOCAL_INTERRUPTS);
+     }
+ 
++    if (!env_archcpu(env)->cfg.ext_sscofpmf) {
++        *ret_val &= ~((uint64_t)SIP_LCOFIP);
++    }
++
+     return ret;
+ }
+ 
+-- 
+2.34.1
+

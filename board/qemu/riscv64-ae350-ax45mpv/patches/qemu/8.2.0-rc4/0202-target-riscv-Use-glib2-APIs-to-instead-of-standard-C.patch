@@ -1,0 +1,39 @@
+From 52d95568b13c8b2ef58a038a6a950f579abc8d16 Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Thu, 1 Feb 2024 15:42:18 +0800
+Subject: [PATCH 202/241] target/riscv: Use glib2 APIs to instead of standard C
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+---
+ target/riscv/gdbstub.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
+
+diff --git a/target/riscv/gdbstub.c b/target/riscv/gdbstub.c
+index 2f2ae62682..b241afe8ce 100644
+--- a/target/riscv/gdbstub.c
++++ b/target/riscv/gdbstub.c
+@@ -304,9 +304,9 @@ static int andes_ace_get_reg(CPURISCVState *env, int reg_n)
+             ByteSize =
+                 (acr_width % 8 == 0) ? acr_width / 8 : (acr_width / 8) + 1;
+             if (acr_value != NULL) {
+-                free(acr_value);
++                g_free(acr_value);
+             }
+-            acr_value = malloc(ByteSize);
++            acr_value = g_malloc(ByteSize);
+             break;
+         }
+         curr_reg_no += acr_info_list->num;
+@@ -434,8 +434,7 @@ static int andes_ace_set_reg(CPURISCVState *env, unsigned char *val, int reg_n)
+     /* Allocate buffer which is the multiple of register size */
+     unsigned int rounds = (ByteSize % reg_bytes) ?
+                            ByteSize / reg_bytes + 1 : ByteSize / reg_bytes;
+-    char *buffer = (char *)alloca(rounds * reg_bytes);
+-    memset(buffer, 0, rounds * reg_bytes);
++    char *buffer = g_alloca0(rounds * reg_bytes);
+     memcpy(buffer, val, ByteSize);
+     /* this pointer will be increased when extracting value partially */
+     char *value = buffer;
+-- 
+2.34.1
+

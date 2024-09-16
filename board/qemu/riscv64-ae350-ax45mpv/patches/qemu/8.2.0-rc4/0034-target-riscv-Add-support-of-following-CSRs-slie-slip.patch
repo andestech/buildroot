@@ -1,0 +1,130 @@
+From 67316d46a3d308312714a9b42e465a8e704e12d9 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 11 Aug 2023 11:31:34 +0800
+Subject: [PATCH 034/241] target/riscv: Add support of following CSRs: slie,
+ slip, shpmevent3~6.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/csr_andes.c | 47 +++++++++++++++++++++++++++++++---------
+ target/riscv/csr_andes.h |  4 +++-
+ 2 files changed, 40 insertions(+), 11 deletions(-)
+
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index de46d317e3..6f1195748c 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -18,6 +18,15 @@ static RISCVException any(CPURISCVState *env,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException smode(CPURISCVState *env, int csrno)
++{
++    if (riscv_has_ext(env, RVS)) {
++        return RISCV_EXCP_NONE;
++    }
++
++    return RISCV_EXCP_ILLEGAL_INST;
++}
++
+ static RISCVException ecc(CPURISCVState *env, int csrno)
+ {
+     AndesCsr *csr = &env->andes_csr;
+@@ -170,7 +179,7 @@ static RISCVException write_mhsp_ctl(CPURISCVState *env, int csrno,
+ static RISCVException write_mcounter(CPURISCVState *env, int csrno,
+                                      target_ulong val)
+ {
+-    env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_COUNTER_COMMON;
++    env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_COUNTER;
+     return RISCV_EXCP_NONE;
+ }
+ 
+@@ -232,7 +241,7 @@ static RISCVException write_scounter(CPURISCVState *env, int csrno,
+ 
+     target_ulong wen = env->andes_csr.csrno[CSR_MCOUNTERWEN];
+     if (wen == 0) {
+-        env->andes_csr.csrno[real_csrno] = val & WRITE_MASK_CSR_COUNTER_COMMON;
++        env->andes_csr.csrno[real_csrno] = val & WRITE_MASK_CSR_COUNTER;
+     }
+     else {
+         for (int i=0; i<RV_MAX_MHPMCOUNTERS; i++) {
+@@ -257,7 +266,7 @@ static RISCVException write_scountinhibit(CPURISCVState *env, int csrno,
+                                           target_ulong val)
+ {
+     target_ulong wen = env->andes_csr.csrno[CSR_MCOUNTERWEN];
+-    target_ulong new_val = val & WRITE_MASK_CSR_COUNTER_COMMON;
++    target_ulong new_val = val & WRITE_MASK_CSR_COUNTER;
+     target_ulong read_val;
+ 
+     if (wen == 0) {
+@@ -277,6 +286,20 @@ static RISCVException write_scountinhibit(CPURISCVState *env, int csrno,
+     return RISCV_EXCP_NONE;
+ }
+ 
++static RISCVException write_shpmevent(CPURISCVState *env, int csrno,
++                                      target_ulong val)
++{
++    env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_HPMEVENT;
++    return RISCV_EXCP_NONE;
++}
++
++static RISCVException write_sliep(CPURISCVState *env, int csrno,
++                                     target_ulong val)
++{
++    env->andes_csr.csrno[csrno] = val & WRITE_MASK_CSR_SLIEP;
++    return RISCV_EXCP_NONE;
++}
++
+ static RISCVException write_all_ignore(CPURISCVState *env, int csrno,
+                                        target_ulong val)
+ {
+@@ -444,9 +467,9 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+ 
+     /* ================ AndeStar V5 supervisor mode CSRs ================ */
+     /* Supervisor trap registers */
+-    [CSR_SLIE]    = { "slie",                     any, read_csr, write_csr},
+-    [CSR_SLIP]    = { "slip",                     any, read_csr, write_csr},
+-    [CSR_SDCAUSE] = { "sdcause",                  any, read_csr, write_csr},
++    [CSR_SLIE]    = { "slie",                     smode, read_csr, write_sliep},
++    [CSR_SLIP]    = { "slip",                     smode, read_csr, write_sliep},
++    [CSR_SDCAUSE] = { "sdcause",                  smode, read_csr, write_csr  },
+ 
+     /* Supervisor counter registers */
+     [CSR_SCOUNTERINTEN]  = { "scounterinten",     pmnds, read_scounter,
+@@ -461,10 +484,14 @@ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+                                                          write_scounter     },
+     [CSR_SCOUNTINHIBIT]  = { "scountinhibit",     pmnds, read_scountinhibit,
+                                                          write_scountinhibit},
+-    [CSR_SHPMEVENT3]     = { "shpmevent3",        pmnds, read_csr, write_csr},
+-    [CSR_SHPMEVENT4]     = { "shpmevent4",        pmnds, read_csr, write_csr},
+-    [CSR_SHPMEVENT5]     = { "shpmevent5",        pmnds, read_csr, write_csr},
+-    [CSR_SHPMEVENT6]     = { "shpmevent6",        pmnds, read_csr, write_csr},
++    [CSR_SHPMEVENT3]     = { "shpmevent3",        pmnds, read_csr,
++                                                         write_shpmevent    },
++    [CSR_SHPMEVENT4]     = { "shpmevent4",        pmnds, read_csr,
++                                                         write_shpmevent    },
++    [CSR_SHPMEVENT5]     = { "shpmevent5",        pmnds, read_csr,
++                                                         write_shpmevent    },
++    [CSR_SHPMEVENT6]     = { "shpmevent6",        pmnds, read_csr,
++                                                         write_shpmevent    },
+ 
+     /* Supervisor control registers */
+     [CSR_SCCTLDATA] = { "scctldata",              any, read_csr, write_csr},
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index de25baf0e8..b4fde7838e 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -100,7 +100,9 @@ typedef struct AndesVec {
+ #define WRITE_MASK_CSR_UITB_64              0xFFFFFFFC
+ #define WRITE_MASK_CSR_MPFT_CTL             0x1F0
+ #define WRITE_MASK_CSR_MHSP_CTL             0x3F
+-#define WRITE_MASK_CSR_COUNTER_COMMON       0x7D
++#define WRITE_MASK_CSR_COUNTER              0x7D
++#define WRITE_MASK_CSR_HPMEVENT             0x1FF
++#define WRITE_MASK_CSR_SLIEP                0x10F0000
+ 
+ void andes_csr_init(AndesCsr *);
+ void andes_vec_init(AndesVec *);
+-- 
+2.34.1
+

@@ -1,0 +1,197 @@
+From 8fce2063583c4ef940f8975d9831731e9c4ccde1 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Wed, 1 Nov 2023 15:59:53 +0800
+Subject: [PATCH 103/241] target/riscv: Fix the syncing of CSRs and cpu
+ extensions.
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/andes_cpu_bits.h |  1 +
+ target/riscv/cpu.c            | 66 ++++++++++++++++++++++-------------
+ target/riscv/csr_andes.c      | 37 +++++++++++++++-----
+ target/riscv/csr_andes.h      |  7 ++++
+ 4 files changed, 78 insertions(+), 33 deletions(-)
+
+diff --git a/target/riscv/andes_cpu_bits.h b/target/riscv/andes_cpu_bits.h
+index 444e8bb2fc..57779d8b49 100644
+--- a/target/riscv/andes_cpu_bits.h
++++ b/target/riscv/andes_cpu_bits.h
+@@ -14,6 +14,7 @@
+ #define CSR_MMSC_CFG3           0xfc4
+ #define CSR_MVEC_CFG            0xfc7
+ #define CSR_MRVARCH_CFG         0xfca
++#define CSR_MRVARCH_CFG2        0xfcb
+ #define CSR_MCCACHE_CTL_BASE    0xfcf
+ 
+ /* Crash Debug CSRs */
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index d4802ce916..d9c44eb6a6 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -894,6 +894,9 @@ static void rv64_andes_nx45v_cpu_init(Object *obj)
+     set_satp_mode_max_supported(RISCV_CPU(obj), VM_1_10_MBARE);
+ #endif
+ 
++    /* Set CPU extensions */
++    cfg->ext_zfh = true;
++
+     /* RVV extension */
+     cfg->vext_spec = g_strdup("v1.0");
+     cfg->vlen = 512;
+@@ -1349,42 +1352,55 @@ static void andes_csr_sync_cpu_ext(CPURISCVState *env, RISCVCPU *cpu)
+ {
+     target_ulong mrvarch_cfg;
+     csr_ops[CSR_MRVARCH_CFG].read(env, CSR_MRVARCH_CFG, &mrvarch_cfg);
+-    cpu->cfg.ext_zba = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBA);
+-    cpu->cfg.ext_zbb = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBB);
+-    cpu->cfg.ext_zbc = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBC);
+-    cpu->cfg.ext_zbs = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBS);
+-    cpu->cfg.ext_svinval = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SVINVAL);
+-    cpu->cfg.ext_smstateen = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SMSTATEEN);
+-    cpu->cfg.ext_sscofpmf = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SSCOFPMF);
+-    cpu->cfg.ext_sstc = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SSTC);
+-    cpu->cfg.ext_zkn = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKN);
+-    cpu->cfg.ext_zks = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKS);
+-    cpu->cfg.ext_zkt = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKT);
+-    cpu->cfg.ext_zkr = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKR);
+-    cpu->cfg.ext_svpbmt = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SVPBMT);
+-    cpu->cfg.ext_svnapot = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_SVNAPOT);
+-    cpu->cfg.ext_zihintpause = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZIHINTPAUSE);
+-    cpu->cfg.ext_zca = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCA);
+-    cpu->cfg.ext_zcb = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCB);
+-    cpu->cfg.ext_zcd = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCD);
+-    cpu->cfg.ext_zcf = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCF);
+-    cpu->cfg.ext_zcmt = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCMT);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBA, cpu->cfg.ext_zba);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBB, cpu->cfg.ext_zbb);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBC, cpu->cfg.ext_zbc);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZBS, cpu->cfg.ext_zbs);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_SVINVAL, cpu->cfg.ext_svinval);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_SMSTATEEN, cpu->cfg.ext_smstateen);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_SSCOFPMF, cpu->cfg.ext_sscofpmf);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_SSTC, cpu->cfg.ext_sstc);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKN, cpu->cfg.ext_zkn);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKS, cpu->cfg.ext_zks);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKT, cpu->cfg.ext_zkt);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZKR, cpu->cfg.ext_zkr);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_SVPBMT, cpu->cfg.ext_svpbmt);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_SVNAPOT, cpu->cfg.ext_svnapot);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZIHINTPAUSE, cpu->cfg.ext_zihintpause);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCA, cpu->cfg.ext_zca);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCB, cpu->cfg.ext_zcb);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCD, cpu->cfg.ext_zcd);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCF, cpu->cfg.ext_zcf);
++    mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZCMT, cpu->cfg.ext_zcmt);
++    csr_ops[CSR_MRVARCH_CFG].write(env, CSR_MRVARCH_CFG, mrvarch_cfg);
+ 
+     if (riscv_cpu_mxl(env) == MXL_RV32) {
+         target_ulong mmsc_cfg2;
++        target_ulong mrvarch_cfg2;
+         if (csr_ops[CSR_MMSC_CFG2].predicate(env, CSR_MMSC_CFG2) ==
+                 RISCV_EXCP_NONE) {
+             csr_ops[CSR_MMSC_CFG2].read(env, CSR_MMSC_CFG2, &mmsc_cfg2);
+-            cpu->cfg.ext_zfh = get_field(mmsc_cfg2, MASK_MMSC_CFG2_ZFH);
++            mmsc_cfg2 = set_field(mmsc_cfg2, MASK_MMSC_CFG2_ZFH, cpu->cfg.ext_zfh);
++            csr_ops[CSR_MMSC_CFG2].write(env, CSR_MMSC_CFG2, mmsc_cfg2);
++        }
++        if (csr_ops[CSR_MRVARCH_CFG2].predicate(env, CSR_MRVARCH_CFG2) ==
++                RISCV_EXCP_NONE) {
++            csr_ops[CSR_MRVARCH_CFG2].read(env, CSR_MRVARCH_CFG2, &mrvarch_cfg2);
++            mrvarch_cfg2 = set_field(mrvarch_cfg2, MASK_MRVARCH_CFG2_ZFBFMIN, cpu->cfg.ext_zfbfmin);
++            mrvarch_cfg2 = set_field(mrvarch_cfg2, MASK_MRVARCH_CFG2_ZVFBFMIN, cpu->cfg.ext_zvfbfmin);
++            mrvarch_cfg2 = set_field(mrvarch_cfg2, MASK_MRVARCH_CFG2_ZVFBFWMA, cpu->cfg.ext_zvfbfwma);
++            csr_ops[CSR_MRVARCH_CFG2].write(env, CSR_MRVARCH_CFG2, mrvarch_cfg2);
+         }
+     }
+     else {
+         target_ulong mmsc_cfg;
+         csr_ops[CSR_MMSC_CFG].read(env, CSR_MMSC_CFG, &mmsc_cfg);
+-        cpu->cfg.ext_zfh = get_field(mmsc_cfg, MASK_MMSC_CFG_ZFH);
+-        cpu->cfg.ext_zfbfmin = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZFBFMIN);
+-        cpu->cfg.ext_zvfbfmin = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZVFBFMIN);
+-        cpu->cfg.ext_zvfbfwma = get_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZVFBFWMA);
++        mmsc_cfg = set_field(mmsc_cfg, MASK_MMSC_CFG_ZFH, cpu->cfg.ext_zfh);
++        csr_ops[CSR_MMSC_CFG].write(env, CSR_MMSC_CFG, mmsc_cfg);
++        mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZFBFMIN, cpu->cfg.ext_zfbfmin);
++        mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZVFBFMIN, cpu->cfg.ext_zvfbfmin);
++        mrvarch_cfg = set_field(mrvarch_cfg, MASK_MRVARCH_CFG_ZVFBFWMA, cpu->cfg.ext_zvfbfwma);
++        csr_ops[CSR_MRVARCH_CFG].write(env, CSR_MRVARCH_CFG, mrvarch_cfg);
+     }
+ }
+ #endif
+diff --git a/target/riscv/csr_andes.c b/target/riscv/csr_andes.c
+index 48ebcec0eb..dc11b4429e 100644
+--- a/target/riscv/csr_andes.c
++++ b/target/riscv/csr_andes.c
+@@ -282,6 +282,26 @@ static RISCVException rvarch(CPURISCVState *env, int csrno)
+     }
+ }
+ 
++static RISCVException rvarch2(CPURISCVState *env, int csrno)
++{
++    AndesCsr *csr = &env->andes_csr;
++    bool rvarch2bit;
++
++    if (riscv_cpu_mxl(env) == MXL_RV32) {
++        rvarch2bit = get_field(csr->csrno[CSR_MMSC_CFG2], MASK_MMSC_CFG2_RVARCH2);
++    }
++    else {
++        rvarch2bit = false;
++    }
++
++    if (rvarch2bit) {
++        return RISCV_EXCP_NONE;
++    }
++    else {
++        return RISCV_EXCP_ILLEGAL_INST;
++    }
++}
++
+ static RISCVException ccache(CPURISCVState *env, int csrno)
+ {
+     AndesCsr *csr = &env->andes_csr;
+@@ -790,14 +810,15 @@ void andes_cpu_do_interrupt_post(CPUState *cs)
+ riscv_csr_operations andes_csr_ops[CSR_TABLE_SIZE] = {
+     /* ================== AndeStar V5 machine mode CSRs ================== */
+     /* Configuration Registers */
+-    [CSR_MICM_CFG]          = { "micm_cfg",          any,    read_csr },
+-    [CSR_MDCM_CFG]          = { "mdcm_cfg",          any,    read_csr },
+-    [CSR_MMSC_CFG]          = { "mmsc_cfg",          any,    read_csr },
+-    [CSR_MMSC_CFG2]         = { "mmsc_cfg2",         mcfg2,  read_csr },
+-    [CSR_MMSC_CFG3]         = { "mmsc_cfg3",         mcfg3,  read_csr },
+-    [CSR_MVEC_CFG]          = { "mvec_cfg",          veccfg, read_csr },
+-    [CSR_MRVARCH_CFG]       = { "mrvarch_cfg",       rvarch, read_csr },
+-    [CSR_MCCACHE_CTL_BASE]  = { "mccache_ctl_base",  ccache, read_csr },
++    [CSR_MICM_CFG]          = { "micm_cfg",          any,     read_csr },
++    [CSR_MDCM_CFG]          = { "mdcm_cfg",          any,     read_csr },
++    [CSR_MMSC_CFG]          = { "mmsc_cfg",          any,     read_csr },
++    [CSR_MMSC_CFG2]         = { "mmsc_cfg2",         mcfg2,   read_csr },
++    [CSR_MMSC_CFG3]         = { "mmsc_cfg3",         mcfg3,   read_csr },
++    [CSR_MVEC_CFG]          = { "mvec_cfg",          veccfg,  read_csr },
++    [CSR_MRVARCH_CFG]       = { "mrvarch_cfg",       rvarch,  read_csr },
++    [CSR_MRVARCH_CFG2]      = { "mrvarch_cfg2",      rvarch2, read_csr },
++    [CSR_MCCACHE_CTL_BASE]  = { "mccache_ctl_base",  ccache,  read_csr },
+ 
+     /* Crash Debug CSRs */
+     [CSR_MCRASH_STATESAVE]  = { "mcrash_statesave",  any, read_csr },
+diff --git a/target/riscv/csr_andes.h b/target/riscv/csr_andes.h
+index 09f7655055..1e88521a16 100644
+--- a/target/riscv/csr_andes.h
++++ b/target/riscv/csr_andes.h
+@@ -213,6 +213,13 @@ typedef void (*fp_spec_csr_init_fn)(AndesCsr *);
+ #define MASK_MRVARCH_CFG_ZVQMAC             ((uint64_t)0x1 << 35)
+ #define MASK_MRVARCH_CFG_ZVLSSEG            ((uint64_t)0x1 << 36)
+ 
++/* mrvarch_cfg2 */
++#define MASK_MRVARCH_CFG2_ZFBFMIN           (0x1)
++#define MASK_MRVARCH_CFG2_ZVFBFMIN          (0x1 << 1)
++#define MASK_MRVARCH_CFG2_ZVFBFWMA          (0x1 << 2)
++#define MASK_MRVARCH_CFG2_ZVQMAC            (0x1 << 3)
++#define MASK_MRVARCH_CFG2_ZVLSSEQ           (0x1 << 4)
++
+ #define WRITE_MASK_CSR_MECC_CODE_32         0x7F
+ #define WRITE_MASK_CSR_MECC_CODE_64         0xFF
+ #define WRITE_MASK_CSR_UITB_32              0xFFFFFFFC
+-- 
+2.34.1
+

@@ -1,0 +1,71 @@
+From aacb315fedadee0e97b7fc3aacc2865fa6f398ec Mon Sep 17 00:00:00 2001
+From: Alvin Chang <alvinga@andestech.com>
+Date: Wed, 24 Jan 2024 15:24:10 +0800
+Subject: [PATCH 186/241] target/riscv: Rename TRIGGER_TYPE_UNAVAIL to
+ TRIGGER_TYPE_DISABLED
+
+Refer to RISC-V debug specification version 1.0-STABLE, the type 15 of
+trigger is "disabled" not "unavailable".
+
+Signed-off-by: Alvin Chang <alvinga@andestech.com>
+---
+ target/riscv/debug.c | 8 ++++----
+ target/riscv/debug.h | 2 +-
+ 2 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/target/riscv/debug.c b/target/riscv/debug.c
+index 4af33c1228..c06d69daa1 100644
+--- a/target/riscv/debug.c
++++ b/target/riscv/debug.c
+@@ -60,7 +60,7 @@ static tdata_avail tdata_mapping[TRIGGER_TYPE_NUM] = {
+     [TRIGGER_TYPE_EXCP] = { true, true, true },
+     [TRIGGER_TYPE_AD_MATCH6] = { true, true, true },
+     [TRIGGER_TYPE_EXT_SRC] = { true, false, false },
+-    [TRIGGER_TYPE_UNAVAIL] = { true, true, true }
++    [TRIGGER_TYPE_DISABLED] = { true, true, true }
+ };
+ 
+ /* only breakpoint size 1/2/4/8 supported */
+@@ -118,7 +118,7 @@ static trigger_action_t get_trigger_action(CPURISCVState *env,
+                       trigger_type);
+         break;
+     case TRIGGER_TYPE_NO_EXIST:
+-    case TRIGGER_TYPE_UNAVAIL:
++    case TRIGGER_TYPE_DISABLED:
+         qemu_log_mask(LOG_GUEST_ERROR, "trigger type: %d does not exit\n",
+                       trigger_type);
+         break;
+@@ -520,7 +520,7 @@ static bool trigger_mode_match(CPURISCVState *env, trigger_type_t type,
+         qemu_log_mask(LOG_UNIMP, "trigger type: %d is not supported\n", type);
+         break;
+     case TRIGGER_TYPE_NO_EXIST:
+-    case TRIGGER_TYPE_UNAVAIL:
++    case TRIGGER_TYPE_DISABLED:
+         qemu_log_mask(LOG_GUEST_ERROR, "trigger type: %d does not exit\n",
+                       type);
+         break;
+@@ -1098,7 +1098,7 @@ void tdata_csr_write(CPURISCVState *env, int tdata_index, target_ulong val)
+                       trigger_type);
+         break;
+     case TRIGGER_TYPE_NO_EXIST:
+-    case TRIGGER_TYPE_UNAVAIL:
++    case TRIGGER_TYPE_DISABLED:
+         qemu_log_mask(LOG_GUEST_ERROR, "trigger type: %d does not exit\n",
+                       trigger_type);
+         break;
+diff --git a/target/riscv/debug.h b/target/riscv/debug.h
+index 47ccc20cc3..a6d94b26ab 100644
+--- a/target/riscv/debug.h
++++ b/target/riscv/debug.h
+@@ -40,7 +40,7 @@ typedef enum {
+     TRIGGER_TYPE_EXCP = 5,          /* exception trigger */
+     TRIGGER_TYPE_AD_MATCH6 = 6,     /* new address/data match trigger */
+     TRIGGER_TYPE_EXT_SRC = 7,       /* external source trigger */
+-    TRIGGER_TYPE_UNAVAIL = 15,      /* trigger exists, but unavailable */
++    TRIGGER_TYPE_DISABLED = 15,     /* trigger exists, but disabled */
+     TRIGGER_TYPE_NUM
+ } trigger_type_t;
+ 
+-- 
+2.34.1
+

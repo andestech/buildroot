@@ -1,0 +1,269 @@
+From 6f39f826003d83862d59472811f81702246a6f6b Mon Sep 17 00:00:00 2001
+From: Foxes Hung <foxes687@andestech.com>
+Date: Fri, 12 Jan 2024 09:21:14 +0800
+Subject: [PATCH 173/241] hw/intc: Convert the PLIC to use RISC-V CPU GPIO
+ lines
+
+1. Instead of using riscv_cpu_update_mip() let's instead use the new RISC-V
+CPU GPIO lines to set the external MIP bits.
+2. Fix PLICSW FDT memmap issue.
+3. Change variable hart_id to hartid, sync with the other files.
+
+Signed-off-by: Foxes Hung <foxes687@andestech.com>
+Reviewed-on: https://gitea.andestech.com/RD-SW/qemu/pulls/105
+Reviewed-by: Alvin Che-Chia Chang <alvinga@andestech.com>
+Reviewed-by: Ethan Zhan-Yang Chen <ethan84@andestech.com>
+Co-authored-by: Foxes Hung <foxes687@andestech.com>
+Co-committed-by: Foxes Hung <foxes687@andestech.com>
+---
+ hw/intc/andes_plic.c         | 49 +++++++++++++++++++++++++++---------
+ hw/intc/riscv_plic.c         | 18 +++++++++++--
+ hw/riscv/andes_ae350.c       |  6 ++---
+ include/hw/intc/andes_plic.h |  2 +-
+ include/hw/intc/riscv_plic.h |  3 +++
+ 5 files changed, 60 insertions(+), 18 deletions(-)
+
+diff --git a/hw/intc/andes_plic.c b/hw/intc/andes_plic.c
+index 320b94fc4f..1587eb136a 100644
+--- a/hw/intc/andes_plic.c
++++ b/hw/intc/andes_plic.c
+@@ -24,6 +24,7 @@
+ #include "target/riscv/cpu.h"
+ #include "hw/sysbus.h"
+ #include "hw/intc/andes_plic.h"
++#include "hw/irq.h"
+ 
+ /* #define DEBUG_ANDES_PLIC */
+ #define LOGGE(x...) qemu_log_mask(LOG_GUEST_ERROR, x)
+@@ -55,9 +56,9 @@ void andes_plichw_update(void *plic)
+ 
+     /* raise irq on harts where this irq is enabled */
+     for (target_id = 0; target_id < riscv_plic->num_addrs; target_id++) {
+-        uint32_t hart_id = riscv_plic->addr_config[target_id].hartid;
++        uint32_t hartid = riscv_plic->addr_config[target_id].hartid;
+         PLICMode mode = riscv_plic->addr_config[target_id].mode;
+-        CPUState *cpu = qemu_get_cpu(hart_id);
++        CPUState *cpu = qemu_get_cpu(hartid);
+         CPURISCVState *env = cpu_env(cpu);
+         if (!env) {
+             continue;
+@@ -75,7 +76,8 @@ void andes_plichw_update(void *plic)
+                         riscv_plic->riscv_plic_claim(riscv_plic, target_id);
+                     assert(vec->vectored_irq_m);
+             }
+-            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_MEIP, BOOL_TO_MASK(level));
++            qemu_set_irq(riscv_plic->m_external_irqs[hartid -
++                         riscv_plic->hartid_base], level);
+             break;
+         case PlicMode_S:
+             if (!vec->vectored_irq_s &&
+@@ -85,7 +87,8 @@ void andes_plichw_update(void *plic)
+                         riscv_plic->riscv_plic_claim(riscv_plic, target_id);
+                     assert(vec->vectored_irq_s);
+             }
+-            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_SEIP, BOOL_TO_MASK(level));
++            qemu_set_irq(riscv_plic->s_external_irqs[hartid -
++                         riscv_plic->hartid_base], level);
+             break;
+         default:
+             break;
+@@ -101,9 +104,9 @@ void andes_plicsw_update(void *plic)
+ 
+     /* raise irq on harts where this irq is enabled */
+     for (target_id = 0; target_id < riscv_plic->num_addrs; target_id++) {
+-        uint32_t hart_id = riscv_plic->addr_config[target_id].hartid;
++        uint32_t hartid = riscv_plic->addr_config[target_id].hartid;
+         PLICMode mode = riscv_plic->addr_config[target_id].mode;
+-        CPUState *cpu = qemu_get_cpu(hart_id);
++        CPUState *cpu = qemu_get_cpu(hartid);
+         CPURISCVState *env = cpu_env(cpu);
+         if (!env) {
+             continue;
+@@ -112,10 +115,12 @@ void andes_plicsw_update(void *plic)
+ 
+         switch (mode) {
+         case PlicMode_M:
+-            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_MSIP, BOOL_TO_MASK(level));
++            qemu_set_irq(riscv_plic->m_external_irqs[hartid -
++                         riscv_plic->hartid_base], level);
+             break;
+         case PlicMode_S:
+-            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_SSIP, BOOL_TO_MASK(level));
++            qemu_set_irq(riscv_plic->s_external_irqs[hartid -
++                         riscv_plic->hartid_base], level);
+             break;
+         default:
+             break;
+@@ -208,9 +213,10 @@ andes_plic_realize(DeviceState *dev, Error **errp)
+     } else {
+         riscv_plic->riscv_plic_update = andes_plichw_update;
+     }
+-    /* Let Andes PLIC and SWPLIC to disable IO re-entrant checking,
++    /*
++     * Let Andes PLIC and SWPLIC to disable IO re-entrant checking,
+      * since both PLIC and SWPLIC are using riscv.plic type
+-     * see softmmu/memory.c:access_with_adjusted_size() 
++     * see softmmu/memory.c:access_with_adjusted_size()
+      */
+     riscv_plic->mmio.disable_reentrancy_guard = true;
+     riscv_plic->riscv_plic_write_pending = andes_plic_write_pending;
+@@ -257,7 +263,7 @@ type_init(andes_plic_register_types)
+  * Create PLIC device.
+  */
+ DeviceState *andes_plic_create(hwaddr plic_base,
+-    const char *plic_name, char *hart_config,
++    const char *plic_name, char *hart_config, uint32_t num_harts,
+     uint32_t num_sources, uint32_t num_priorities,
+     uint32_t priority_base, uint32_t pending_base,
+     uint32_t enable_base, uint32_t enable_stride,
+@@ -265,11 +271,14 @@ DeviceState *andes_plic_create(hwaddr plic_base,
+     uint32_t aperture_size)
+ {
+     DeviceState *dev = qdev_new(TYPE_ANDES_PLIC);
++    /* Directly set hartid_base to 0 if we are only one cluster */
++    uint32_t hartid_base = 0;
++    uint32_t sw = 0;
+ 
+     assert(enable_stride == (enable_stride & -enable_stride));
+     assert(threshold_stride == (threshold_stride & -threshold_stride));
+     qdev_prop_set_string(dev, "plic-name", plic_name);
+-    qdev_prop_set_uint32(dev, "hartid-base", 0);
++    qdev_prop_set_uint32(dev, "hartid-base", hartid_base);
+     qdev_prop_set_string(dev, "hart-config", hart_config);
+     qdev_prop_set_uint32(dev, "num-sources", num_sources);
+     qdev_prop_set_uint32(dev, "num-priorities", num_priorities);
+@@ -283,5 +292,21 @@ DeviceState *andes_plic_create(hwaddr plic_base,
+ 
+     sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
+     sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, plic_base);
++
++    if (strstr(plic_name, "SW") != NULL) {
++        sw = 1;
++    }
++
++    for (int i = 0; i < num_harts; i++) {
++        CPUState *cpu = qemu_get_cpu(hartid_base + i);
++
++        qdev_connect_gpio_out(dev, i,
++                              qdev_get_gpio_in(DEVICE(cpu),
++                              sw ? IRQ_S_SOFT : IRQ_S_EXT));
++        qdev_connect_gpio_out(dev, num_harts + i,
++                              qdev_get_gpio_in(DEVICE(cpu),
++                              sw ? IRQ_M_SOFT : IRQ_M_EXT));
++    }
++
+     return dev;
+ }
+diff --git a/hw/intc/riscv_plic.c b/hw/intc/riscv_plic.c
+index 381876c2dd..37d44d6891 100644
+--- a/hw/intc/riscv_plic.c
++++ b/hw/intc/riscv_plic.c
+@@ -31,6 +31,7 @@
+ #include "target/riscv/cpu.h"
+ #include "sysemu/sysemu.h"
+ #include "migration/vmstate.h"
++#include "hw/irq.h"
+ 
+ #define RISCV_DEBUG_PLIC 0
+ 
+@@ -151,10 +152,12 @@ static void riscv_plic_update(void *opaque)
+         int level = riscv_plic_irqs_pending(plic, addrid);
+         switch (mode) {
+         case PLICMode_M:
+-            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_MEIP, BOOL_TO_MASK(level));
++            qemu_set_irq(plic->m_external_irqs[hartid -
++                         plic->hartid_base], level);
+             break;
+         case PLICMode_S:
+-            riscv_cpu_update_mip(&RISCV_CPU(cpu)->env, MIP_SEIP, BOOL_TO_MASK(level));
++            qemu_set_irq(plic->s_external_irqs[hartid -
++                         plic->hartid_base], level);
+             break;
+         default:
+             break;
+@@ -574,6 +577,12 @@ static void riscv_plic_realize(DeviceState *dev, Error **errp)
+     /* set default update function */
+     plic->riscv_plic_update = riscv_plic_update;
+ 
++    plic->s_external_irqs = g_malloc(sizeof(qemu_irq) * plic->num_harts);
++    qdev_init_gpio_out(dev, plic->s_external_irqs, plic->num_harts);
++
++    plic->m_external_irqs = g_malloc(sizeof(qemu_irq) * plic->num_harts);
++    qdev_init_gpio_out(dev, plic->m_external_irqs, plic->num_harts);
++
+     /*
+      * We can't allow the supervisor to control SEIP as this would allow the
+      * supervisor to clear a pending external interrupt which will result in
+@@ -622,6 +631,11 @@ static void riscv_plic_reset(DeviceState *dev)
+     memset(plic->pending, 0, sizeof(uint32_t) * plic->bitfield_words);
+     memset(plic->claimed, 0, sizeof(uint32_t) * plic->bitfield_words);
+     memset(plic->enable, 0, sizeof(uint32_t) * plic->num_enables);
++
++    for (int i = 0; i < plic->num_harts; i++) {
++        qemu_set_irq(plic->m_external_irqs[i], 0);
++        qemu_set_irq(plic->s_external_irqs[i], 0);
++    }
+ }
+ 
+ static void riscv_plic_class_init(ObjectClass *klass, void *data)
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 7e16976cb4..84b50cd051 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -228,7 +228,7 @@ create_fdt(AndesAe350BoardState *bs, const struct MemmapEntry *memmap,
+     qemu_fdt_setprop(fdt, plicsw_name, "interrupts-extended",
+         plicsw_irq_ext, s->cpus.num_harts * sizeof(uint32_t) * 2);
+     qemu_fdt_setprop_cells(fdt, plicsw_name, "reg",
+-        0x0, plicsw_addr, 0x0, memmap[ANDES_AE350_PLIC].size);
++        0x0, plicsw_addr, 0x0, memmap[ANDES_AE350_PLICSW].size);
+     qemu_fdt_setprop_cell(fdt, plicsw_name, "riscv,ndev", 0x1);
+     g_free(plicsw_name);
+     g_free(plicsw_irq_ext);
+@@ -365,7 +365,7 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     s->plic_sw = andes_plic_create(
+         memmap[ANDES_AE350_PLICSW].base,
+         ANDES_PLICSW_NAME,
+-        plicsw_hart_config,
++        plicsw_hart_config, machine->smp.cpus,
+         ANDES_PLICSW_NUM_SOURCES,
+         ANDES_PLICSW_NUM_PRIORITIES,
+         ANDES_PLICSW_PRIORITY_BASE,
+@@ -392,7 +392,7 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     s->plic = andes_plic_create(
+         memmap[ANDES_AE350_PLIC].base,
+         ANDES_PLIC_NAME,
+-        plic_hart_config,
++        plic_hart_config, machine->smp.cpus,
+         ANDES_PLIC_NUM_SOURCES,
+         ANDES_PLIC_NUM_PRIORITIES,
+         ANDES_PLIC_PRIORITY_BASE,
+diff --git a/include/hw/intc/andes_plic.h b/include/hw/intc/andes_plic.h
+index bfbcfa01d8..dad4e63f7e 100644
+--- a/include/hw/intc/andes_plic.h
++++ b/include/hw/intc/andes_plic.h
+@@ -105,7 +105,7 @@ static inline bool addr_between(uint32_t addr, uint32_t base, uint32_t offset)
+ 
+ DeviceState *
+ andes_plic_create(hwaddr addr,
+-    const char *plic_name, char *hart_config,
++    const char *plic_name, char *hart_config, uint32_t num_harts,
+     uint32_t num_sources, uint32_t num_priorities,
+     uint32_t priority_base, uint32_t pending_base,
+     uint32_t enable_base, uint32_t enable_stride,
+diff --git a/include/hw/intc/riscv_plic.h b/include/hw/intc/riscv_plic.h
+index 0f5ed17d1c..d168181fec 100644
+--- a/include/hw/intc/riscv_plic.h
++++ b/include/hw/intc/riscv_plic.h
+@@ -79,6 +79,9 @@ struct RISCVPLICState {
+     uint32_t context_stride;
+     uint32_t aperture_size;
+ 
++    qemu_irq *m_external_irqs;
++    qemu_irq *s_external_irqs;
++
+     /* interface */
+     uint64_t (*riscv_plic_read_priority)(void *opaque,
+         hwaddr addr, unsigned size);
+-- 
+2.34.1
+

@@ -1,0 +1,96 @@
+From 422293060c83780240329d9b696d0dd47436b100 Mon Sep 17 00:00:00 2001
+From: Yu-Ming Chang <yumin686@andestech.com>
+Date: Fri, 5 Jan 2024 17:27:02 +0800
+Subject: [PATCH 167/241] target/riscv: Sync mmsc_cfg values of A45/AX45/AX65
+ with FPGA. (#106)
+
+Signed-off-by: Yu-Ming Chang <yumin686@andestech.com>
+---
+ target/riscv/cpu.c | 26 ++++++++++++++++++++------
+ 1 file changed, 20 insertions(+), 6 deletions(-)
+
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index d1fe43369f..97bffd0b49 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -758,11 +758,17 @@ static void rv64_andes_ax27_cpu_init(Object *obj)
+ static void rv64_andes_ax45_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     rv64_andes_common_cpu_init(obj, VM_1_10_SV48, andes_set_mmsc_cfg_l2c);
+ 
++    /* Set CPU extensions */
++    cfg->ext_zfh = true;
++
+     /* Set CPU ID */
+     cfg->marchid = 0x8a45;
++
++    env->andes_csr.csrno[CSR_MMSC_CFG] = 0x2000236005f03d;
+ }
+ 
+ static void rv64_andes_ax45mpv_cpu_init(Object *obj)
+@@ -792,6 +798,7 @@ static void rv64_andes_ax45mpv_cpu_init(Object *obj)
+ static void rv64_andes_ax65_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     rv64_andes_common_cpu_init(obj, VM_1_10_SV48, andes_set_mmsc_cfg_l2c);
+ 
+@@ -832,6 +839,8 @@ static void rv64_andes_ax65_cpu_init(Object *obj)
+ 
+     /* ePMP 0.9.3 (experimental) */
+     cfg->ext_smepmp = true;
++
++    env->andes_csr.csrno[CSR_MMSC_CFG] = 0xf0e00340092015;
+ }
+ 
+ static void rv64_andes_nx25_cpu_init(Object *obj)
+@@ -1056,11 +1065,14 @@ static void rv32_andes_a27_cpu_init(Object *obj)
+ static void rv32_andes_a45_cpu_init(Object *obj)
+ {
+     RISCVCPUConfig *cfg = &RISCV_CPU(obj)->cfg;
++    CPURISCVState *env = &RISCV_CPU(obj)->env;
+ 
+     rv32_andes_common_cpu_init(obj, VM_1_10_SV32, andes_set_mmsc_cfg_l2c);
+ 
+     /* Set CPU ID */
+     cfg->marchid = 0x0a45;
++
++    env->andes_csr.csrno[CSR_MMSC_CFG] = 0xe005f039;
+ }
+ 
+ static void rv32_andes_d23_cpu_init(Object *obj)
+@@ -1345,11 +1357,13 @@ static void andes_csr_reset_common(CPURISCVState *env)
+ #endif
+ 
+     env->andes_csr.csrno[CSR_UITB] = 0;
+-    env->andes_csr.csrno[CSR_MMSC_CFG] = (1UL << V5_MMSC_CFG_ECD) |
+-                                         (1UL << V5_MMSC_CFG_HSP) |
+-                                         (1UL << V5_MMSC_CFG_LMSLVP) |
+-                                         (1UL << V5_MMSC_CFG_CCTLCSR) |
+-                                         (1UL << V5_MMSC_CFG_PPMA);
++    if (env->andes_csr.csrno[CSR_MMSC_CFG] == 0) {
++        env->andes_csr.csrno[CSR_MMSC_CFG] = (1UL << V5_MMSC_CFG_ECD) |
++                                             (1UL << V5_MMSC_CFG_HSP) |
++                                             (1UL << V5_MMSC_CFG_LMSLVP) |
++                                             (1UL << V5_MMSC_CFG_CCTLCSR) |
++                                             (1UL << V5_MMSC_CFG_PPMA);
++    }
+     /* enable mmsc_cfg2 in RV32 */
+     if (riscv_cpu_mxl(env) == MXL_RV32) {
+         env->andes_csr.csrno[CSR_MMSC_CFG] |= MASK_MMSC_CFG_MSC_EXT;
+@@ -2104,7 +2118,7 @@ const RISCVCPUMultiExtConfig riscv_cpu_extensions[] = {
+ 
+     /* Optional CSR of sdtrig extension */
+     MULTI_EXT_CFG_BOOL("sdtrig_tcontrol", ext_sdtrig_tcontrol, false),
+-	MULTI_EXT_CFG_BOOL("sdtrig_scontext", ext_sdtrig_scontext, false),
++    MULTI_EXT_CFG_BOOL("sdtrig_scontext", ext_sdtrig_scontext, false),
+     MULTI_EXT_CFG_BOOL("sdtrig_hcontext", ext_sdtrig_hcontext, false),
+     MULTI_EXT_CFG_BOOL("sdtrig_mcontext", ext_sdtrig_mcontext, false),
+ 
+-- 
+2.34.1
+

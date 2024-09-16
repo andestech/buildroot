@@ -1,0 +1,49 @@
+From 06026188a2f152d785c1595f5fe6c011b4ed0b4a Mon Sep 17 00:00:00 2001
+From: Ethan Chen <ethan84@andestech.com>
+Date: Tue, 5 Sep 2023 17:55:50 +0800
+Subject: [PATCH 075/241] target/riscv: local memory: Align local memory base
+ to local memory size
+
+Signed-off-by: Ethan Chen <ethan84@andestech.com>
+---
+ hw/riscv/andes_ae350.c | 7 +++++++
+ target/riscv/cpu.c     | 3 ---
+ 2 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/hw/riscv/andes_ae350.c b/hw/riscv/andes_ae350.c
+index 3c7343930a..28e3a543b7 100644
+--- a/hw/riscv/andes_ae350.c
++++ b/hw/riscv/andes_ae350.c
+@@ -324,6 +324,13 @@ static void andes_ae350_soc_realize(DeviceState *dev_soc, Error **errp)
+     char *plic_hart_config, *plicsw_hart_config;
+     NICInfo *nd = &nd_table[0];
+ 
++    /* round down local memory size to valid value */
++    s->ilm_size = 1 << (31 - __builtin_clz(s->ilm_size));
++    s->dlm_size = 1 << (31 - __builtin_clz(s->dlm_size));
++    /* align local memory base to local memory size */
++    s->ilm_base &= ~(s->ilm_size - 1);
++    s->dlm_base &= ~(s->dlm_size - 1);
++
+     qdev_prop_set_bit(DEVICE(&s->cpus), "ilm_default_enable",
+                         s->ilm_default_enable);
+     qdev_prop_set_bit(DEVICE(&s->cpus), "dlm_default_enable",
+diff --git a/target/riscv/cpu.c b/target/riscv/cpu.c
+index b7336f3318..d15d424e85 100644
+--- a/target/riscv/cpu.c
++++ b/target/riscv/cpu.c
+@@ -540,11 +540,8 @@ static void andes_cpu_lm_realize(DeviceState *dev)
+     env->mask_dlm->ops = &local_mem_ops;
+     env->mask_dlm->opaque = env->mask_dlm;
+ 
+-    /* round down to valid value */
+     int ilmsz = 31 - __builtin_clz(env->ilm_size) - 9;
+     int dlmsz = 31 - __builtin_clz(env->dlm_size) - 9;
+-    env->ilm_size = 1 << (ilmsz + 9);
+-    env->dlm_size = 1 << (dlmsz + 9);
+ 
+     /* initial local memory csr */
+     env->andes_csr.csrno[CSR_MICM_CFG] = (1UL << V5_MICM_CFG_ILMB) |
+-- 
+2.34.1
+
