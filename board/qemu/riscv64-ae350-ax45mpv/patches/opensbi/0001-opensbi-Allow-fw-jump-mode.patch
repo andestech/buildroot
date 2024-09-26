@@ -1,0 +1,25 @@
+From a150af47ec474cdd74fb651314762bdcdc657521 Mon Sep 17 00:00:00 2001
+From: Yu Chien Peter Lin <peterlin@andestech.com>
+Date: Thu, 26 Sep 2024 12:48:49 +0800
+Subject: [PATCH] opensbi: Allow fw jump mode
+
+---
+ platform/generic/objects.mk | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/platform/generic/objects.mk b/platform/generic/objects.mk
+index 1e96d92..935f7f8 100644
+--- a/platform/generic/objects.mk
++++ b/platform/generic/objects.mk
+@@ -24,7 +24,7 @@ platform-objs-y += platform_override_modules.o
+ # Blobs to build
+ FW_TEXT_START=0x00000000
+ FW_DYNAMIC=y
+-FW_JUMP=n
++FW_JUMP=y
+ ifeq ($(PLATFORM_RISCV_XLEN), 32)
+   # This needs to be 4MB aligned for 32-bit system
+   FW_JUMP_ADDR=$(shell printf "0x%X" $$(($(FW_TEXT_START) + 0x400000)))
+-- 
+2.34.1
+
