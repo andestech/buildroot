@@ -30,11 +30,11 @@ Result of the build
 After building, you should obtain the following files:
 
   output/images/
-  |-- ae350_ax45mp.dtb
+  |-- ax45mp_c4_d_dsp_ae350.dtb
   |-- boot.vfat
   |-- fw_dynamic.bin
   |-- fw_dynamic.elf
-  |-- Image
+  |-- Image.gz
   |-- rootfs.ext2
   |-- rootfs.ext4 -> rootfs.ext2
   |-- sdcard.img
@@ -71,15 +71,15 @@ The Andes SPI_burn tool will be located in output/host/bin. Use
 the following commands to update the bootloader and device tree:
 
   $ SPI_burn --host $ICE_IP --port $ICE_BURNER_PORT --addr 0x0     -i u-boot-spl.bin
-  $ SPI_burn --host $ICE_IP --port $ICE_BURNER_PORT --addr 0x10000 -i u-boot.itb
-  $ SPI_burn --host $ICE_IP --port $ICE_BURNER_PORT --addr 0xf0000 -i ae350_ax45mp.dtb
+  $ SPI_burn --host $ICE_IP --port $ICE_BURNER_PORT --addr 0x40000 -i u-boot.itb
+  $ SPI_burn --host $ICE_IP --port $ICE_BURNER_PORT --addr 0x1E0000 -i ax45mp_c4_d_dsp_ae350.dtb
 
 Note that the --addr option specifies the offset starting from
 the flash base address 0x80000000 and set by U-Boot configurations.
 e.g.
 u-boot-spl.bin  : CONFIG_SPL_TEXT_BASE=0x80000000
-u-boot.itb      : CONFIG_SPL_LOAD_FIT_ADDRESS=0x80010000
-ae350_ax45mp.dtb: CONFIG_SYS_FDT_BASE=0x800f0000
+u-boot.itb      : CONFIG_SPL_LOAD_FIT_ADDRESS=0x80040000
+ax45mp_c4_d_dsp_ae350.dtb: CONFIG_SYS_FDT_BASE=0x801E0000
 
 How to write the SD card
 ========================
@@ -89,7 +89,7 @@ Copy the sdcard.img to a SD card with "dd":
   $ sudo dd if=sdcard.img of=/dev/sdX bs=4096
   $ sudo sync
 
-Your SD card partition should be:
+As a reference, the SD card partition will be like:
 
   Disk /dev/sdb: 14.48 GiB, 15552479232 bytes, 30375936 sectors
   Disk model: Multi-Card
