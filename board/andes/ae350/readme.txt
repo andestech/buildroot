@@ -30,7 +30,7 @@ Result of the build
 After building, you should obtain the following files:
 
   output/images/
-  |-- ax45mp_c4_d_dsp_ae350.dtb
+  |-- dtb/ax45mp_c4_d_dsp_ae350.dtb
   |-- boot.vfat
   |-- fw_dynamic.bin
   |-- fw_dynamic.elf
@@ -72,7 +72,7 @@ the following commands to update the bootloader and device tree:
 
   $ SPI_burn --host $ICE_IP --port $ICE_BURNER_PORT --addr 0x0     -i u-boot-spl.bin
   $ SPI_burn --host $ICE_IP --port $ICE_BURNER_PORT --addr 0x40000 -i u-boot.itb
-  $ SPI_burn --host $ICE_IP --port $ICE_BURNER_PORT --addr 0x1E0000 -i ax45mp_c4_d_dsp_ae350.dtb
+  $ SPI_burn --host $ICE_IP --port $ICE_BURNER_PORT --addr 0x1E0000 -i dtb/ax45mp_c4_d_dsp_ae350.dtb
 
 Note that the --addr option specifies the offset starting from
 the flash base address 0x80000000 and set by U-Boot configurations.

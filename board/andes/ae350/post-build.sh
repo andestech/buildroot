@@ -1,14 +1,16 @@
 #!/bin/sh
-# Kernel Image and DTB are fetched via extlinux.conf
-IMAGE="${BINARIES_DIR}/Image.gz"
-DTB="${BINARIES_DIR}/ax45mp_c4_d_dsp_ae350.dtb"
+# Install extlinux.conf and all sample dtb files to the boot partition.
+# The Kernel, Image.gz, will be installed as specified in genimage_sdcard.cfg
+# when executing genimage.sh.
+BOARD_DIR="$(dirname "$0")"
 
-# Check if source files exist
-if [ ! -f ${IMAGE} ] || [ ! -f ${DTB} ]; then
-    echo "Error: files do not exist"
-    exit 1
-fi
+# Install extlinux/extlinux.conf to the boot partition
+install -m 0644 -D "${CONFIG_DIR}/${BOARD_DIR}/extlinux/extlinux.conf" "${BINARIES_DIR}"/extlinux/extlinux.conf
 
-# Copy files to target directory
-cp ${IMAGE} "${TARGET_DIR}/boot"
-cp ${DTB}   "${TARGET_DIR}/boot"
+# Copy all sample DTB files to the dtb folder under the boot partition
+mkdir -p "${BINARIES_DIR}/dtb"
+cd ${BUILD_DIR}/linux-custom/arch/riscv/boot/dts/andes/
+for f in *.dtb; do
+	cp -av "$f" "${BINARIES_DIR}/dtb/"
+done
+
