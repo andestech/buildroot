@@ -6,9 +6,8 @@
 
 # When updating the version, check whether the list of supported targets
 # needs to be updated.
-QEMU_VERSION = 9.2.0
-QEMU_SOURCE = qemu-$(QEMU_VERSION).tar.xz
-QEMU_SITE = https://download.qemu.org
+QEMU_VERSION = 922ee62635859afccca41a9cee7361639d7f4c3c
+QEMU_SITE = $(call github,andestech,qemu,$(QEMU_VERSION))
 QEMU_SELINUX_MODULES = qemu virt
 QEMU_LICENSE = GPL-2.0, LGPL-2.1, MIT, BSD-3-Clause, BSD-2-Clause, Others/BSD-1c
 QEMU_LICENSE_FILES = COPYING COPYING.LIB
@@ -281,6 +280,7 @@ define QEMU_CONFIGURE_CMDS
 		$(TARGET_CONFIGURE_ARGS) \
 		CPP="$(TARGET_CC) -E" \
 		$(QEMU_VARS) \
+		GIT_DIR=".git" \
 		./configure \
 			--prefix=/usr \
 			--cross-prefix=$(TARGET_CROSS) \
@@ -328,7 +328,6 @@ define QEMU_CONFIGURE_CMDS
 			--enable-attr \
 			--enable-kvm \
 			--enable-vhost-net \
-			--disable-download \
 			--disable-hexagon-idef-parser \
 			$(QEMU_OPTS)
 endef
@@ -465,6 +464,7 @@ endif
 define HOST_QEMU_CONFIGURE_CMDS
 	unset TARGET_DIR; \
 	cd $(@D); $(HOST_CONFIGURE_OPTS) CPP="$(HOSTCC) -E" \
+		GIT_DIR=".git" \
 		./configure \
 		--target-list="$(HOST_QEMU_TARGETS)" \
 		--prefix="$(HOST_DIR)" \
